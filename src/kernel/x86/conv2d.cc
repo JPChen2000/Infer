@@ -106,6 +106,55 @@ float DotProductAvx(const float* lhs, const float* rhs, int64_t len) {
     return sum;
 }
 
+void Store8FloatsToHalfStrided(const __m256 value, uint16_t* dst, int64_t stride) {
+    alignas(32) float tmp[8];
+    _mm256_store_ps(tmp, value);
+    for (int i = 0; i < 8; ++i) {
+        dst[static_cast<int64_t>(i) * stride] = FloatToHalf(tmp[i]);
+    }
+}
+
+void ConvertHalfRowToFloat(const uint16_t* src, float* dst, int64_t len) {
+    int64_t i = 0;
+    for (; i + 8 <= len; i += 8) {
+        const __m128i half_vec = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i));
+        const __m256 float_vec = _mm256_cvtph_ps(half_vec);
+        _mm256_storeu_ps(dst + i, float_vec);
+    }
+    for (; i < len; ++i) {
+        dst[i] = HalfToFloat(src[i]);
+    }
+}
+
+bool CanUseDirectConvOc8Kernel(const feather::operators::Conv2dParam* param) {
+    if (!CanUseFastConv2DPath(param) || IsPointwiseConv2D(param)) {
+        return false;
+    }
+    return param->w->dims()[0] >= 8;
+}
+
+void PackDirectConvWeightsOc8(const float* weight, const float* bias, int64_t out_c, int64_t patch_size,
+                              std::vector<float>* packed_weight, std::vector<float>* packed_bias) {
+    const int64_t oc8_blocks = out_c / 8;
+    packed_weight->assign(static_cast<size_t>(oc8_blocks * patch_size * 8), 0.0f);
+    packed_bias->assign(static_cast<size_t>(oc8_blocks * 8), 0.0f);
+
+    float* packed_weight_ptr = packed_weight->data();
+    float* packed_bias_ptr = packed_bias->data();
+    for (int64_t block = 0; block < oc8_blocks; ++block) {
+        for (int lane = 0; lane < 8; ++lane) {
+            const int64_t oc = block * 8 + lane;
+            packed_bias_ptr[block * 8 + lane] = bias != nullptr ? bias[oc] : 0.0f;
+        }
+        for (int64_t k = 0; k < patch_size; ++k) {
+            for (int lane = 0; lane < 8; ++lane) {
+                const int64_t oc = block * 8 + lane;
+                packed_weight_ptr[(block * patch_size + k) * 8 + lane] = weight[oc * patch_size + k];
+            }
+        }
+    }
+}
+
 void ComputePointwiseConv2DKernelFastX86Fp32(const feather::operators::Conv2dParam* param, const float* input,
                                              const float* weight, const float* bias, float* output) {
     const int64_t batch = param->input->dims()[0];
@@ -154,7 +203,10 @@ void PackPointwiseInputFp16ToFloat(const feather::operators::Conv2dParam* param,
     const int64_t input_spatial = in_h * in_w;
     const int64_t output_spatial = out_h * out_w;
 
-    packed_input->assign(static_cast<size_t>(batch * output_spatial * in_c), 0.0f);
+    const size_t packed_size = static_cast<size_t>(batch * output_spatial * in_c);
+    if (packed_input->size() != packed_size) {
+        packed_input->resize(packed_size);
+    }
     float* packed = packed_input->data();
     for (int64_t n = 0; n < batch; ++n) {
         for (int64_t oh = 0; oh < out_h; ++oh) {
@@ -248,12 +300,13 @@ void ComputeDirectConv2DKernelFastX86Fp32(const feather::operators::Conv2dParam*
     });
 }
 
-void PackDirectConvInputFp16ToFloat(const feather::operators::Conv2dParam* param, const uint16_t* input,
-                                    std::vector<float>* packed_input) {
+void ComputeDirectConv2DSpatialReuseX86Fp16(const feather::operators::Conv2dParam* param, const uint16_t* input,
+                                            const float* weight, const float* bias, uint16_t* output) {
     const int64_t batch = param->input->dims()[0];
     const int64_t in_c = param->input->dims()[1];
     const int64_t in_h = param->input->dims()[2];
     const int64_t in_w = param->input->dims()[3];
+    const int64_t out_c = param->w->dims()[0];
     const int64_t kernel_h = param->w->dims()[2];
     const int64_t kernel_w = param->w->dims()[3];
     const int64_t out_h = param->out->dims()[2];
@@ -261,57 +314,118 @@ void PackDirectConvInputFp16ToFloat(const feather::operators::Conv2dParam* param
     const int64_t input_spatial = in_h * in_w;
     const int64_t output_spatial = out_h * out_w;
     const int64_t patch_size = in_c * kernel_h * kernel_w;
+    const int64_t total_work_items = batch * output_spatial;
 
-    packed_input->assign(static_cast<size_t>(batch * output_spatial * patch_size), 0.0f);
-    float* packed = packed_input->data();
-    for (int64_t n = 0; n < batch; ++n) {
-        for (int64_t oh = 0; oh < out_h; ++oh) {
+    ParallelForWorkItems(total_work_items, [&](int64_t begin, int64_t end) {
+        std::vector<float> input_patch(static_cast<size_t>(patch_size));
+        for (int64_t work_index = begin; work_index < end; ++work_index) {
+            const int64_t n = work_index / output_spatial;
+            const int64_t spatial_idx = work_index % output_spatial;
+            const int64_t oh = spatial_idx / out_w;
+            const int64_t ow = spatial_idx % out_w;
             const int64_t ih_base = oh * param->stride_h - param->pad_h;
-            for (int64_t ow = 0; ow < out_w; ++ow) {
-                const int64_t iw_base = ow * param->stride_w - param->pad_w;
-                float* packed_patch = packed + ((n * output_spatial + oh * out_w + ow) * patch_size);
-                int64_t patch_index = 0;
-                for (int64_t ic = 0; ic < in_c; ++ic) {
-                    const int64_t plane_offset = (n * in_c + ic) * input_spatial;
-                    for (int64_t kh = 0; kh < kernel_h; ++kh) {
-                        const int64_t ih = ih_base + kh;
-                        for (int64_t kw = 0; kw < kernel_w; ++kw) {
-                            const int64_t iw = iw_base + kw;
-                            float value = 0.0f;
-                            if (ih >= 0 && ih < in_h && iw >= 0 && iw < in_w) {
-                                value = HalfToFloat(input[plane_offset + ih * in_w + iw]);
-                            }
-                            packed_patch[patch_index++] = value;
+            const int64_t iw_base = ow * param->stride_w - param->pad_w;
+
+            int64_t patch_index = 0;
+            for (int64_t ic = 0; ic < in_c; ++ic) {
+                const int64_t plane_offset = (n * in_c + ic) * input_spatial;
+                for (int64_t kh = 0; kh < kernel_h; ++kh) {
+                    const int64_t ih = ih_base + kh;
+                    if (ih >= 0 && ih < in_h && iw_base >= 0 && iw_base + kernel_w <= in_w) {
+                        ConvertHalfRowToFloat(input + plane_offset + ih * in_w + iw_base,
+                                              input_patch.data() + patch_index, kernel_w);
+                        patch_index += kernel_w;
+                        continue;
+                    }
+                    for (int64_t kw = 0; kw < kernel_w; ++kw) {
+                        const int64_t iw = iw_base + kw;
+                        float value = 0.0f;
+                        if (ih >= 0 && ih < in_h && iw >= 0 && iw < in_w) {
+                            value = HalfToFloat(input[plane_offset + ih * in_w + iw]);
                         }
+                        input_patch[static_cast<size_t>(patch_index++)] = value;
                     }
                 }
             }
+
+            for (int64_t oc = 0; oc < out_c; ++oc) {
+                const float bias_value = bias != nullptr ? bias[oc] : 0.0f;
+                const float* weight_oc = weight + oc * patch_size;
+                output[((n * out_c + oc) * output_spatial) + spatial_idx] =
+                    FloatToHalf(bias_value + DotProductAvx(input_patch.data(), weight_oc, patch_size));
+            }
         }
-    }
+    });
 }
 
-void ComputeDirectConv2DKernelPackedX86Fp32(const feather::operators::Conv2dParam* param, const float* packed_input,
-                                            const float* weight, const float* bias, uint16_t* output) {
+void ComputeDirectConv2DSpatialReuseOc8X86Fp16(const feather::operators::Conv2dParam* param, const uint16_t* input,
+                                               const float* packed_weight_oc8, const float* packed_bias_oc8,
+                                               const float* weight, const float* bias, uint16_t* output) {
     const int64_t batch = param->input->dims()[0];
+    const int64_t in_c = param->input->dims()[1];
+    const int64_t in_h = param->input->dims()[2];
+    const int64_t in_w = param->input->dims()[3];
     const int64_t out_c = param->w->dims()[0];
     const int64_t kernel_h = param->w->dims()[2];
     const int64_t kernel_w = param->w->dims()[3];
     const int64_t out_h = param->out->dims()[2];
     const int64_t out_w = param->out->dims()[3];
+    const int64_t input_spatial = in_h * in_w;
     const int64_t output_spatial = out_h * out_w;
-    const int64_t patch_size = param->input->dims()[1] * kernel_h * kernel_w;
-    const int64_t total_work_items = batch * out_c;
+    const int64_t patch_size = in_c * kernel_h * kernel_w;
+    const int64_t total_work_items = batch * output_spatial;
+    const int64_t oc8_blocks = out_c / 8;
+    const int64_t oc_tail_begin = oc8_blocks * 8;
 
     ParallelForWorkItems(total_work_items, [&](int64_t begin, int64_t end) {
+        std::vector<float> input_patch(static_cast<size_t>(patch_size));
         for (int64_t work_index = begin; work_index < end; ++work_index) {
-            const int64_t n = work_index / out_c;
-            const int64_t oc = work_index % out_c;
-            uint16_t* out_base = output + work_index * output_spatial;
-            const float bias_value = bias != nullptr ? bias[oc] : 0.0f;
-            const float* weight_oc = weight + oc * patch_size;
-            for (int64_t spatial_idx = 0; spatial_idx < output_spatial; ++spatial_idx) {
-                const float* patch = packed_input + ((n * output_spatial + spatial_idx) * patch_size);
-                out_base[spatial_idx] = FloatToHalf(bias_value + DotProductAvx(patch, weight_oc, patch_size));
+            const int64_t n = work_index / output_spatial;
+            const int64_t spatial_idx = work_index % output_spatial;
+            const int64_t oh = spatial_idx / out_w;
+            const int64_t ow = spatial_idx % out_w;
+            const int64_t ih_base = oh * param->stride_h - param->pad_h;
+            const int64_t iw_base = ow * param->stride_w - param->pad_w;
+
+            int64_t patch_index = 0;
+            for (int64_t ic = 0; ic < in_c; ++ic) {
+                const int64_t plane_offset = (n * in_c + ic) * input_spatial;
+                for (int64_t kh = 0; kh < kernel_h; ++kh) {
+                    const int64_t ih = ih_base + kh;
+                    if (ih >= 0 && ih < in_h && iw_base >= 0 && iw_base + kernel_w <= in_w) {
+                        ConvertHalfRowToFloat(input + plane_offset + ih * in_w + iw_base,
+                                              input_patch.data() + patch_index, kernel_w);
+                        patch_index += kernel_w;
+                        continue;
+                    }
+                    for (int64_t kw = 0; kw < kernel_w; ++kw) {
+                        const int64_t iw = iw_base + kw;
+                        float value = 0.0f;
+                        if (ih >= 0 && ih < in_h && iw >= 0 && iw < in_w) {
+                            value = HalfToFloat(input[plane_offset + ih * in_w + iw]);
+                        }
+                        input_patch[static_cast<size_t>(patch_index++)] = value;
+                    }
+                }
+            }
+
+            for (int64_t block = 0; block < oc8_blocks; ++block) {
+                __m256 acc = _mm256_loadu_ps(packed_bias_oc8 + block * 8);
+                const float* block_weight = packed_weight_oc8 + block * patch_size * 8;
+                for (int64_t k = 0; k < patch_size; ++k) {
+                    const __m256 weight_vec = _mm256_loadu_ps(block_weight + k * 8);
+                    const __m256 input_vec = _mm256_set1_ps(input_patch[static_cast<size_t>(k)]);
+                    acc = _mm256_fmadd_ps(input_vec, weight_vec, acc);
+                }
+                Store8FloatsToHalfStrided(
+                    acc, output + ((n * out_c + block * 8) * output_spatial) + spatial_idx, output_spatial);
+            }
+
+            for (int64_t oc = oc_tail_begin; oc < out_c; ++oc) {
+                const float bias_value = bias != nullptr ? bias[oc] : 0.0f;
+                const float* weight_oc = weight + oc * patch_size;
+                output[((n * out_c + oc) * output_spatial) + spatial_idx] =
+                    FloatToHalf(bias_value + DotProductAvx(input_patch.data(), weight_oc, patch_size));
             }
         }
     });
@@ -467,6 +581,8 @@ int32_t Conv2DKernel<DeviceType::X86, DataType::FP16>::compute() {
     if (CanUseFastConv2DPath(param)) {
         if (cached_weight_tensor_ != param->w.get()) {
             cached_weight_buffer_ = ConvertTensorToFloatBuffer<DataType::FP16>(param->w);
+            cached_direct_weight_oc8_buffer_.clear();
+            cached_direct_bias_oc8_buffer_.clear();
             cached_weight_tensor_ = param->w.get();
         }
         const Tensor* current_bias_tensor =
@@ -476,24 +592,37 @@ int32_t Conv2DKernel<DeviceType::X86, DataType::FP16>::compute() {
             if (current_bias_tensor != nullptr) {
                 cached_bias_buffer_ = ConvertTensorToFloatBuffer<DataType::FP16>(param->bias);
             }
+            cached_direct_bias_oc8_buffer_.clear();
             cached_bias_tensor_ = current_bias_tensor;
         }
         param->out->mutable_data<uint16_t>();
 
         if (IsPointwiseConv2D(param)) {
-            std::vector<float> packed_input;
-            PackPointwiseInputFp16ToFloat(param, param->input->data<uint16_t>(), &packed_input);
+            PackPointwiseInputFp16ToFloat(param, param->input->data<uint16_t>(), &cached_packed_input_buffer_);
             ComputePointwiseConv2DKernelPackedX86Fp32(
-                param, packed_input.data(), cached_weight_buffer_.data(),
+                param, cached_packed_input_buffer_.data(), cached_weight_buffer_.data(),
                 cached_bias_buffer_.empty() ? nullptr : cached_bias_buffer_.data(),
                 param->out->mutable_data<uint16_t>());
         } else {
-            std::vector<float> packed_input;
-            PackDirectConvInputFp16ToFloat(param, param->input->data<uint16_t>(), &packed_input);
-            ComputeDirectConv2DKernelPackedX86Fp32(
-                param, packed_input.data(), cached_weight_buffer_.data(),
-                cached_bias_buffer_.empty() ? nullptr : cached_bias_buffer_.data(),
-                param->out->mutable_data<uint16_t>());
+            if (CanUseDirectConvOc8Kernel(param)) {
+                if (cached_direct_weight_oc8_buffer_.empty()) {
+                    PackDirectConvWeightsOc8(
+                        cached_weight_buffer_.data(),
+                        cached_bias_buffer_.empty() ? nullptr : cached_bias_buffer_.data(),
+                        param->w->dims()[0], param->w->dims()[1] * param->w->dims()[2] * param->w->dims()[3],
+                        &cached_direct_weight_oc8_buffer_, &cached_direct_bias_oc8_buffer_);
+                }
+                ComputeDirectConv2DSpatialReuseOc8X86Fp16(
+                    param, param->input->data<uint16_t>(), cached_direct_weight_oc8_buffer_.data(),
+                    cached_direct_bias_oc8_buffer_.data(), cached_weight_buffer_.data(),
+                    cached_bias_buffer_.empty() ? nullptr : cached_bias_buffer_.data(),
+                    param->out->mutable_data<uint16_t>());
+            } else {
+                ComputeDirectConv2DSpatialReuseX86Fp16(
+                    param, param->input->data<uint16_t>(), cached_weight_buffer_.data(),
+                    cached_bias_buffer_.empty() ? nullptr : cached_bias_buffer_.data(),
+                    param->out->mutable_data<uint16_t>());
+            }
         }
         return 0;
     }

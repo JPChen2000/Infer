@@ -27,6 +27,9 @@ class Conv2DKernel : public KernelBase {
     const Tensor* cached_bias_tensor_{nullptr};
     std::vector<float> cached_weight_buffer_;
     std::vector<float> cached_bias_buffer_;
+    std::vector<float> cached_packed_input_buffer_;
+    std::vector<float> cached_direct_weight_oc8_buffer_;
+    std::vector<float> cached_direct_bias_oc8_buffer_;
 };
 }  // namespace kernel
 }  // namespace feather

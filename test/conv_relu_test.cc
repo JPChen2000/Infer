@@ -501,3 +501,310 @@ TEST(conv_relu_test, Conv2dRunsDirectStride2Fp16) {
         EXPECT_NEAR(feather::HalfToFloat(conv.outputs()[0]->data<uint16_t>()[i]), expected[i], 2e-2f);
     }
 }
+
+TEST(conv_relu_test, Conv2dRunsDirectMultiOutputFp16) {
+    auto input = std::make_shared<Tensor>();
+    input->Assign<uint16_t>({
+        feather::FloatToHalf(1.0f), feather::FloatToHalf(2.0f), feather::FloatToHalf(3.0f),
+        feather::FloatToHalf(4.0f), feather::FloatToHalf(5.0f), feather::FloatToHalf(6.0f),
+        feather::FloatToHalf(7.0f), feather::FloatToHalf(8.0f), feather::FloatToHalf(9.0f),
+    }, {1, 1, 3, 3});
+
+    auto weight = std::make_shared<Tensor>();
+    weight->Assign<uint16_t>({
+        feather::FloatToHalf(1.0f), feather::FloatToHalf(0.0f),
+        feather::FloatToHalf(0.0f), feather::FloatToHalf(1.0f),
+
+        feather::FloatToHalf(0.0f), feather::FloatToHalf(1.0f),
+        feather::FloatToHalf(1.0f), feather::FloatToHalf(0.0f),
+
+        feather::FloatToHalf(1.0f),  feather::FloatToHalf(1.0f),
+        feather::FloatToHalf(-1.0f), feather::FloatToHalf(-1.0f),
+
+        feather::FloatToHalf(0.5f), feather::FloatToHalf(0.5f),
+        feather::FloatToHalf(0.5f), feather::FloatToHalf(0.5f),
+    }, {4, 1, 2, 2});
+
+    auto bias = std::make_shared<Tensor>();
+    bias->Assign<uint16_t>({
+        feather::FloatToHalf(0.0f),
+        feather::FloatToHalf(1.0f),
+        feather::FloatToHalf(-1.0f),
+        feather::FloatToHalf(2.0f),
+    }, {4});
+
+    auto conv_out = std::make_shared<Tensor>(std::vector<int64_t>{1, 4, 2, 2});
+    conv_out->mutable_data<uint16_t>();
+
+    feather::operators::Conv2dParam conv_param{};
+    conv_param.input = input;
+    conv_param.w = weight;
+    conv_param.bias = bias;
+    conv_param.out = conv_out;
+    conv_param.stride_h = 1;
+    conv_param.stride_w = 1;
+    conv_param.pad_h = 0;
+    conv_param.pad_w = 0;
+    conv_param.dilation_h = 1;
+    conv_param.dilation_w = 1;
+    conv_param.group = 1;
+
+    feather::operators::Conv2dOp conv("conv_direct_multi_output_fp16", conv_param);
+    ASSERT_EQ(conv.CheckShape(), 0);
+    ASSERT_EQ(conv.InferOutputShapes(), 0);
+    auto conv_kernel = feather::KernelDispatcher::instance().create(
+        feather::DeviceType::X86, feather::DataType::FP16, "Conv2D");
+    ASSERT_NE(conv_kernel, nullptr);
+    conv.AttachKernel(std::move(conv_kernel));
+    ASSERT_EQ(conv.Run(), 0);
+
+    const std::vector<float> expected = {
+        6.0f, 8.0f, 12.0f, 14.0f,
+        7.0f, 9.0f, 13.0f, 15.0f,
+        -7.0f, -7.0f, -7.0f, -7.0f,
+        8.0f, 10.0f, 14.0f, 16.0f,
+    };
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_NEAR(feather::HalfToFloat(conv.outputs()[0]->data<uint16_t>()[i]), expected[i], 2e-2f);
+    }
+}
+
+TEST(conv_relu_test, Conv2dRunsDirectOutputChannelTailFp16) {
+    auto input = std::make_shared<Tensor>();
+    input->Assign<uint16_t>({
+        feather::FloatToHalf(1.0f), feather::FloatToHalf(2.0f), feather::FloatToHalf(3.0f),
+        feather::FloatToHalf(4.0f), feather::FloatToHalf(5.0f), feather::FloatToHalf(6.0f),
+        feather::FloatToHalf(7.0f), feather::FloatToHalf(8.0f), feather::FloatToHalf(9.0f),
+    }, {1, 1, 3, 3});
+
+    auto weight = std::make_shared<Tensor>();
+    weight->Assign<uint16_t>({
+        feather::FloatToHalf(1.0f),  feather::FloatToHalf(0.0f),  feather::FloatToHalf(0.0f),  feather::FloatToHalf(1.0f),
+        feather::FloatToHalf(0.0f),  feather::FloatToHalf(1.0f),  feather::FloatToHalf(1.0f),  feather::FloatToHalf(0.0f),
+        feather::FloatToHalf(1.0f),  feather::FloatToHalf(1.0f),  feather::FloatToHalf(1.0f),  feather::FloatToHalf(1.0f),
+        feather::FloatToHalf(0.5f),  feather::FloatToHalf(0.5f),  feather::FloatToHalf(0.5f),  feather::FloatToHalf(0.5f),
+        feather::FloatToHalf(-1.0f), feather::FloatToHalf(0.0f),  feather::FloatToHalf(0.0f),  feather::FloatToHalf(1.0f),
+        feather::FloatToHalf(1.0f),  feather::FloatToHalf(-1.0f), feather::FloatToHalf(-1.0f), feather::FloatToHalf(1.0f),
+        feather::FloatToHalf(1.0f),  feather::FloatToHalf(2.0f),  feather::FloatToHalf(3.0f),  feather::FloatToHalf(4.0f),
+        feather::FloatToHalf(0.0f),  feather::FloatToHalf(0.0f),  feather::FloatToHalf(0.0f),  feather::FloatToHalf(0.0f),
+        feather::FloatToHalf(1.0f),  feather::FloatToHalf(0.0f),  feather::FloatToHalf(1.0f),  feather::FloatToHalf(0.0f),
+    }, {9, 1, 2, 2});
+
+    auto bias = std::make_shared<Tensor>();
+    bias->Assign<uint16_t>({
+        feather::FloatToHalf(0.0f),
+        feather::FloatToHalf(1.0f),
+        feather::FloatToHalf(0.0f),
+        feather::FloatToHalf(2.0f),
+        feather::FloatToHalf(0.0f),
+        feather::FloatToHalf(0.0f),
+        feather::FloatToHalf(0.0f),
+        feather::FloatToHalf(3.0f),
+        feather::FloatToHalf(-1.0f),
+    }, {9});
+
+    auto conv_out = std::make_shared<Tensor>(std::vector<int64_t>{1, 9, 2, 2});
+    conv_out->mutable_data<uint16_t>();
+
+    feather::operators::Conv2dParam conv_param{};
+    conv_param.input = input;
+    conv_param.w = weight;
+    conv_param.bias = bias;
+    conv_param.out = conv_out;
+    conv_param.stride_h = 1;
+    conv_param.stride_w = 1;
+    conv_param.pad_h = 0;
+    conv_param.pad_w = 0;
+    conv_param.dilation_h = 1;
+    conv_param.dilation_w = 1;
+    conv_param.group = 1;
+
+    feather::operators::Conv2dOp conv("conv_direct_output_tail_fp16", conv_param);
+    ASSERT_EQ(conv.CheckShape(), 0);
+    ASSERT_EQ(conv.InferOutputShapes(), 0);
+    auto conv_kernel = feather::KernelDispatcher::instance().create(
+        feather::DeviceType::X86, feather::DataType::FP16, "Conv2D");
+    ASSERT_NE(conv_kernel, nullptr);
+    conv.AttachKernel(std::move(conv_kernel));
+    ASSERT_EQ(conv.Run(), 0);
+
+    const std::vector<float> expected = {
+        6.0f,  8.0f,  12.0f, 14.0f,
+        7.0f,  9.0f,  13.0f, 15.0f,
+        12.0f, 16.0f, 24.0f, 28.0f,
+        8.0f,  10.0f, 14.0f, 16.0f,
+        4.0f,  4.0f,  4.0f,  4.0f,
+        0.0f,  0.0f,  0.0f,  0.0f,
+        37.0f, 47.0f, 67.0f, 77.0f,
+        3.0f,  3.0f,  3.0f,  3.0f,
+        4.0f,  6.0f,  10.0f, 12.0f,
+    };
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_NEAR(feather::HalfToFloat(conv.outputs()[0]->data<uint16_t>()[i]), expected[i], 2e-2f);
+    }
+}
+
+TEST(conv_relu_test, Conv2dRunsDirectOc8MultiInputFp16) {
+    auto input = std::make_shared<Tensor>();
+    input->Assign<uint16_t>({
+        feather::FloatToHalf(1.0f),  feather::FloatToHalf(2.0f),  feather::FloatToHalf(3.0f),
+        feather::FloatToHalf(4.0f),  feather::FloatToHalf(5.0f),  feather::FloatToHalf(6.0f),
+        feather::FloatToHalf(7.0f),  feather::FloatToHalf(8.0f),  feather::FloatToHalf(9.0f),
+
+        feather::FloatToHalf(10.0f), feather::FloatToHalf(11.0f), feather::FloatToHalf(12.0f),
+        feather::FloatToHalf(13.0f), feather::FloatToHalf(14.0f), feather::FloatToHalf(15.0f),
+        feather::FloatToHalf(16.0f), feather::FloatToHalf(17.0f), feather::FloatToHalf(18.0f),
+    }, {1, 2, 3, 3});
+
+    auto weight = std::make_shared<Tensor>();
+    weight->Assign<uint16_t>({
+        feather::FloatToHalf(1.0f),  feather::FloatToHalf(0.0f),  feather::FloatToHalf(0.0f),  feather::FloatToHalf(1.0f),
+        feather::FloatToHalf(0.0f),  feather::FloatToHalf(1.0f),  feather::FloatToHalf(1.0f),  feather::FloatToHalf(0.0f),
+
+        feather::FloatToHalf(0.0f),  feather::FloatToHalf(1.0f),  feather::FloatToHalf(1.0f),  feather::FloatToHalf(0.0f),
+        feather::FloatToHalf(1.0f),  feather::FloatToHalf(0.0f),  feather::FloatToHalf(0.0f),  feather::FloatToHalf(1.0f),
+
+        feather::FloatToHalf(1.0f),  feather::FloatToHalf(1.0f),  feather::FloatToHalf(1.0f),  feather::FloatToHalf(1.0f),
+        feather::FloatToHalf(-1.0f), feather::FloatToHalf(-1.0f), feather::FloatToHalf(-1.0f), feather::FloatToHalf(-1.0f),
+
+        feather::FloatToHalf(0.5f),  feather::FloatToHalf(0.5f),  feather::FloatToHalf(0.5f),  feather::FloatToHalf(0.5f),
+        feather::FloatToHalf(0.25f), feather::FloatToHalf(0.25f), feather::FloatToHalf(0.25f), feather::FloatToHalf(0.25f),
+
+        feather::FloatToHalf(-1.0f), feather::FloatToHalf(0.0f),  feather::FloatToHalf(0.0f),  feather::FloatToHalf(1.0f),
+        feather::FloatToHalf(1.0f),  feather::FloatToHalf(0.0f),  feather::FloatToHalf(0.0f),  feather::FloatToHalf(-1.0f),
+
+        feather::FloatToHalf(1.0f),  feather::FloatToHalf(-1.0f), feather::FloatToHalf(-1.0f), feather::FloatToHalf(1.0f),
+        feather::FloatToHalf(-1.0f), feather::FloatToHalf(1.0f),  feather::FloatToHalf(1.0f),  feather::FloatToHalf(-1.0f),
+
+        feather::FloatToHalf(1.0f),  feather::FloatToHalf(2.0f),  feather::FloatToHalf(3.0f),  feather::FloatToHalf(4.0f),
+        feather::FloatToHalf(-4.0f), feather::FloatToHalf(-3.0f), feather::FloatToHalf(-2.0f), feather::FloatToHalf(-1.0f),
+
+        feather::FloatToHalf(0.0f),  feather::FloatToHalf(0.0f),  feather::FloatToHalf(0.0f),  feather::FloatToHalf(0.0f),
+        feather::FloatToHalf(1.0f),  feather::FloatToHalf(1.0f),  feather::FloatToHalf(1.0f),  feather::FloatToHalf(1.0f),
+    }, {8, 2, 2, 2});
+
+    auto bias = std::make_shared<Tensor>();
+    bias->Assign<uint16_t>({
+        feather::FloatToHalf(0.0f),
+        feather::FloatToHalf(1.0f),
+        feather::FloatToHalf(-1.0f),
+        feather::FloatToHalf(2.0f),
+        feather::FloatToHalf(0.5f),
+        feather::FloatToHalf(-0.5f),
+        feather::FloatToHalf(3.0f),
+        feather::FloatToHalf(4.0f),
+    }, {8});
+
+    auto conv_out = std::make_shared<Tensor>(std::vector<int64_t>{1, 8, 2, 2});
+    conv_out->mutable_data<uint16_t>();
+
+    feather::operators::Conv2dParam conv_param{};
+    conv_param.input = input;
+    conv_param.w = weight;
+    conv_param.bias = bias;
+    conv_param.out = conv_out;
+    conv_param.stride_h = 1;
+    conv_param.stride_w = 1;
+    conv_param.pad_h = 0;
+    conv_param.pad_w = 0;
+    conv_param.dilation_h = 1;
+    conv_param.dilation_w = 1;
+    conv_param.group = 1;
+
+    feather::operators::Conv2dOp conv("conv_direct_oc8_multi_input_fp16", conv_param);
+    ASSERT_EQ(conv.CheckShape(), 0);
+    ASSERT_EQ(conv.InferOutputShapes(), 0);
+    auto conv_kernel = feather::KernelDispatcher::instance().create(
+        feather::DeviceType::X86, feather::DataType::FP16, "Conv2D");
+    ASSERT_NE(conv_kernel, nullptr);
+    conv.AttachKernel(std::move(conv_kernel));
+    ASSERT_EQ(conv.Run(), 0);
+
+    const std::vector<float> expected = {
+        30.0f, 34.0f, 42.0f, 46.0f,
+        31.0f, 35.0f, 43.0f, 47.0f,
+        -37.0f, -37.0f, -37.0f, -37.0f,
+        20.0f, 23.0f, 29.0f, 32.0f,
+        0.5f, 0.5f, 0.5f, 0.5f,
+        -0.5f, -0.5f, -0.5f, -0.5f,
+        -73.0f, -73.0f, -73.0f, -73.0f,
+        52.0f, 56.0f, 64.0f, 68.0f,
+    };
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_NEAR(feather::HalfToFloat(conv.outputs()[0]->data<uint16_t>()[i]), expected[i], 2e-2f);
+    }
+}
+
+TEST(conv_relu_test, Conv2dRunsPointwiseOc8Fp16) {
+    auto input = std::make_shared<Tensor>();
+    input->Assign<uint16_t>({
+        feather::FloatToHalf(1.0f), feather::FloatToHalf(2.0f),
+        feather::FloatToHalf(3.0f), feather::FloatToHalf(4.0f),
+
+        feather::FloatToHalf(10.0f), feather::FloatToHalf(20.0f),
+        feather::FloatToHalf(30.0f), feather::FloatToHalf(40.0f),
+    }, {1, 2, 2, 2});
+
+    auto weight = std::make_shared<Tensor>();
+    weight->Assign<uint16_t>({
+        feather::FloatToHalf(1.0f),  feather::FloatToHalf(2.0f),
+        feather::FloatToHalf(3.0f),  feather::FloatToHalf(4.0f),
+        feather::FloatToHalf(0.5f),  feather::FloatToHalf(-1.0f),
+        feather::FloatToHalf(-2.0f), feather::FloatToHalf(0.25f),
+        feather::FloatToHalf(1.0f),  feather::FloatToHalf(0.0f),
+        feather::FloatToHalf(0.0f),  feather::FloatToHalf(1.0f),
+        feather::FloatToHalf(1.5f),  feather::FloatToHalf(1.5f),
+        feather::FloatToHalf(-1.0f), feather::FloatToHalf(-1.0f),
+    }, {8, 2, 1, 1});
+
+    auto bias = std::make_shared<Tensor>();
+    bias->Assign<uint16_t>({
+        feather::FloatToHalf(0.5f),
+        feather::FloatToHalf(-1.0f),
+        feather::FloatToHalf(2.0f),
+        feather::FloatToHalf(-3.0f),
+        feather::FloatToHalf(4.0f),
+        feather::FloatToHalf(5.0f),
+        feather::FloatToHalf(0.0f),
+        feather::FloatToHalf(-2.0f),
+    }, {8});
+
+    auto conv_out = std::make_shared<Tensor>(std::vector<int64_t>{1, 8, 2, 2});
+    conv_out->mutable_data<uint16_t>();
+
+    feather::operators::Conv2dParam conv_param{};
+    conv_param.input = input;
+    conv_param.w = weight;
+    conv_param.bias = bias;
+    conv_param.out = conv_out;
+    conv_param.stride_h = 1;
+    conv_param.stride_w = 1;
+    conv_param.pad_h = 0;
+    conv_param.pad_w = 0;
+    conv_param.dilation_h = 1;
+    conv_param.dilation_w = 1;
+    conv_param.group = 1;
+
+    feather::operators::Conv2dOp conv("conv_pointwise_oc8_fp16", conv_param);
+    ASSERT_EQ(conv.CheckShape(), 0);
+    ASSERT_EQ(conv.InferOutputShapes(), 0);
+    auto conv_kernel = feather::KernelDispatcher::instance().create(
+        feather::DeviceType::X86, feather::DataType::FP16, "Conv2D");
+    ASSERT_NE(conv_kernel, nullptr);
+    conv.AttachKernel(std::move(conv_kernel));
+    ASSERT_EQ(conv.Run(), 0);
+
+    const std::vector<float> expected = {
+        21.5f, 42.5f, 63.5f, 84.5f,
+        42.0f, 85.0f, 128.0f, 171.0f,
+        -7.5f, -17.0f, -26.5f, -36.0f,
+        -2.5f, -2.0f, -1.5f, -1.0f,
+        5.0f, 6.0f, 7.0f, 8.0f,
+        15.0f, 25.0f, 35.0f, 45.0f,
+        16.5f, 33.0f, 49.5f, 66.0f,
+        -13.0f, -24.0f, -35.0f, -46.0f,
+    };
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_NEAR(feather::HalfToFloat(conv.outputs()[0]->data<uint16_t>()[i]), expected[i], 2e-2f);
+    }
+}

@@ -1,0 +1,7 @@
+macro(Normalize VAR)
+    if(${VAR})
+        set(${VAR} True)
+    else()
+        set(${VAR} False)
+    endif()
+endmacro()   
