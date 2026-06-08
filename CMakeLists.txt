@@ -126,6 +126,7 @@ add_executable(yolov5_demo demo/yolov5_infer_demo.cc)
 add_executable(yolov5_benchmark_demo demo/yolov5_benchmark_demo.cc)
 add_executable(x86_conv_benchmark_demo demo/x86_conv_benchmark_demo.cc)
 add_executable(x86_linear_benchmark_demo demo/x86_linear_benchmark_demo.cc)
+add_executable(x86_softmax_benchmark_demo demo/x86_softmax_benchmark_demo.cc)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(infer PUBLIC
@@ -170,6 +171,9 @@ target_link_libraries(x86_conv_benchmark_demo infer CONAN_PKG::benchmark)
 target_include_directories(x86_linear_benchmark_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(x86_linear_benchmark_demo infer CONAN_PKG::benchmark)
+target_include_directories(x86_softmax_benchmark_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(x86_softmax_benchmark_demo infer CONAN_PKG::benchmark)
 message("${CMAKE_CURRENT_SOURCE_DIR}")
 
 if (BUILD_UNITTEST)

@@ -281,3 +281,79 @@ TEST(softmax_transpose_op_test, SoftmaxRunsOnX86FP16) {
     EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[4]), 1.0f / 3.0f, 2e-3f);
     EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[5]), 1.0f / 3.0f, 2e-3f);
 }
+
+TEST(softmax_transpose_op_test, SoftmaxSupportsAxis0OnX86FP16) {
+    auto input = std::make_shared<Tensor>();
+    input->Assign<uint16_t>({feather::FloatToHalf(1.0f), feather::FloatToHalf(2.0f), feather::FloatToHalf(3.0f),
+                             feather::FloatToHalf(4.0f), feather::FloatToHalf(5.0f), feather::FloatToHalf(6.0f)},
+                            {2, 3});
+
+    auto out = std::make_shared<Tensor>(std::vector<int64_t>{2, 3});
+    out->mutable_data<uint16_t>();
+
+    SoftmaxParam param{};
+    param.input = input;
+    param.out = out;
+    param.axis = 0;
+
+    std::shared_ptr<OpBase> op = std::make_shared<feather::operators::SoftmaxOp>("softmax_axis0_fp16", param);
+    ASSERT_EQ(op->CheckShape(), 0);
+    ASSERT_EQ(op->InferOutputShapes(), 0);
+
+    auto kernel = KernelDispatcher::instance().create(DeviceType::X86, DataType::FP16, "Softmax");
+    ASSERT_NE(kernel, nullptr);
+    op->AttachKernel(std::move(kernel));
+    ASSERT_EQ(op->Run(), 0);
+
+    for (int col = 0; col < 3; ++col) {
+        const float sum =
+            feather::HalfToFloat(out->data<uint16_t>()[col]) + feather::HalfToFloat(out->data<uint16_t>()[3 + col]);
+        EXPECT_NEAR(sum, 1.0f, 2e-3f);
+    }
+}
+
+TEST(softmax_transpose_op_test, SoftmaxSupportsNegativeAxisAndLongTailOnX86FP16) {
+    std::vector<uint16_t> input_values;
+    input_values.reserve(34);
+    for (int row = 0; row < 2; ++row) {
+        for (int col = 0; col < 17; ++col) {
+            input_values.push_back(feather::FloatToHalf(-1.5f + static_cast<float>(row * 17 + col) * 0.125f));
+        }
+    }
+
+    auto input = std::make_shared<Tensor>();
+    input->Assign<uint16_t>(input_values, {2, 17});
+
+    auto out = std::make_shared<Tensor>(std::vector<int64_t>{2, 17});
+    out->mutable_data<uint16_t>();
+
+    SoftmaxParam param{};
+    param.input = input;
+    param.out = out;
+    param.axis = -1;
+
+    std::shared_ptr<OpBase> op = std::make_shared<feather::operators::SoftmaxOp>("softmax_long_tail_fp16", param);
+    ASSERT_EQ(op->CheckShape(), 0);
+    ASSERT_EQ(op->InferOutputShapes(), 0);
+
+    auto kernel = KernelDispatcher::instance().create(DeviceType::X86, DataType::FP16, "Softmax");
+    ASSERT_NE(kernel, nullptr);
+    op->AttachKernel(std::move(kernel));
+    ASSERT_EQ(op->Run(), 0);
+
+    for (int row = 0; row < 2; ++row) {
+        float row_sum = 0.0f;
+        float row_max = 0.0f;
+        int row_max_index = -1;
+        for (int col = 0; col < 17; ++col) {
+            const float value = feather::HalfToFloat(out->data<uint16_t>()[row * 17 + col]);
+            row_sum += value;
+            if (col == 0 || value > row_max) {
+                row_max = value;
+                row_max_index = col;
+            }
+        }
+        EXPECT_NEAR(row_sum, 1.0f, 3e-3f);
+        EXPECT_EQ(row_max_index, 16);
+    }
+}
