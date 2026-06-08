@@ -6,16 +6,16 @@
 #include <fstream>
 #include <mutex>
 #include <queue>
-#include <thread>
 #include <utility>
 
+#include "util/threading.h"
 #include "util/timer.h"
 
 namespace feather {
 
 RuntimeGraph::RuntimeGraph()
     : thread_mode_(RuntimeThreadMode::kParallelGraph),
-      configured_thread_count_(std::max<size_t>(1, std::thread::hardware_concurrency())) {}
+      configured_thread_count_(DefaultThreadCount()) {}
 
 int32_t RuntimeGraph::load_from_buffer(const char* buffer, size_t size) {
     if (buffer == nullptr || size == 0) {

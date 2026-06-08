@@ -1,9 +1,7 @@
 #include <gtest/gtest.h>
 
-#include <algorithm>
-#include <thread>
-
 #include "core/graph.h"
+#include "util/threading.h"
 
 namespace feather {
 namespace {
@@ -13,10 +11,17 @@ TEST(runtime_threading_test, DefaultThreadModeUsesParallelGraphExecution) {
     EXPECT_EQ(graph.ThreadMode(), RuntimeThreadMode::kParallelGraph);
 }
 
-TEST(runtime_threading_test, DefaultThreadCountMatchesHardwareConcurrency) {
+TEST(runtime_threading_test, DefaultThreadCountUsesConfiguredLimit) {
     RuntimeGraph graph;
-    const size_t expected_thread_count = std::max<size_t>(1, std::thread::hardware_concurrency());
-    EXPECT_EQ(graph.ThreadCount(), expected_thread_count);
+    EXPECT_EQ(feather::DefaultThreadCount(), 8u);
+    EXPECT_EQ(graph.ThreadCount(), feather::DefaultThreadCount());
+}
+
+TEST(runtime_threading_test, WorkItemThreadCountIsCappedAtConfiguredLimit) {
+    EXPECT_EQ(feather::ThreadCountForWorkItems(0), 1u);
+    EXPECT_EQ(feather::ThreadCountForWorkItems(1), 1u);
+    EXPECT_EQ(feather::ThreadCountForWorkItems(4), 4u);
+    EXPECT_EQ(feather::ThreadCountForWorkItems(64), feather::DefaultThreadCount());
 }
 
 TEST(runtime_threading_test, ThreadCountCanBeConfigured) {

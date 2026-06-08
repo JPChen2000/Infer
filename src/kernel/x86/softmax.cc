@@ -6,12 +6,12 @@
 #include <cmath>
 #include <future>
 #include <limits>
-#include <thread>
 #include <vector>
 
 #include "src/kernel/common/kernel_io.h"
 #include "util/fp16.h"
 #include "util/thread_pool_nv.h"
+#include "util/threading.h"
 #include "util/timer.h"
 
 namespace feather {
@@ -106,15 +106,11 @@ inline void StoreFloatArrayToHalf(const float* input, int64_t count, uint16_t* o
 }
 
 size_t GetSoftmaxThreadCount(int64_t total_work_items) {
-    if (total_work_items <= 1) {
-        return 1;
-    }
-    const unsigned int hardware_threads = std::max(1u, std::thread::hardware_concurrency());
-    return std::max<size_t>(1, std::min<size_t>(static_cast<size_t>(total_work_items), hardware_threads));
+    return ThreadCountForWorkItems(total_work_items);
 }
 
 ThreadPoolNv& GetSoftmaxThreadPool() {
-    static ThreadPoolNv pool(std::max(1u, std::thread::hardware_concurrency()));
+    static ThreadPoolNv pool(DefaultThreadCount());
     return pool;
 }
 

@@ -30,6 +30,8 @@ class StaticGraph {
     int32_t SetModel(const model::ModelDesc& model);
     int32_t SetTensor(const std::string& name, std::shared_ptr<Tensor> tensor);
     std::shared_ptr<Tensor> GetTensor(const std::string& name) const;
+    void SetKernelDevice(DeviceType device) { kernel_device_ = device == DeviceType::UNKNOWN ? GetHostRuntimeDevice() : device; }
+    DeviceType KernelDevice() const { return kernel_device_; }
 
     int32_t Build();
     int32_t Check() const;
@@ -66,6 +68,7 @@ class StaticGraph {
     std::unordered_map<std::string, std::string> producer_by_value_;
     std::unordered_map<std::string, std::vector<std::string>> users_by_value_;
     std::shared_ptr<PassManager> pass_manager_;
+    DeviceType kernel_device_{GetHostRuntimeDevice()};
 };
 
 }  // namespace feather

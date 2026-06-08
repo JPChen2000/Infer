@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cstring>
 #include <sstream>
 
@@ -26,7 +27,64 @@ const model::ValueDesc* FindValueDescByName(const model::ModelDesc& model, const
     return nullptr;
 }
 
+DeviceType ResolveBackendDevice(Yolov5Backend backend) {
+    switch (backend) {
+        case Yolov5Backend::kCommon:
+            return DeviceType::COMMON;
+        case Yolov5Backend::kX86:
+            return DeviceType::X86;
+        case Yolov5Backend::kHost:
+        default:
+            return GetHostRuntimeDevice();
+    }
+}
+
+const char* DeviceBackendName(DeviceType device) {
+    switch (device) {
+        case DeviceType::COMMON:
+            return "common";
+        case DeviceType::X86:
+            return "x86";
+        default:
+            return "host";
+    }
+}
+
 }  // namespace
+
+bool ParseYolov5Backend(const std::string& value, Yolov5Backend* backend) {
+    if (backend == nullptr) {
+        return false;
+    }
+
+    std::string normalized;
+    normalized.reserve(value.size());
+    for (const auto ch : value) {
+        normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+    }
+
+    if (normalized == "common") {
+        *backend = Yolov5Backend::kCommon;
+        return true;
+    }
+    if (normalized == "x86") {
+        *backend = Yolov5Backend::kX86;
+        return true;
+    }
+    return false;
+}
+
+const char* Yolov5BackendName(Yolov5Backend backend) {
+    switch (backend) {
+        case Yolov5Backend::kCommon:
+            return "common";
+        case Yolov5Backend::kX86:
+            return "x86";
+        case Yolov5Backend::kHost:
+        default:
+            return "host";
+    }
+}
 
 int32_t Yolov5Runner::RunOnImage(const std::string& image_path, const ImageData& image, float conf_thresh,
                                  float iou_thresh, std::vector<Detection>* detections, bool record_summary) {
@@ -65,6 +123,7 @@ int32_t Yolov5Runner::RunOnImage(const std::string& image_path, const ImageData&
     if (record_summary) {
         std::ostringstream build_ss;
         build_ss << "model=" << model_name_
+                 << " backend=" << DeviceBackendName(backend_device_)
                  << " input=" << input_name_
                  << " output=" << output_name_
                  << " input_shape=[";
@@ -121,7 +180,10 @@ int32_t Yolov5Runner::PrepareExecutableGraph() {
     return 0;
 }
 
-int32_t Yolov5Runner::Load(const std::string& model_path) {
+int32_t Yolov5Runner::Load(const std::string& model_path, Yolov5Backend backend) {
+    backend_ = backend;
+    backend_device_ = ResolveBackendDevice(backend_);
+
     if (!loader_.Load(model_path)) {
         return -1;
     }
@@ -143,6 +205,7 @@ int32_t Yolov5Runner::Load(const std::string& model_path) {
     input_dtype_ = input_value->tensor.data_type;
 
     static_graph_ = StaticGraph();
+    static_graph_.SetKernelDevice(backend_device_);
     runtime_graph_.Clear();
     if (static_graph_.SetModel(model) != 0) {
         return -1;
@@ -183,6 +246,7 @@ int32_t Yolov5Runner::Load(const std::string& model_path) {
 
     std::ostringstream ss;
     ss << "model=" << model_name_
+       << " backend=" << DeviceBackendName(backend_device_)
        << " input=" << input_name_
        << " output=" << output_name_
        << " input_shape=[";

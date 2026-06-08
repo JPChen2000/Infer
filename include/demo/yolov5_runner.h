@@ -15,9 +15,18 @@
 namespace feather {
 namespace demo {
 
+enum class Yolov5Backend {
+    kHost,
+    kCommon,
+    kX86,
+};
+
+bool ParseYolov5Backend(const std::string& value, Yolov5Backend* backend);
+const char* Yolov5BackendName(Yolov5Backend backend);
+
 class Yolov5Runner {
    public:
-    int32_t Load(const std::string& model_path);
+    int32_t Load(const std::string& model_path, Yolov5Backend backend = Yolov5Backend::kHost);
     int32_t Run(const std::string& image_path, float conf_thresh, float iou_thresh,
                 std::vector<Detection>* detections);
     int32_t RunPreparedImage(const ImageData& image, float conf_thresh, float iou_thresh,
@@ -41,6 +50,8 @@ class Yolov5Runner {
     std::string output_name_;
     int input_size_{};
     DataType input_dtype_{DataType::UNKNOWN};
+    Yolov5Backend backend_{Yolov5Backend::kHost};
+    DeviceType backend_device_{GetHostRuntimeDevice()};
     std::string model_name_;
     std::string last_build_summary_;
     std::string last_run_summary_;

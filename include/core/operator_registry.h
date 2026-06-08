@@ -31,6 +31,33 @@ class OperatorRegistry {
     std::unordered_map<std::string, Builder> registry_;
 };
 
+inline DeviceType NormalizeKernelDevice(DeviceType device) {
+    return device == DeviceType::UNKNOWN ? GetHostRuntimeDevice() : device;
+}
+
+namespace detail {
+inline thread_local DeviceType g_active_kernel_device = GetHostRuntimeDevice();
+}
+
+inline DeviceType ActiveKernelDevice() {
+    return NormalizeKernelDevice(detail::g_active_kernel_device);
+}
+
+class KernelDeviceScope {
+   public:
+    explicit KernelDeviceScope(DeviceType device) : previous_(detail::g_active_kernel_device) {
+        detail::g_active_kernel_device = NormalizeKernelDevice(device);
+    }
+
+    KernelDeviceScope(const KernelDeviceScope&) = delete;
+    KernelDeviceScope& operator=(const KernelDeviceScope&) = delete;
+
+    ~KernelDeviceScope() { detail::g_active_kernel_device = previous_; }
+
+   private:
+    DeviceType previous_;
+};
+
 inline DataType ResolveExecutionDataType(const std::vector<std::shared_ptr<Tensor>>& tensors,
                                          DataType fallback = DataType::FP32) {
     for (const auto& tensor : tensors) {
@@ -50,7 +77,7 @@ inline std::unique_ptr<KernelBase> CreateKernelForTensor(DeviceType device, cons
 inline std::unique_ptr<KernelBase> CreateHostKernelForTensor(const std::string& op_type,
                                                              const std::vector<std::shared_ptr<Tensor>>& tensors,
                                                              DataType fallback = DataType::FP32) {
-    return CreateKernelForTensor(GetHostRuntimeDevice(), op_type, tensors, fallback);
+    return CreateKernelForTensor(ActiveKernelDevice(), op_type, tensors, fallback);
 }
 
 }  // namespace feather

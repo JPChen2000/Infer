@@ -1,6 +1,5 @@
 #include <gtest/gtest.h>
 
-#include <cstdlib>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -106,21 +105,39 @@ TEST(yolov5_demo_test, PreprocessImageCanWriteIntoExistingTensor) {
     EXPECT_NE(tensor->data<uint16_t>()[0], 0);
 }
 
+TEST(yolov5_demo_test, ParseYolov5BackendAcceptsSupportedNames) {
+    feather::demo::Yolov5Backend backend = feather::demo::Yolov5Backend::kHost;
+
+    ASSERT_TRUE(feather::demo::ParseYolov5Backend("common", &backend));
+    EXPECT_EQ(backend, feather::demo::Yolov5Backend::kCommon);
+    EXPECT_STREQ(feather::demo::Yolov5BackendName(backend), "common");
+
+    ASSERT_TRUE(feather::demo::ParseYolov5Backend("x86", &backend));
+    EXPECT_EQ(backend, feather::demo::Yolov5Backend::kX86);
+    EXPECT_STREQ(feather::demo::Yolov5BackendName(backend), "x86");
+}
+
+TEST(yolov5_demo_test, ParseYolov5BackendRejectsUnsupportedNames) {
+    feather::demo::Yolov5Backend backend = feather::demo::Yolov5Backend::kX86;
+
+    EXPECT_FALSE(feather::demo::ParseYolov5Backend("cuda", &backend));
+    EXPECT_EQ(backend, feather::demo::Yolov5Backend::kX86);
+    EXPECT_FALSE(feather::demo::ParseYolov5Backend("", &backend));
+    EXPECT_FALSE(feather::demo::ParseYolov5Backend("common,x86", &backend));
+    EXPECT_FALSE(feather::demo::ParseYolov5Backend("common", nullptr));
+}
+
 TEST(yolov5_demo_test, LoadFthAndRunImageInference) {
     const auto repo_root = std::filesystem::path(__FILE__).parent_path().parent_path();
-    const auto script_path = repo_root / "tools" / "onnx_to_feather.py";
-    const auto onnx_path = repo_root / "third_party" / "models" / "yolov5n.onnx";
-    const auto output_path = std::filesystem::temp_directory_path() / "yolov5n_demo_test.fth";
+    const auto model_path = repo_root / "yolov5n.fth";
     const auto image_path = WriteTestPpmImage(std::filesystem::temp_directory_path() / "yolov5n_demo_test.ppm");
 
-    ASSERT_TRUE(std::filesystem::exists(onnx_path));
-    const std::string command = "/home/jarvis/miniconda3/bin/python3 \"" + script_path.string() + "\" --input \"" +
-                                onnx_path.string() + "\" --output \"" + output_path.string() + "\"";
-    ASSERT_EQ(std::system(command.c_str()), 0);
+    ASSERT_TRUE(std::filesystem::exists(model_path));
 
     feather::demo::Yolov5Runner runner;
-    ASSERT_EQ(runner.Load(output_path.string()), 0);
+    ASSERT_EQ(runner.Load(model_path.string(), feather::demo::Yolov5Backend::kX86), 0);
     EXPECT_FALSE(runner.DescribeLastBuild().empty());
+    EXPECT_NE(runner.DescribeLastBuild().find("backend=x86"), std::string::npos);
     EXPECT_NE(runner.DescribeLastBuild().find("static_nodes="), std::string::npos);
     EXPECT_NE(runner.DescribeLastBuild().find("runtime_nodes="), std::string::npos);
 

@@ -66,6 +66,7 @@ int32_t StaticGraph::Build() {
         tensors_[value.tensor.name] = tensor;
     }
 
+    KernelDeviceScope kernel_device_scope(kernel_device_);
     for (const auto& node : model_.graph.nodes) {
         auto op = OperatorRegistry::instance().Create(node, tensors_);
         if (op == nullptr) {
@@ -282,6 +283,7 @@ bool StaticGraph::RebuildNode(size_t node_index) {
         break;
     }
 
+    KernelDeviceScope kernel_device_scope(kernel_device_);
     auto op = OperatorRegistry::instance().Create(desc, tensors_);
     if (op == nullptr) {
         return false;

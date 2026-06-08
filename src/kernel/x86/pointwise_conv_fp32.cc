@@ -4,10 +4,10 @@
 
 #include <algorithm>
 #include <future>
-#include <thread>
 #include <vector>
 
 #include "util/thread_pool_nv.h"
+#include "util/threading.h"
 #include "util/fp16.h"
 
 namespace feather {
@@ -40,15 +40,11 @@ inline void Store8FloatsToHalfStrided(const __m256 value, uint16_t* dst, int64_t
 }
 
 size_t GetPointwiseThreadCount(int64_t total_work_items) {
-    if (total_work_items <= 1) {
-        return 1;
-    }
-    const unsigned int hardware_threads = std::max(1u, std::thread::hardware_concurrency());
-    return std::max<size_t>(1, std::min<size_t>(static_cast<size_t>(total_work_items), hardware_threads));
+    return ThreadCountForWorkItems(total_work_items);
 }
 
 ThreadPoolNv& GetPointwiseThreadPool() {
-    static ThreadPoolNv pool(std::max(1u, std::thread::hardware_concurrency()));
+    static ThreadPoolNv pool(DefaultThreadCount());
     return pool;
 }
 

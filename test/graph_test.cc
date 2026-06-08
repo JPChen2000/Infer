@@ -2,7 +2,7 @@
 
 #include <memory>
 #include <string>
-#include <thread>
+#include <typeinfo>
 #include <unordered_map>
 
 #include "core/graph_lowering.h"
@@ -10,8 +10,11 @@
 #include "core/static_graph.h"
 #include "core/tensor.h"
 #include "model/model_format.h"
+#include "src/kernel/add.h"
+#include "util/threading.h"
 
 using feather::DataType;
+using feather::DeviceType;
 using feather::GraphLowering;
 using feather::RuntimeGraph;
 using feather::StaticGraph;
@@ -19,6 +22,59 @@ using feather::Tensor;
 using feather::model::ModelDesc;
 using feather::model::NodeDesc;
 using feather::model::ValueDesc;
+
+namespace {
+
+void BuildAddRuntimeWithBackend(DeviceType device, RuntimeGraph* runtime_graph) {
+    ModelDesc model;
+    model.name = "add_graph";
+    model.version = 1;
+    model.graph.name = "main";
+    model.graph.inputs = {"lhs", "rhs"};
+    model.graph.outputs = {"out"};
+
+    ValueDesc lhs;
+    lhs.tensor.name = "lhs";
+    lhs.tensor.dims = {2};
+    lhs.tensor.data_type = DataType::FP32;
+
+    ValueDesc rhs;
+    rhs.tensor.name = "rhs";
+    rhs.tensor.dims = {2};
+    rhs.tensor.data_type = DataType::FP32;
+
+    ValueDesc out;
+    out.tensor.name = "out";
+    out.tensor.dims = {2};
+    out.tensor.data_type = DataType::FP32;
+
+    NodeDesc node;
+    node.name = "add0";
+    node.op_type = "Add";
+    node.inputs = {"lhs", "rhs"};
+    node.outputs = {"out"};
+
+    model.graph.values = {lhs, rhs, out};
+    model.graph.nodes = {node};
+
+    auto lhs_tensor = std::make_shared<Tensor>();
+    lhs_tensor->Assign<float>({1.0f, 2.0f}, {2});
+
+    auto rhs_tensor = std::make_shared<Tensor>();
+    rhs_tensor->Assign<float>({3.0f, 4.0f}, {2});
+
+    StaticGraph static_graph;
+    static_graph.SetKernelDevice(device);
+    ASSERT_EQ(static_graph.SetModel(model), 0);
+    ASSERT_EQ(static_graph.SetTensor("lhs", lhs_tensor), 0);
+    ASSERT_EQ(static_graph.SetTensor("rhs", rhs_tensor), 0);
+    ASSERT_EQ(static_graph.Build(), 0);
+
+    GraphLowering lowering;
+    ASSERT_EQ(lowering.Lower(static_graph, runtime_graph), 0);
+}
+
+}  // namespace
 
 TEST(runtime_graph_test, BuildRuntimeGraphFromStaticGraph) {
     ModelDesc model;
@@ -94,6 +150,28 @@ TEST(runtime_graph_test, BuildRuntimeGraphFromStaticGraph) {
     for (size_t i = 0; i < expected.size(); ++i) {
         EXPECT_FLOAT_EQ(output_tensor->data<float>()[i], expected[i]);
     }
+}
+
+TEST(static_graph_test, KernelDeviceSelectsCommonBackend) {
+    RuntimeGraph runtime_graph;
+    BuildAddRuntimeWithBackend(DeviceType::COMMON, &runtime_graph);
+
+    const auto* node = runtime_graph.GetNode("add0");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->kernel, nullptr);
+    EXPECT_EQ(typeid(*node->kernel),
+              typeid(feather::kernel::AddKernel<DeviceType::COMMON, DataType::FP32>));
+}
+
+TEST(static_graph_test, KernelDeviceSelectsX86Backend) {
+    RuntimeGraph runtime_graph;
+    BuildAddRuntimeWithBackend(DeviceType::X86, &runtime_graph);
+
+    const auto* node = runtime_graph.GetNode("add0");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->kernel, nullptr);
+    EXPECT_EQ(typeid(*node->kernel),
+              typeid(feather::kernel::AddKernel<DeviceType::X86, DataType::FP32>));
 }
 
 TEST(static_graph_test, BuildFailsWhenRequiredTensorMissing) {
@@ -433,8 +511,7 @@ TEST(runtime_graph_test, LoweringInitializesReusableExecutionWorkers) {
     GraphLowering lowering;
     ASSERT_EQ(lowering.Lower(static_graph, &runtime_graph), 0);
 
-    const size_t hardware_workers = std::max<size_t>(1, std::thread::hardware_concurrency());
-    const size_t expected_workers = std::min(hardware_workers, runtime_graph.NodeSize());
+    const size_t expected_workers = std::min(feather::DefaultThreadCount(), runtime_graph.NodeSize());
     EXPECT_EQ(runtime_graph.WorkerCount(), expected_workers);
 
     ASSERT_EQ(runtime_graph.Run(), 0);

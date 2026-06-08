@@ -12,7 +12,7 @@ namespace {
 
 void PrintUsage() {
     std::cerr << "usage: yolov5_demo --model <model.fth> --image <image> "
-                 "[--conf-thresh 0.25] [--iou-thresh 0.45]\n";
+                 "[--backend common|x86] [--conf-thresh 0.25] [--iou-thresh 0.45]\n";
 }
 
 }  // namespace
@@ -21,6 +21,7 @@ int main(int argc, char** argv) {
     std::string model_path;
     std::string image_path;
     std::string output_path = "output.jpg";
+    feather::demo::Yolov5Backend backend = feather::demo::Yolov5Backend::kHost;
     float conf_thresh = 0.25f;
     float iou_thresh = 0.45f;
 
@@ -32,6 +33,12 @@ int main(int argc, char** argv) {
             image_path = argv[++i];
         } else if (arg == "--output" && i + 1 < argc) {
             output_path = argv[++i];
+        } else if (arg == "--backend" && i + 1 < argc) {
+            if (!feather::demo::ParseYolov5Backend(argv[++i], &backend)) {
+                std::cerr << "invalid backend: " << argv[i] << '\n';
+                PrintUsage();
+                return 1;
+            }
         } else if (arg == "--conf-thresh" && i + 1 < argc) {
             conf_thresh = std::strtof(argv[++i], nullptr);
         } else if (arg == "--iou-thresh" && i + 1 < argc) {
@@ -48,7 +55,7 @@ int main(int argc, char** argv) {
     }
 
     feather::demo::Yolov5Runner runner;
-    if (runner.Load(model_path) != 0) {
+    if (runner.Load(model_path, backend) != 0) {
         std::cerr << "failed to load model: " << model_path << '\n';
         return 1;
     }
