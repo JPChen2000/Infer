@@ -11,12 +11,22 @@
 #include "core/tensor.h"
 #include "model/model_format.h"
 #include "src/kernel/add.h"
+#include "src/kernel/mul.h"
+#include "src/operator/add_op.h"
+#include "src/operator/mul_op.h"
 #include "util/threading.h"
+
+#ifdef FEATHER_WITH_CUDA
+#include <cuda_runtime.h>
+
+#include "src/kernel/cuda/runtime.h"
+#endif
 
 using feather::DataType;
 using feather::DeviceType;
 using feather::GraphLowering;
 using feather::RuntimeGraph;
+using feather::RuntimeThreadMode;
 using feather::StaticGraph;
 using feather::Tensor;
 using feather::model::ModelDesc;
@@ -24,6 +34,13 @@ using feather::model::NodeDesc;
 using feather::model::ValueDesc;
 
 namespace {
+
+#ifdef FEATHER_WITH_CUDA
+bool HasCudaDevice() {
+    int count = 0;
+    return cudaGetDeviceCount(&count) == cudaSuccess && count > 0;
+}
+#endif
 
 void BuildAddRuntimeWithBackend(DeviceType device, RuntimeGraph* runtime_graph) {
     ModelDesc model;
@@ -73,6 +90,24 @@ void BuildAddRuntimeWithBackend(DeviceType device, RuntimeGraph* runtime_graph) 
     GraphLowering lowering;
     ASSERT_EQ(lowering.Lower(static_graph, runtime_graph), 0);
 }
+
+#ifdef FEATHER_WITH_CUDA
+feather::RuntimeNode MakeBinaryRuntimeNode(const std::string& name, const std::string& op_type,
+                                           std::shared_ptr<feather::OpBase> op,
+                                           std::unique_ptr<feather::KernelBase> kernel,
+                                           std::vector<std::string> inputs,
+                                           std::vector<std::string> outputs) {
+    feather::RuntimeNode node;
+    node.name = name;
+    node.op_type = op_type;
+    node.inputs = std::move(inputs);
+    node.outputs = std::move(outputs);
+    node.owner = std::move(op);
+    node.kernel = std::move(kernel);
+    node.kernel_device = node.kernel == nullptr ? feather::DeviceType::UNKNOWN : node.kernel->device();
+    return node;
+}
+#endif
 
 }  // namespace
 
@@ -159,6 +194,7 @@ TEST(static_graph_test, KernelDeviceSelectsCommonBackend) {
     const auto* node = runtime_graph.GetNode("add0");
     ASSERT_NE(node, nullptr);
     ASSERT_NE(node->kernel, nullptr);
+    EXPECT_EQ(node->kernel_device, DeviceType::COMMON);
     EXPECT_EQ(typeid(*node->kernel),
               typeid(feather::kernel::AddKernel<DeviceType::COMMON, DataType::FP32>));
 }
@@ -170,8 +206,133 @@ TEST(static_graph_test, KernelDeviceSelectsX86Backend) {
     const auto* node = runtime_graph.GetNode("add0");
     ASSERT_NE(node, nullptr);
     ASSERT_NE(node->kernel, nullptr);
+    EXPECT_EQ(node->kernel_device, DeviceType::X86);
     EXPECT_EQ(typeid(*node->kernel),
               typeid(feather::kernel::AddKernel<DeviceType::X86, DataType::FP32>));
+}
+
+TEST(static_graph_test, X86LoweringKeepsParallelRuntimeThreadMode) {
+    RuntimeGraph runtime_graph;
+    BuildAddRuntimeWithBackend(DeviceType::X86, &runtime_graph);
+
+    EXPECT_EQ(runtime_graph.ThreadMode(), RuntimeThreadMode::kParallelGraph);
+}
+
+TEST(static_graph_test, X86LoweringPreservesPreconfiguredSerialRuntimeThreadMode) {
+    RuntimeGraph runtime_graph;
+    runtime_graph.SetThreadMode(RuntimeThreadMode::kSerialGraph);
+    BuildAddRuntimeWithBackend(DeviceType::X86, &runtime_graph);
+
+    EXPECT_EQ(runtime_graph.ThreadMode(), RuntimeThreadMode::kSerialGraph);
+}
+
+TEST(static_graph_test, CudaLoweringUsesSerialRuntimeThreadMode) {
+#ifndef FEATHER_WITH_CUDA
+    GTEST_SKIP() << "CUDA kernels are not built";
+#else
+    RuntimeGraph runtime_graph;
+    BuildAddRuntimeWithBackend(DeviceType::CUDA, &runtime_graph);
+
+    EXPECT_EQ(runtime_graph.ThreadMode(), RuntimeThreadMode::kSerialGraph);
+#endif
+}
+
+TEST(runtime_graph_test, CudaGraphSynchronizesAroundCommonFallbackNode) {
+#ifndef FEATHER_WITH_CUDA
+    GTEST_SKIP() << "CUDA kernels are not built";
+#else
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
+    feather::kernel::cuda_detail::ClearTensorCache();
+
+    auto lhs = std::make_shared<Tensor>();
+    lhs->Assign<float>({1.0f, 2.0f}, {2});
+    auto rhs = std::make_shared<Tensor>();
+    rhs->Assign<float>({10.0f, 20.0f}, {2});
+    auto scale = std::make_shared<Tensor>();
+    scale->Assign<float>({2.0f, 3.0f}, {2});
+    auto addend = std::make_shared<Tensor>();
+    addend->Assign<float>({5.0f, 6.0f}, {2});
+
+    auto cuda_sum = std::make_shared<Tensor>();
+    cuda_sum->Assign<float>({-100.0f, -100.0f}, {2});
+    auto cpu_product = std::make_shared<Tensor>();
+    cpu_product->Assign<float>({-7.0f, -7.0f}, {2});
+    auto final = std::make_shared<Tensor>();
+    final->Assign<float>({0.0f, 0.0f}, {2});
+
+    void* stale_device_product = nullptr;
+    ASSERT_EQ(feather::kernel::cuda_detail::AcquireTensorDevice(
+                  cpu_product.get(), cpu_product->numel() * sizeof(float), cpu_product->data<float>(),
+                  &stale_device_product),
+              0);
+    ASSERT_NE(stale_device_product, nullptr);
+
+    feather::operators::BinaryParam add0_param{};
+    add0_param.lhs = lhs;
+    add0_param.rhs = rhs;
+    add0_param.out = cuda_sum;
+    auto add0_op = std::make_shared<feather::operators::AddOp>("cuda_add0", add0_param);
+    auto add0_kernel =
+        feather::KernelDispatcher::instance().create(feather::DeviceType::CUDA, feather::DataType::FP32, "Add");
+    ASSERT_NE(add0_kernel, nullptr);
+    add0_op->AttachKernel(std::move(add0_kernel));
+    auto add0_detached = add0_op->DetachKernel();
+
+    feather::operators::BinaryParam mul_param{};
+    mul_param.lhs = cuda_sum;
+    mul_param.rhs = scale;
+    mul_param.out = cpu_product;
+    auto mul_op = std::make_shared<feather::operators::MulOp>("common_mul", mul_param);
+    auto mul_kernel =
+        feather::KernelDispatcher::instance().create(feather::DeviceType::COMMON, feather::DataType::FP32, "Mul");
+    ASSERT_NE(mul_kernel, nullptr);
+    mul_op->AttachKernel(std::move(mul_kernel));
+    auto mul_detached = mul_op->DetachKernel();
+
+    feather::operators::BinaryParam add1_param{};
+    add1_param.lhs = cpu_product;
+    add1_param.rhs = addend;
+    add1_param.out = final;
+    auto add1_op = std::make_shared<feather::operators::AddOp>("cuda_add1", add1_param);
+    auto add1_kernel =
+        feather::KernelDispatcher::instance().create(feather::DeviceType::CUDA, feather::DataType::FP32, "Add");
+    ASSERT_NE(add1_kernel, nullptr);
+    add1_op->AttachKernel(std::move(add1_kernel));
+    auto add1_detached = add1_op->DetachKernel();
+
+    RuntimeGraph graph;
+    graph.SetThreadMode(RuntimeThreadMode::kSerialGraph);
+    ASSERT_EQ(graph.SetTensor("lhs", lhs), 0);
+    ASSERT_EQ(graph.SetTensor("rhs", rhs), 0);
+    ASSERT_EQ(graph.SetTensor("scale", scale), 0);
+    ASSERT_EQ(graph.SetTensor("addend", addend), 0);
+    ASSERT_EQ(graph.SetTensor("cuda_sum", cuda_sum), 0);
+    ASSERT_EQ(graph.SetTensor("cpu_product", cpu_product), 0);
+    ASSERT_EQ(graph.SetTensor("final", final), 0);
+
+    graph.AddNode(MakeBinaryRuntimeNode("cuda_add0", "Add", add0_op, std::move(add0_detached), {"lhs", "rhs"},
+                                        {"cuda_sum"}));
+    graph.AddNode(MakeBinaryRuntimeNode("common_mul", "Mul", mul_op, std::move(mul_detached), {"cuda_sum", "scale"},
+                                        {"cpu_product"}));
+    graph.AddNode(MakeBinaryRuntimeNode("cuda_add1", "Add", add1_op, std::move(add1_detached),
+                                        {"cpu_product", "addend"}, {"final"}));
+    ASSERT_EQ(graph.Finalize(), 0);
+
+    {
+        feather::kernel::cuda_detail::DeferredHostSyncScope deferred_sync;
+        ASSERT_EQ(graph.Run(), 0);
+        ASSERT_EQ(feather::kernel::cuda_detail::SyncTensorToHost(final.get(), final->numel() * sizeof(float),
+                                                                 final->mutable_data<float>()),
+                  0);
+    }
+
+    EXPECT_FLOAT_EQ(final->data<float>()[0], 27.0f);
+    EXPECT_FLOAT_EQ(final->data<float>()[1], 72.0f);
+    feather::kernel::cuda_detail::ClearTensorCache();
+#endif
 }
 
 TEST(static_graph_test, BuildFailsWhenRequiredTensorMissing) {

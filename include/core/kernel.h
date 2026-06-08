@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 #include "core/tensor.h"
 using feather::Tensor;
@@ -21,9 +22,20 @@ class KernelBase {
     explicit KernelBase(const KernelBase& base);
     virtual void SetParam(void* param) { param_ = param; };
     virtual int32_t compute() = 0;
+    void SetMetadata(DeviceType device, DataType data_type, std::string op_type) {
+        device_ = device;
+        data_type_ = data_type;
+        op_type_ = std::move(op_type);
+    }
+    DeviceType device() const { return device_; }
+    DataType data_type() const { return data_type_; }
+    const std::string& op_type() const { return op_type_; }
 
    protected:
     void* param_;
+    DeviceType device_{DeviceType::UNKNOWN};
+    DataType data_type_{DataType::UNKNOWN};
+    std::string op_type_;
 };
 
 class KernelDispatcher {
@@ -64,7 +76,11 @@ class KernelDispatcher {
         if (auto dev_it = registry_.find(dev); dev_it != registry_.end()) {
             if (auto dtype_it = dev_it->second.find(dtype); dtype_it != dev_it->second.end()) {
                 if (auto op_it = dtype_it->second.find(op_type); op_it != dtype_it->second.end()) {
-                    return op_it->second();
+                    auto kernel = op_it->second();
+                    if (kernel != nullptr) {
+                        kernel->SetMetadata(dev, dtype, op_type);
+                    }
+                    return kernel;
                 }
             }
         }

@@ -119,6 +119,16 @@ struct PowParam : ParamBase {
     float exponent{1.0f};
 };
 
+struct YoloDecodeParam : ParamBase {
+    std::shared_ptr<Tensor> input;
+    std::shared_ptr<Tensor> xy_scale;
+    std::shared_ptr<Tensor> grid;
+    std::shared_ptr<Tensor> stride;
+    std::shared_ptr<Tensor> wh_scale;
+    std::shared_ptr<Tensor> anchor_grid;
+    std::shared_ptr<Tensor> out;
+};
+
 }  // namespace operators
 }  // namespace feather
 #endif  // FtEATHER_OPERATOR_OP_PARAMS_H

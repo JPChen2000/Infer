@@ -7,16 +7,20 @@
 
 #include "core/graph_pass.h"
 #include "core/dead_node_elimination_pass.h"
+#include "core/sigmoid_mul_fusion_pass.h"
 #include "core/static_graph.h"
 #include "core/tensor.h"
+#include "core/yolo_decode_fusion_pass.h"
 #include "model/model_format.h"
 
 using feather::DataType;
 using feather::DeadNodeEliminationPass;
 using feather::GraphPass;
 using feather::PassManager;
+using feather::SigmoidMulFusionPass;
 using feather::StaticGraph;
 using feather::Tensor;
+using feather::YoloDecodeFusionPass;
 using feather::model::ModelDesc;
 using feather::model::NodeDesc;
 using feather::model::ValueDesc;
@@ -86,6 +90,177 @@ ModelDesc BuildConvReluDeadTailModelDesc() {
     return model;
 }
 
+ModelDesc BuildSigmoidMulModelDesc(bool reverse_mul_inputs) {
+    ModelDesc model;
+    model.name = "sigmoid_mul_graph";
+    model.version = 1;
+    model.graph.name = "main";
+    model.graph.inputs = {"input"};
+    model.graph.outputs = {"output"};
+
+    ValueDesc input;
+    input.tensor.name = "input";
+    input.tensor.dims = {4};
+    input.tensor.data_type = DataType::FP32;
+
+    ValueDesc sigmoid_out;
+    sigmoid_out.tensor.name = "sigmoid_out";
+    sigmoid_out.tensor.dims = {4};
+    sigmoid_out.tensor.data_type = DataType::FP32;
+
+    ValueDesc output;
+    output.tensor.name = "output";
+    output.tensor.dims = {4};
+    output.tensor.data_type = DataType::FP32;
+
+    NodeDesc sigmoid;
+    sigmoid.name = "sigmoid0";
+    sigmoid.op_type = "Sigmoid";
+    sigmoid.inputs = {"input"};
+    sigmoid.outputs = {"sigmoid_out"};
+
+    NodeDesc mul;
+    mul.name = "mul0";
+    mul.op_type = "Mul";
+    mul.inputs = reverse_mul_inputs ? std::vector<std::string>{"sigmoid_out", "input"}
+                                    : std::vector<std::string>{"input", "sigmoid_out"};
+    mul.outputs = {"output"};
+
+    model.graph.values = {input, sigmoid_out, output};
+    model.graph.nodes = {sigmoid, mul};
+    return model;
+}
+
+ModelDesc BuildYoloDecodePatternModelDesc() {
+    ModelDesc model;
+    model.name = "yolo_decode_pattern";
+    model.version = 1;
+    model.graph.name = "main";
+    model.graph.inputs = {"raw"};
+    model.graph.outputs = {"output"};
+
+    auto value = [](const std::string& name, std::vector<int64_t> dims, bool constant = false) {
+        ValueDesc desc;
+        desc.tensor.name = name;
+        desc.tensor.dims = std::move(dims);
+        desc.tensor.data_type = DataType::FP32;
+        desc.constant = constant;
+        return desc;
+    };
+
+    model.graph.values = {
+        value("raw", {1, 12, 1, 1}),
+        value("xy_scale", {1}, true),
+        value("grid", {1, 2, 1, 1, 2}, true),
+        value("stride", {1}, true),
+        value("wh_scale", {1}, true),
+        value("anchor", {1, 2, 1, 1, 2}, true),
+        value("reshaped", {1, 2, 6, 1, 1}),
+        value("transposed", {1, 2, 1, 1, 6}),
+        value("sigmoid", {1, 2, 1, 1, 6}),
+        value("split_xy", {1, 2, 1, 1, 2}),
+        value("split_wh", {1, 2, 1, 1, 2}),
+        value("split_rest", {1, 2, 1, 1, 2}),
+        value("mul_xy", {1, 2, 1, 1, 2}),
+        value("add_xy", {1, 2, 1, 1, 2}),
+        value("decoded_xy", {1, 2, 1, 1, 2}),
+        value("mul_wh", {1, 2, 1, 1, 2}),
+        value("pow_wh", {1, 2, 1, 1, 2}),
+        value("decoded_wh", {1, 2, 1, 1, 2}),
+        value("concat", {1, 2, 1, 1, 6}),
+        value("output", {1, 2, 6}),
+    };
+
+    NodeDesc reshape0;
+    reshape0.name = "reshape0";
+    reshape0.op_type = "Reshape";
+    reshape0.inputs = {"raw"};
+    reshape0.outputs = {"reshaped"};
+    reshape0.attributes["shape"] = std::vector<int64_t>{1, 2, 6, 1, 1};
+
+    NodeDesc transpose;
+    transpose.name = "transpose0";
+    transpose.op_type = "Transpose";
+    transpose.inputs = {"reshaped"};
+    transpose.outputs = {"transposed"};
+    transpose.attributes["perm"] = std::vector<int64_t>{0, 1, 3, 4, 2};
+
+    NodeDesc sigmoid;
+    sigmoid.name = "sigmoid0";
+    sigmoid.op_type = "Sigmoid";
+    sigmoid.inputs = {"transposed"};
+    sigmoid.outputs = {"sigmoid"};
+
+    NodeDesc split;
+    split.name = "split0";
+    split.op_type = "Split";
+    split.inputs = {"sigmoid"};
+    split.outputs = {"split_xy", "split_wh", "split_rest"};
+    split.attributes["axis"] = static_cast<int64_t>(4);
+    split.attributes["split_sizes"] = std::vector<int64_t>{2, 2, 2};
+
+    NodeDesc mul_xy;
+    mul_xy.name = "mul_xy";
+    mul_xy.op_type = "Mul";
+    mul_xy.inputs = {"split_xy", "xy_scale"};
+    mul_xy.outputs = {"mul_xy"};
+
+    NodeDesc add_xy;
+    add_xy.name = "add_xy";
+    add_xy.op_type = "Add";
+    add_xy.inputs = {"mul_xy", "grid"};
+    add_xy.outputs = {"add_xy"};
+
+    NodeDesc mul_xy_stride;
+    mul_xy_stride.name = "mul_xy_stride";
+    mul_xy_stride.op_type = "Mul";
+    mul_xy_stride.inputs = {"add_xy", "stride"};
+    mul_xy_stride.outputs = {"decoded_xy"};
+
+    NodeDesc mul_wh;
+    mul_wh.name = "mul_wh";
+    mul_wh.op_type = "Mul";
+    mul_wh.inputs = {"split_wh", "wh_scale"};
+    mul_wh.outputs = {"mul_wh"};
+
+    NodeDesc pow_wh;
+    pow_wh.name = "pow_wh";
+    pow_wh.op_type = "Pow";
+    pow_wh.inputs = {"mul_wh"};
+    pow_wh.outputs = {"pow_wh"};
+    pow_wh.attributes["exponent"] = 2.0f;
+
+    NodeDesc mul_wh_anchor;
+    mul_wh_anchor.name = "mul_wh_anchor";
+    mul_wh_anchor.op_type = "Mul";
+    mul_wh_anchor.inputs = {"pow_wh", "anchor"};
+    mul_wh_anchor.outputs = {"decoded_wh"};
+
+    NodeDesc concat;
+    concat.name = "concat0";
+    concat.op_type = "Concat";
+    concat.inputs = {"decoded_xy", "decoded_wh", "split_rest"};
+    concat.outputs = {"concat"};
+    concat.attributes["axis"] = static_cast<int64_t>(4);
+
+    NodeDesc reshape1;
+    reshape1.name = "reshape1";
+    reshape1.op_type = "Reshape";
+    reshape1.inputs = {"concat"};
+    reshape1.outputs = {"output"};
+    reshape1.attributes["shape"] = std::vector<int64_t>{1, 2, 6};
+
+    model.graph.nodes = {reshape0, transpose, sigmoid, split, mul_xy, add_xy, mul_xy_stride,
+                         mul_wh,   pow_wh,    mul_wh_anchor, concat, reshape1};
+    return model;
+}
+
+void BindSiluGraphInputs(StaticGraph* graph) {
+    auto input_tensor = std::make_shared<Tensor>();
+    input_tensor->Assign<float>({-2.0f, -1.0f, 0.0f, 2.0f}, {4});
+    ASSERT_EQ(graph->SetTensor("input", input_tensor), 0);
+}
+
 void BindConvReluGraphInputs(StaticGraph* graph) {
     auto input_tensor = std::make_shared<Tensor>();
     input_tensor->Assign<float>({
@@ -109,6 +284,33 @@ void BindConvReluGraphInputs(StaticGraph* graph) {
     ASSERT_EQ(graph->SetTensor("input", input_tensor), 0);
     ASSERT_EQ(graph->SetTensor("weight", weight_tensor), 0);
     ASSERT_EQ(graph->SetTensor("bias", bias_tensor), 0);
+}
+
+void BindYoloDecodePatternInputs(StaticGraph* graph) {
+    auto raw = std::make_shared<Tensor>();
+    raw->Assign<float>(
+        {
+            0.0f, 0.0f, 0.0f, 0.0f, 1.0f, -1.0f,
+            2.0f, -2.0f, 0.5f, -0.5f, 0.0f, 4.0f,
+        },
+        {1, 12, 1, 1});
+    auto xy_scale = std::make_shared<Tensor>();
+    xy_scale->Assign<float>({2.0f}, {1});
+    auto grid = std::make_shared<Tensor>();
+    grid->Assign<float>({10.0f, 20.0f, 30.0f, 40.0f}, {1, 2, 1, 1, 2});
+    auto stride = std::make_shared<Tensor>();
+    stride->Assign<float>({8.0f}, {1});
+    auto wh_scale = std::make_shared<Tensor>();
+    wh_scale->Assign<float>({2.0f}, {1});
+    auto anchor = std::make_shared<Tensor>();
+    anchor->Assign<float>({4.0f, 6.0f, 8.0f, 10.0f}, {1, 2, 1, 1, 2});
+
+    ASSERT_EQ(graph->SetTensor("raw", raw), 0);
+    ASSERT_EQ(graph->SetTensor("xy_scale", xy_scale), 0);
+    ASSERT_EQ(graph->SetTensor("grid", grid), 0);
+    ASSERT_EQ(graph->SetTensor("stride", stride), 0);
+    ASSERT_EQ(graph->SetTensor("wh_scale", wh_scale), 0);
+    ASSERT_EQ(graph->SetTensor("anchor", anchor), 0);
 }
 
 class RecordingPass : public GraphPass {
@@ -240,4 +442,72 @@ TEST(static_graph_pass_test, DeadNodeEliminationPassRemovesUnusedTailNodes) {
     EXPECT_EQ(graph.NodeSize(), 1U);
     EXPECT_EQ(graph.OperatorSize(), 1U);
     EXPECT_EQ(graph.GetNode("relu0"), nullptr);
+}
+
+TEST(static_graph_pass_test, SigmoidMulFusionPassRewritesSiluPattern) {
+    StaticGraph graph;
+    ASSERT_EQ(graph.SetModel(BuildSigmoidMulModelDesc(false)), 0);
+    BindSiluGraphInputs(&graph);
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<SigmoidMulFusionPass>());
+    graph.SetPassManager(pass_manager);
+
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+    EXPECT_EQ(graph.NodeSize(), 1U);
+    EXPECT_EQ(graph.OperatorSize(), 1U);
+    EXPECT_EQ(graph.GetNode("sigmoid0"), nullptr);
+
+    const auto* fused = graph.GetNode("mul0");
+    ASSERT_NE(fused, nullptr);
+    EXPECT_EQ(fused->op_type, "SiLU");
+    EXPECT_EQ(fused->inputs, std::vector<std::string>({"input"}));
+    EXPECT_EQ(fused->outputs, std::vector<std::string>({"output"}));
+    EXPECT_TRUE(graph.GetUsers("sigmoid_out").empty());
+    EXPECT_EQ(graph.GetUsers("input"), std::vector<std::string>({"mul0"}));
+    EXPECT_EQ(graph.GetProducer("output"), "mul0");
+}
+
+TEST(static_graph_pass_test, SigmoidMulFusionPassAcceptsReversedMulInputs) {
+    StaticGraph graph;
+    ASSERT_EQ(graph.SetModel(BuildSigmoidMulModelDesc(true)), 0);
+    BindSiluGraphInputs(&graph);
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<SigmoidMulFusionPass>());
+    graph.SetPassManager(pass_manager);
+
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+    const auto* fused = graph.GetNode("mul0");
+    ASSERT_NE(fused, nullptr);
+    EXPECT_EQ(fused->op_type, "SiLU");
+    EXPECT_EQ(fused->inputs, std::vector<std::string>({"input"}));
+}
+
+TEST(static_graph_pass_test, YoloDecodeFusionPassRewritesDecodeScalePattern) {
+    StaticGraph graph;
+    ASSERT_EQ(graph.SetModel(BuildYoloDecodePatternModelDesc()), 0);
+    BindYoloDecodePatternInputs(&graph);
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<YoloDecodeFusionPass>());
+    graph.SetPassManager(pass_manager);
+
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+    EXPECT_EQ(graph.NodeSize(), 1U);
+    EXPECT_EQ(graph.OperatorSize(), 1U);
+
+    const auto* fused = graph.GetNode("reshape1");
+    ASSERT_NE(fused, nullptr);
+    EXPECT_EQ(fused->op_type, "YoloDecode");
+    EXPECT_EQ(fused->inputs,
+              (std::vector<std::string>{"raw", "xy_scale", "grid", "stride", "wh_scale", "anchor"}));
+    EXPECT_EQ(fused->outputs, std::vector<std::string>({"output"}));
+    EXPECT_EQ(graph.GetProducer("output"), "reshape1");
+    EXPECT_EQ(graph.GetUsers("raw"), std::vector<std::string>({"reshape1"}));
+    EXPECT_EQ(graph.GetNode("concat0"), nullptr);
+    EXPECT_EQ(graph.GetNode("transpose0"), nullptr);
 }

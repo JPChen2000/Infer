@@ -7,7 +7,10 @@ int32_t GraphLowering::Lower(StaticGraph& static_graph, RuntimeGraph* runtime_gr
         return -1;
     }
 
+    const auto requested_thread_mode = runtime_graph->ThreadMode();
     runtime_graph->Clear();
+    runtime_graph->SetThreadMode(static_graph.KernelDevice() == DeviceType::CUDA ? RuntimeThreadMode::kSerialGraph
+                                                                                : requested_thread_mode);
     for (const auto& item : static_graph.tensors()) {
         if (runtime_graph->SetTensor(item.first, item.second) != 0) {
             return -1;
@@ -32,6 +35,7 @@ int32_t GraphLowering::Lower(StaticGraph& static_graph, RuntimeGraph* runtime_gr
         if (node.kernel == nullptr) {
             return -1;
         }
+        node.kernel_device = node.kernel->device();
         runtime_graph->AddNode(std::move(node));
     }
 

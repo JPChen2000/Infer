@@ -19,6 +19,7 @@ enum class Yolov5Backend {
     kHost,
     kCommon,
     kX86,
+    kCuda,
 };
 
 bool ParseYolov5Backend(const std::string& value, Yolov5Backend* backend);

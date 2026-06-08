@@ -223,6 +223,65 @@ bool StaticGraph::ReplaceInputValue(const std::string& node_name, const std::str
     return replaced;
 }
 
+bool StaticGraph::ReplaceNodeOp(const std::string& node_name, const std::string& op_type,
+                                const std::vector<std::string>& inputs) {
+    auto it = node_index_by_name_.find(node_name);
+    if (it == node_index_by_name_.end() || op_type.empty()) {
+        return false;
+    }
+    auto& static_node = nodes_[it->second];
+    if (static_node.removed) {
+        return false;
+    }
+    for (const auto& input : inputs) {
+        if (GetTensor(input) == nullptr) {
+            return false;
+        }
+    }
+
+    model::NodeDesc desc;
+    desc.name = static_node.name;
+    desc.op_type = op_type;
+    desc.inputs = inputs;
+    desc.outputs = static_node.outputs;
+
+    for (const auto& node : model_.graph.nodes) {
+        if (node.name != static_node.name) {
+            continue;
+        }
+        desc.attributes = node.attributes;
+        desc.domain = node.domain;
+        break;
+    }
+
+    KernelDeviceScope kernel_device_scope(kernel_device_);
+    auto op = OperatorRegistry::instance().Create(desc, tensors_);
+    if (op == nullptr || op->outputs().size() != static_node.outputs.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < static_node.outputs.size(); ++i) {
+        if (op->outputs()[i] == nullptr) {
+            return false;
+        }
+    }
+
+    for (const auto& input : static_node.inputs) {
+        UnregisterValueUse(input, node_name);
+    }
+    static_node.op_type = op_type;
+    static_node.inputs = inputs;
+    static_node.op = op;
+    for (const auto& input : static_node.inputs) {
+        RegisterValueUse(input, node_name);
+    }
+    for (size_t i = 0; i < static_node.outputs.size(); ++i) {
+        tensors_[static_node.outputs[i]] = op->outputs()[i];
+        producer_by_value_[static_node.outputs[i]] = static_node.name;
+    }
+    RebuildActiveOperators();
+    return true;
+}
+
 void StaticGraph::ClearGraphState() {
     operators_.clear();
     nodes_.clear();

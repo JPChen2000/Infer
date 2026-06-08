@@ -108,6 +108,10 @@ TEST(yolov5_demo_test, PreprocessImageCanWriteIntoExistingTensor) {
 TEST(yolov5_demo_test, ParseYolov5BackendAcceptsSupportedNames) {
     feather::demo::Yolov5Backend backend = feather::demo::Yolov5Backend::kHost;
 
+    ASSERT_TRUE(feather::demo::ParseYolov5Backend("host", &backend));
+    EXPECT_EQ(backend, feather::demo::Yolov5Backend::kHost);
+    EXPECT_STREQ(feather::demo::Yolov5BackendName(backend), "host");
+
     ASSERT_TRUE(feather::demo::ParseYolov5Backend("common", &backend));
     EXPECT_EQ(backend, feather::demo::Yolov5Backend::kCommon);
     EXPECT_STREQ(feather::demo::Yolov5BackendName(backend), "common");
@@ -115,13 +119,15 @@ TEST(yolov5_demo_test, ParseYolov5BackendAcceptsSupportedNames) {
     ASSERT_TRUE(feather::demo::ParseYolov5Backend("x86", &backend));
     EXPECT_EQ(backend, feather::demo::Yolov5Backend::kX86);
     EXPECT_STREQ(feather::demo::Yolov5BackendName(backend), "x86");
+
+    ASSERT_TRUE(feather::demo::ParseYolov5Backend("cuda", &backend));
+    EXPECT_EQ(backend, feather::demo::Yolov5Backend::kCuda);
+    EXPECT_STREQ(feather::demo::Yolov5BackendName(backend), "cuda");
 }
 
 TEST(yolov5_demo_test, ParseYolov5BackendRejectsUnsupportedNames) {
     feather::demo::Yolov5Backend backend = feather::demo::Yolov5Backend::kX86;
 
-    EXPECT_FALSE(feather::demo::ParseYolov5Backend("cuda", &backend));
-    EXPECT_EQ(backend, feather::demo::Yolov5Backend::kX86);
     EXPECT_FALSE(feather::demo::ParseYolov5Backend("", &backend));
     EXPECT_FALSE(feather::demo::ParseYolov5Backend("common,x86", &backend));
     EXPECT_FALSE(feather::demo::ParseYolov5Backend("common", nullptr));

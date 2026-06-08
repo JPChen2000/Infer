@@ -39,7 +39,7 @@ void Yolov5Benchmark(benchmark::State& state) {
 
 void PrintUsage() {
     std::cerr << "usage: yolov5_benchmark_demo --model <model.fth> --image <image> "
-                 "[--conf-thresh 0.25] [--iou-thresh 0.45] <google-benchmark-args>\n";
+                 "[--backend host|common|x86|cuda] [--conf-thresh 0.25] [--iou-thresh 0.45] <google-benchmark-args>\n";
 }
 
 }  // namespace
@@ -57,7 +57,7 @@ int main(int argc, char** argv) {
     context.conf_thresh = options.conf_thresh;
     context.iou_thresh = options.iou_thresh;
 
-    if (context.runner.Load(options.model_path) != 0) {
+    if (context.runner.Load(options.model_path, options.backend) != 0) {
         std::cerr << "failed to load model: " << options.model_path << '\n';
         return 1;
     }

@@ -6,7 +6,12 @@
 #include <cstring>
 #include <sstream>
 
+#include "core/sigmoid_mul_fusion_pass.h"
+#include "core/yolo_decode_fusion_pass.h"
 #include "demo/image_io.h"
+#ifdef FEATHER_WITH_CUDA
+#include "src/kernel/cuda/runtime.h"
+#endif
 
 namespace feather {
 namespace demo {
@@ -33,6 +38,8 @@ DeviceType ResolveBackendDevice(Yolov5Backend backend) {
             return DeviceType::COMMON;
         case Yolov5Backend::kX86:
             return DeviceType::X86;
+        case Yolov5Backend::kCuda:
+            return DeviceType::CUDA;
         case Yolov5Backend::kHost:
         default:
             return GetHostRuntimeDevice();
@@ -45,6 +52,8 @@ const char* DeviceBackendName(DeviceType device) {
             return "common";
         case DeviceType::X86:
             return "x86";
+        case DeviceType::CUDA:
+            return "cuda";
         default:
             return "host";
     }
@@ -63,12 +72,20 @@ bool ParseYolov5Backend(const std::string& value, Yolov5Backend* backend) {
         normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
     }
 
+    if (normalized == "host") {
+        *backend = Yolov5Backend::kHost;
+        return true;
+    }
     if (normalized == "common") {
         *backend = Yolov5Backend::kCommon;
         return true;
     }
     if (normalized == "x86") {
         *backend = Yolov5Backend::kX86;
+        return true;
+    }
+    if (normalized == "cuda") {
+        *backend = Yolov5Backend::kCuda;
         return true;
     }
     return false;
@@ -80,6 +97,8 @@ const char* Yolov5BackendName(Yolov5Backend backend) {
             return "common";
         case Yolov5Backend::kX86:
             return "x86";
+        case Yolov5Backend::kCuda:
+            return "cuda";
         case Yolov5Backend::kHost:
         default:
             return "host";
@@ -103,10 +122,25 @@ int32_t Yolov5Runner::RunOnImage(const std::string& image_path, const ImageData&
     if (PreprocessImageToTensor(image, input_size_, input_dtype_, runtime_input.get(), &letterbox) != 0) {
         return -1;
     }
+#ifdef FEATHER_WITH_CUDA
+    if (backend_device_ == DeviceType::CUDA) {
+        kernel::cuda_detail::InvalidateTensorDevice(runtime_input.get());
+    }
+#endif
     const auto preprocess_end = std::chrono::steady_clock::now();
 
     const auto rungraph_begin = std::chrono::steady_clock::now();
-    if (runtime_graph_.Run() != 0) {
+    int32_t run_status = 0;
+#ifdef FEATHER_WITH_CUDA
+    if (backend_device_ == DeviceType::CUDA) {
+        kernel::cuda_detail::DeferredHostSyncScope deferred_host_sync;
+        run_status = runtime_graph_.Run();
+    } else
+#endif
+    {
+        run_status = runtime_graph_.Run();
+    }
+    if (run_status != 0) {
         return -1;
     }
     const auto rungraph_end = std::chrono::steady_clock::now();
@@ -115,6 +149,17 @@ int32_t Yolov5Runner::RunOnImage(const std::string& image_path, const ImageData&
     if (output_tensor == nullptr) {
         return -1;
     }
+#ifdef FEATHER_WITH_CUDA
+    if (backend_device_ == DeviceType::CUDA) {
+        if (kernel::cuda_detail::SyncTensorToHost(output_tensor.get(),
+                                                 static_cast<size_t>(output_tensor->numel()) *
+                                                     DataTypeBytes(output_tensor->data_type()),
+                                                 output_tensor->mutable_data(output_tensor->numel() *
+                                                                            DataTypeBytes(output_tensor->data_type()))) != 0) {
+            return -1;
+        }
+    }
+#endif
     const auto postprocess_begin = std::chrono::steady_clock::now();
     *detections = DecodeYolov5Detections(*output_tensor, letterbox, image.width, image.height,
                                          conf_thresh, iou_thresh);
@@ -173,6 +218,9 @@ int32_t Yolov5Runner::PrepareExecutableGraph() {
     if (static_graph_.Build() != 0) {
         return -1;
     }
+    if (static_graph_.ApplyPasses() != 0) {
+        return -1;
+    }
     runtime_graph_.Clear();
     if (lowering_.Lower(static_graph_, &runtime_graph_) != 0) {
         return -1;
@@ -182,7 +230,20 @@ int32_t Yolov5Runner::PrepareExecutableGraph() {
 
 int32_t Yolov5Runner::Load(const std::string& model_path, Yolov5Backend backend) {
     backend_ = backend;
+#ifndef FEATHER_WITH_CUDA
+    if (backend_ == Yolov5Backend::kCuda) {
+        return -1;
+    }
+#endif
     backend_device_ = ResolveBackendDevice(backend_);
+#ifdef FEATHER_WITH_CUDA
+    if (backend_device_ == DeviceType::CUDA) {
+        if (kernel::cuda_detail::WarmupCudaRuntime() != 0) {
+            return -1;
+        }
+        kernel::cuda_detail::ClearTensorCache();
+    }
+#endif
 
     if (!loader_.Load(model_path)) {
         return -1;
@@ -206,6 +267,10 @@ int32_t Yolov5Runner::Load(const std::string& model_path, Yolov5Backend backend)
 
     static_graph_ = StaticGraph();
     static_graph_.SetKernelDevice(backend_device_);
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<SigmoidMulFusionPass>());
+    pass_manager->AddPass(std::make_unique<YoloDecodeFusionPass>());
+    static_graph_.SetPassManager(pass_manager);
     runtime_graph_.Clear();
     if (static_graph_.SetModel(model) != 0) {
         return -1;

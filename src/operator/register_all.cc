@@ -17,11 +17,13 @@ void EnsurePowOperatorRegistered();
 void EnsureReluOperatorRegistered();
 void EnsureReshapeOperatorRegistered();
 void EnsureResizeOperatorRegistered();
+void EnsureSiluOperatorRegistered();
 void EnsureSigmoidOperatorRegistered();
 void EnsureSliceOperatorRegistered();
 void EnsureSoftmaxOperatorRegistered();
 void EnsureSplitOperatorRegistered();
 void EnsureTransposeOperatorRegistered();
+void EnsureYoloDecodeOperatorRegistered();
 
 void EnsureBuiltinOperatorsRegistered() {
     EnsureAddOperatorRegistered();
@@ -38,11 +40,13 @@ void EnsureBuiltinOperatorsRegistered() {
     EnsureReluOperatorRegistered();
     EnsureReshapeOperatorRegistered();
     EnsureResizeOperatorRegistered();
+    EnsureSiluOperatorRegistered();
     EnsureSigmoidOperatorRegistered();
     EnsureSliceOperatorRegistered();
     EnsureSoftmaxOperatorRegistered();
     EnsureSplitOperatorRegistered();
     EnsureTransposeOperatorRegistered();
+    EnsureYoloDecodeOperatorRegistered();
 }
 
 }  // namespace operators

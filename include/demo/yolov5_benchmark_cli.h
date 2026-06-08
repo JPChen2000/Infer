@@ -4,12 +4,15 @@
 #include <cstdlib>
 #include <string>
 
+#include "demo/yolov5_runner.h"
+
 namespace feather {
 namespace demo {
 
 struct Yolov5BenchmarkCommandLine {
     std::string model_path;
     std::string image_path;
+    Yolov5Backend backend{Yolov5Backend::kHost};
     float conf_thresh{0.25f};
     float iou_thresh{0.45f};
 };
@@ -32,6 +35,12 @@ inline bool ParseYolov5BenchmarkCommandLine(int* argc, char*** argv, Yolov5Bench
         }
         if (arg == "--image" && read_index + 1 < *argc) {
             result->image_path = (*argv)[++read_index];
+            continue;
+        }
+        if (arg == "--backend" && read_index + 1 < *argc) {
+            if (!ParseYolov5Backend((*argv)[++read_index], &result->backend)) {
+                return false;
+            }
             continue;
         }
         if (arg == "--conf-thresh" && read_index + 1 < *argc) {

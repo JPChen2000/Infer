@@ -18,8 +18,9 @@
 - 内存池
 - Kernel 注册与分发机制
 - 基础模型存储/加载格式
-- 一组已经接入执行主链路的 `Common + FP32/FP16` 常用算子与测试
+- 一组已经接入执行主链路的 `Common / X86 / CUDA + FP32/FP16` 常用算子与测试
 - 新的两阶段图执行骨架
+- `DeadNodeElimination / SigmoidMul / YoloDecode` 等静态图 pass
 - 独立的 YOLOv5 Google Benchmark 入口与 runtime profiling 汇总
 
 当前阶段不再适合把所有职责都塞进一个运行时类里。项目现在已经明确采用两阶段图架构：
@@ -179,7 +180,7 @@
 - 物化 value/tensor map
 - 通过 `OperatorRegistry` 创建具体 `Op`
 - 在构图阶段完成 shape 检查、输出推导、kernel 绑定
-- 预留 `ApplyPasses()` 作为图优化/算子融合入口
+- 通过 `ApplyPasses()` 执行图优化/算子融合 pass
 
 也就是说，权重导入后得到的不是 runtime 执行图，而是一个携带 `Op` 的静态图。
 
@@ -236,6 +237,7 @@
 - 复制 tensor map
 - 遍历静态图中的 `Op`
 - 把绑定好的 kernel 从 `Op` 移交到 runtime node
+- 记录每个 runtime node 里 kernel 的实际绑定 backend，而不是简单继承整张图请求的 backend
 - 生成按执行顺序排列的 runtime node
 
 后续如果要做：
@@ -264,10 +266,11 @@
 
 - 保存 lowered runtime node
 - 保存运行时 tensor map
-- 顺序执行 runtime node
+- 按 DAG 依赖执行 runtime node
+- 在 CUDA 图发生 CPU fallback 时，统一处理 CPU 节点前后的 D2H/H2D cache 边界同步
 - 暴露图中 tensor 给调用方和测试读取
 
-当前 `RuntimeGraph` 还是顺序执行容器，还不是完整 DAG 调度器，但职责边界已经对了。
+当前 `RuntimeGraph` 已经按依赖构建 kernel DAG。CPU 路径可使用线程池调度可并行节点；CUDA 路径当前仍固定为单 inference stream 串行提交，避免缺少 event/multistream 依赖管理时引入错误并行。
 
 ### 5.6 Kernel 绑定与后端选择
 
@@ -280,12 +283,14 @@
 - `KernelDispatcher` 按查表方式选择实现
   - 先查目标 backend
   - 查不到再回退到 `DeviceType::COMMON`
+- 每个 kernel 会携带实际绑定到的 `DeviceType / DataType / op_type`
+- 如果 CUDA 图中的某个节点退化到 CPU kernel，RuntimeGraph 会在该 CPU 节点输入侧同步必要的 D2H，并在输出侧失效旧 device cache，让后续 CUDA 节点重新 H2D
 
 这意味着：
 
 - 当前 `Common` 目录下的 kernel 可以同时服务 `x86` 和 `ARM`
 - 后续新增 `x86/AVX` kernel 时，不需要改 `Op` 绑定流程，只需要补充注册表
-- 未来新增 `CUDA` backend 时，也复用同一套“精确 backend 优先、Common 兜底”的分发机制
+- `CUDA` backend 也复用同一套“精确 backend 优先、Common 兜底”的分发机制
 
 所以静态图和运行时图的边界现在是：
 
@@ -326,7 +331,7 @@
 - `FP16 / FP32 / INT8 / INT4`
 - `COMMON / X86 / ARM32 / ARM64 / CUDA / ASCEND`
 
-预留了方向，当前真正落地的主链路是 `Common` baseline，`X86` 作为宿主优先 backend，未来再逐步补平台特化实现。
+预留了方向，当前真正落地的主链路是 `Common` baseline、`X86` 宿主优先 backend 和 `CUDA` backend。`ARM32 / ARM64` 当前没有直接注册 kernel，但可以依赖 `COMMON` fallback 的通用 CPU 实现。
 
 ---
 
@@ -361,7 +366,7 @@
 当前已经具备：
 
 - `Conv2dOp`
-- 当前 `Conv2D` 仍主要走 `Common` kernel
+- `Common / X86 / CUDA` 的 `FP16 / FP32` kernel 注册
 - `Add / Mul / ReLU / MatMul / Gemm` 已经补上第一批 `X86 AVX2` 特化实现
 - 静态图注册和运行时 lowering
 
@@ -377,6 +382,15 @@
 - `src/kernel/common/relu.cc`
 
 `ReLU` 已接入统一的静态图构建和 runtime lowering 流程。
+
+### 7.4 融合算子
+
+当前已经有两个落在静态图阶段的融合目标：
+
+- `SiLU`：由 `Sigmoid + Mul` 模式重写而来，Common/X86/CUDA 均支持 `FP16 / FP32`
+- `YoloDecode`：由 YOLOv5 head 中 `Reshape -> Transpose -> Sigmoid -> Split -> Add/Mul/Pow/Concat -> Reshape` 子图融合而来，Common/CUDA 支持 `FP16 / FP32`，x86 可走 Common fallback
+
+这两个融合都发生在 `StaticGraph::ApplyPasses()`，lowering 后 `RuntimeGraph` 只看到已经绑定好的 fused kernel。
 
 ---
 
@@ -426,9 +440,12 @@
 - `StaticGraph` 构图
 - `GraphLowering`
 - `RuntimeGraph` 执行
+- `StaticGraph` pass 与 use-def 更新
 - `Conv2D -> ReLU -> FC`
 - `Gemm -> Sigmoid`
 - `Reshape`
+- `SiLU` 与 `YoloDecode` 融合算子
+- CUDA kernel 的 `FP16 / FP32` 单算子正确性
 
 这说明现在不只是“单算子能跑”，而是新的两阶段图架构已经有回归保护。
 
@@ -443,13 +460,11 @@
 3. `KernelDispatcher`
 4. 统一 `Op` 抽象
 5. `StaticGraph -> GraphLowering -> RuntimeGraph` 主链路
-6. 最小可用的 `FC`
-7. 最小可用的 `Gemm`
-8. 最小可用的 `Sigmoid`
-9. 最小可用的 `Reshape`
-10. 最小可用的 `Conv2D -> ReLU -> FC` 与 `Gemm -> Sigmoid` 子图执行链路
-11. 自定义模型格式与权重映射加载机制
-12. 一组围绕新图架构的单元测试
+6. `Common / X86 / CUDA` 的 `FP16 / FP32` 常用算子注册链路
+7. `SiLU` 与 `YoloDecode` 静态图融合
+8. YOLOv5 `.fth` 模型加载、图片推理、绘框输出和 benchmark demo
+9. 自定义模型格式与权重映射加载机制
+10. 一组围绕新图架构、融合 pass 和 CUDA kernel 的单元测试
 
 也就是说，项目已经从“推理引擎底座原型”推进到了“有明确图分层的执行原型”。
 
@@ -462,8 +477,8 @@
 ### 11.1 CV 模型支持
 
 - `Conv2D` 还很初级
-- 常见 CV 算子不完整
-- layout、padding、group、pooling 等能力不足
+- 常见 CV 算子还需要继续扩展到更多 ONNX 模式
+- layout、padding、group、dynamic shape 等能力仍然不足
 
 ### 11.2 大模型支持
 
@@ -473,42 +488,38 @@
 
 ### 11.3 数据精度支持
 
-- 类型枚举有了，但计算路径仍然几乎只有 `FP32`
+- `FP16 / FP32` 主路径已经覆盖常见算子，但 `INT8 / INT4` 量化路径还没有真正落地
 
 ### 11.4 图优化
 
-- `StaticGraph::ApplyPasses()` 仍然是空壳
-- 没有常量折叠、死节点删除、融合、内存规划
+- 已有死节点删除与两个融合 pass，但还没有常量折叠、通用模式融合、内存规划
 
 ### 11.5 多后端支持
 
-- `CUDA` 仍然只有雏形代码
-- 缺少设备上下文、显存管理、stream 抽象
+- CUDA kernel 已经按算子拆分并接入 dispatcher
+- 仍缺少完整设备上下文、allocator、workspace、multistream/event 依赖调度
 
 ---
 
 ## 12. 建议的后续演进顺序
 
-### 第一阶段：补强静态图优化层
+### 第一阶段：继续优化高频算子本体
 
-- 实现 `StaticGraph::ApplyPasses()`
-- 引入 pass 基类与 pass manager
-- 先做常量折叠、死节点删除、简单融合
+- 继续优化 `CUDA Conv2D / MatMul / Gemm / Softmax`
+- 继续补 `x86` AVX/AVX2 高频 kernel
+- 保持 YOLOv5 demo 与 benchmark 作为端到端回归
 
-### 第二阶段：继续补 CPU 基础算子
+### 第二阶段：补强静态图优化层
 
-- `MatMul/Gemm`
-- `Sigmoid`
-- `Pooling`
-- `Reshape`
-- `Concat / Split`
+- 扩展现有 pass manager
+- 补常量折叠、通用子图融合、融合合法性检查
+- 把 fusion pass 的收益纳入 benchmark 回归
 
 ### 第三阶段：补多精度与多后端
 
-- `FP16`
 - `INT8`
 - `INT4`
-- `CUDA` runtime 与 kernel
+- CUDA allocator / workspace / stream-event runtime
 
 ### 第四阶段：转向模型生态与大模型能力
 
@@ -534,5 +545,6 @@
 而下一步最应该优先补强的是：
 
 - `StaticGraph` 优化框架
-- CPU 基础算子集
-- 多精度与 CUDA 的抽象边界
+- 更高性能的 `Conv2D / MatMul / Gemm` kernel
+- CUDA 显存/stream/event 抽象与多 stream DAG 调度
+- `INT8 / INT4` 量化路径

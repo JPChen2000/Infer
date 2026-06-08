@@ -1,0 +1,99 @@
+#include "src/kernel/concat.h"
+
+#include <memory>
+#include <vector>
+
+#include "core/kernel.h"
+#include "src/kernel/cuda/kernel_io.cuh"
+#include "src/operator/params.h"
+#include "util/timer.h"
+
+namespace feather {
+namespace kernel {
+
+namespace {
+
+bool g_cuda_concat_kernels_registered = []() {
+    auto& dispatcher = KernelDispatcher::instance();
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::FP32, "Concat",
+                              []() { return std::make_unique<ConcatKernel<DeviceType::CUDA, DataType::FP32>>(); });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::FP16, "Concat",
+                              []() { return std::make_unique<ConcatKernel<DeviceType::CUDA, DataType::FP16>>(); });
+    return true;
+}();
+
+template <typename T>
+__global__ void ConcatCopyKernelCuda(const T* input, T* out, int64_t total, int64_t input_axis, int64_t inner,
+                                     int64_t out_axis, int64_t axis_offset) {
+    const int64_t linear = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (linear >= total) {
+        return;
+    }
+    const int64_t inner_idx = linear % inner;
+    const int64_t axis_idx = (linear / inner) % input_axis;
+    const int64_t outer_idx = linear / (input_axis * inner);
+    const int64_t output_idx = (outer_idx * out_axis + axis_offset + axis_idx) * inner + inner_idx;
+    out[output_idx] = input[linear];
+}
+
+template <DataType dtype>
+int RunConcat(feather::operators::ConcatParam* param, const char* timer_name) {
+    AutoTimer timer(timer_name);
+    using T = cuda_detail::StorageT<dtype>;
+    if (param == nullptr || param->out == nullptr || param->inputs.size() < 2) {
+        return -1;
+    }
+    const auto& out_dims = param->out->dims().data();
+    int axis = param->axis < 0 ? param->axis + static_cast<int>(out_dims.size()) : param->axis;
+    if (axis < 0 || axis >= static_cast<int>(out_dims.size())) {
+        return -1;
+    }
+    std::vector<cuda_detail::DeviceBuffer<T>> inputs(param->inputs.size());
+    for (size_t i = 0; i < param->inputs.size(); ++i) {
+        if (param->inputs[i] == nullptr || cuda_detail::CopyTensorToDevice(param->inputs[i].get(), &inputs[i]) != 0) {
+            return -1;
+        }
+    }
+    const int64_t outer = cuda_detail::ComputeProduct(out_dims, 0, static_cast<size_t>(axis));
+    const int64_t inner = cuda_detail::ComputeProduct(out_dims, static_cast<size_t>(axis) + 1, out_dims.size());
+    const int64_t out_axis = out_dims[static_cast<size_t>(axis)];
+    cuda_detail::DeviceBuffer<T> out;
+    if (cuda_detail::AllocateTensorOnDevice(param->out.get(), &out) != 0) {
+        return -1;
+    }
+    param->out->set_data_type(dtype);
+    int64_t axis_offset = 0;
+    for (size_t i = 0; i < param->inputs.size(); ++i) {
+        const auto& input_tensor = param->inputs[i];
+        const int64_t input_axis = input_tensor->dims()[axis];
+        const int64_t copy_count = input_axis * inner;
+        const int64_t total = outer * copy_count;
+        if (total > 0) {
+            ConcatCopyKernelCuda<T><<<static_cast<int>(cuda_detail::DivUp(total, cuda_detail::kCudaThreads)),
+                                      cuda_detail::kCudaThreads, 0, cuda_detail::InferenceStream()>>>(
+                inputs[i].get(), out.get(), total, input_axis, inner, out_axis, axis_offset);
+            if (cuda_detail::CudaCheck(cudaGetLastError()) != 0) {
+                return -1;
+            }
+        }
+        axis_offset += input_axis;
+    }
+    return cuda_detail::CopyDeviceToTensor(&out, param->out.get());
+}
+
+}  // namespace
+
+template <>
+int32_t ConcatKernel<DeviceType::CUDA, DataType::FP32>::compute() {
+    return RunConcat<DataType::FP32>(static_cast<feather::operators::ConcatParam*>(param_), "CUDA::Concat::FP32");
+}
+
+template <>
+int32_t ConcatKernel<DeviceType::CUDA, DataType::FP16>::compute() {
+    return RunConcat<DataType::FP16>(static_cast<feather::operators::ConcatParam*>(param_), "CUDA::Concat::FP16");
+}
+
+void EnsureCudaConcatKernelsRegistered() { (void)g_cuda_concat_kernels_registered; }
+
+}  // namespace kernel
+}  // namespace feather

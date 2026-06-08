@@ -52,10 +52,9 @@
 
 当前最缺的是：
 
-- 更完整的 `Common` 基础算子覆盖
-- 真正的 `x86 AVX` 特化 kernel
-- 更真实的多精度抽象
-- CUDA backend 的对齐式接入方式
+- 更高性能的 `Conv2D / MatMul / Gemm` kernel
+- 更真实的多精度与量化抽象
+- CUDA 显存、stream/event 与 DAG 调度抽象
 
 ### 2.3 每一阶段都必须有可运行验收模型
 
@@ -81,6 +80,10 @@
 - 算子构建通过 `OperatorRegistry` 完成，不走中央 `if/else`
 - kernel 绑定发生在静态图构建阶段
 - `RuntimeGraph` 只保存 lowered runtime node 并执行
+- `Common / X86 / CUDA` 已经按统一注册表接入 `FP16 / FP32` 常用算子
+- `KernelDispatcher` 会记录 kernel 的实际绑定 backend，`RuntimeGraph` 可识别 CUDA 请求退化到 `COMMON/X86` 的节点
+- CUDA 图执行到 CPU fallback 节点时，RuntimeGraph 会在节点边界统一处理必要的 D2H/H2D cache 同步
+- `SigmoidMulFusionPass` 与 `YoloDecodeFusionPass` 已经在静态图阶段落地
 
 这部分是后面所有工作的地基，不能再回退。
 
@@ -88,11 +91,11 @@
 
 现在最应该补的是：
 
-- `Common` baseline 算子继续补齐
-- `x86` 目录里逐步补 `AVX` 加速版本
-- 统一 backend 查表绑定逻辑在更多算子上收口
-- 数值正确性与图级测试
-- `yolov5_benchmark_demo` 作为 x86 CPU 性能回归基线
+- 针对 YOLOv5 当前瓶颈继续优化 `Conv2D`
+- 给 `CUDA` 增加显存 allocator、workspace、stream/event 依赖管理
+- 继续做 CUDA 算子本体优化，fusion pass 后续统一规划，不作为当前主要提速手段
+- 继续补 `x86` 目录里的高频 AVX 加速版本
+- 保持数值正确性、图级测试、demo/benchmark 闭环
 
 ### 4.1 现阶段 benchmark 口径
 
@@ -105,12 +108,11 @@
 
 ### P2：中期扩展
 
-- `FP16`
 - `INT8`
 - `INT4`
-- CUDA runtime
-- CUDA kernels
-- 外部模型导入
+- CUDA multistream runtime
+- CUDA memory planning
+- 更完整的外部模型导入
 
 ### P3：中长期目标
 
@@ -127,20 +129,20 @@
 
 如果只看“现在立刻开始做什么”，最应该聚焦的是：
 
-### 目标：把 `Common -> X86/CUDA` 这条后端演进路径彻底搭实
+### 目标：把 `Common -> X86/CUDA` 这条后端演进路径从“能跑”推进到“可优化”
 
 原因很直接：
 
-- 当前 Host kernel 已经支持“目标 backend 优先、`COMMON` 兜底”
-- 这给 `ARM` 运行通用 kernel、`x86` 运行 AVX kernel、未来 `CUDA` 运行 GPU kernel 留出了统一接入点
+- 当前 Host/CUDA kernel 已经支持“目标 backend 优先、`COMMON` 兜底”
+- 这给 `ARM` 运行通用 kernel、`x86` 运行 AVX kernel、`CUDA` 运行 GPU kernel 留出了统一接入点
 - 如果现在还把通用实现继续塞进 `x86`，后面 backend 扩展会越来越乱
 
 所以当前最优先的工程动作应该是：
 
-1. 继续补齐 `Common` 常见算子，保证它是可运行的通用基线
+1. 对 YOLOv5 实测热点继续优化 `Conv2D`
 2. 逐步把性能敏感算子迁移到 `src/kernel/x86/` 下实现 `AVX` 特化
-3. 保持 `Op` 侧只做查表绑定，不掺入 backend 细节
-4. 等 `Common + X86` 路线稳定后，再按同样模式接入 `CUDA`
+3. 给 `CUDA` 补显存管理、workspace、event 依赖和多 stream 调度
+4. 保持 `Op` 侧只做查表绑定，不掺入 backend 细节
 
 ---
 
@@ -157,14 +159,15 @@
 1. 新增 `src/kernel/common/` 存放通用 CPU kernel
 2. Host 侧通过本机设备信息选择优先 backend
 3. `KernelDispatcher` 支持“精确 backend 优先，`COMMON` 兜底”
-4. 大部分 `Op` 已改成通过统一 helper 完成 host kernel 绑定
+4. 大部分 `Op` 已改成通过统一 helper 完成 kernel 绑定
+5. CUDA kernel 已按算子文件拆分并注册到 dispatcher
 
 ### 接下来需要完成的内容
 
-1. 把剩余通用实现都收口到 `Common`
-2. 清理仍然带有 `x86` 语义的旧命名和日志
-3. 在 `src/kernel/x86/` 下逐步增加 AVX 实现
-4. 给每个高频算子补 backend 选择与正确性测试
+1. 清理仍然带有 `x86` 语义的旧命名和日志
+2. 在 `src/kernel/x86/` 下逐步增加 AVX 实现
+3. 给每个高频算子补 backend 选择与正确性测试
+4. 建立 CUDA benchmark 与 profile 口径，避免 profile 同步误读
 
 ### 阶段验收标准
 
@@ -242,24 +245,39 @@
 
 ---
 
-## 阶段四：接入 CUDA backend
+## 阶段四：优化 CUDA backend
 
 ### 目标
 
-用和 Host 侧一致的注册/绑定模式接入 GPU backend。
+在已接入的 CUDA kernel 之上补齐真正可扩展的 GPU runtime 能力。
 
 ### 推荐顺序
 
-1. `CUDA Conv2D`
-2. `CUDA MatMul/Gemm`
-3. `CUDA 内存与 tensor 搬运`
+1. `CUDA Conv2D` 性能优化
+2. `CUDA MatMul/Gemm` 性能优化
+3. `CUDA` 显存 allocator、workspace 与 tensor 生命周期
+4. 多 stream/event 依赖调度
 
 ### 需要补齐的能力
 
 - GPU tensor / allocator 抽象
-- CUDA kernel 注册
-- Host -> CUDA lowering 与数据搬运
+- CUDA event dependency
+- device-resident Tensor 设计
+- Host -> CUDA lowering 与数据搬运；当前已支持 CUDA 节点退化到 CPU 节点时的 D2H/H2D 边界同步
 - 同样遵循“目标 backend 优先、`COMMON` 兜底”的统一分发思想
+
+### 当前已完成的 CUDA 算子本体优化
+
+- `Conv2D` 增加 `1x1 pointwise` 与 `depthwise/grouped depthwise` CUDA 快路径
+- `MatMul / Gemm / FC` 切换到 `16x16 shared-memory tiled` CUDA kernel
+- CUDA 输出 tensor 在设备分配阶段统一标记 dtype，避免 fallback 同步和 demo 输出读取时依赖 UNKNOWN dtype
+
+### 仍有优化空间
+
+- `Conv2D` 还需要继续补 `3x3 stride1/stride2` 专用路径、im2col+GEMM 或 cuDNN/cuBLAS 接入策略
+- `FP16 MatMul/Gemm/Conv2D` 目前仍以 FP32 accumulator 的普通 CUDA kernel 为主，还没有 Tensor Core / WMMA 路径
+- `Softmax` 仍是一行一个线程的串行 axis 规约，长 axis 下需要 block-level reduction
+- `Resize / Pool / Transpose / Slice` 仍有访存合并、向量化 load/store、shared-memory tile 的优化空间
 
 ### 阶段验收标准
 

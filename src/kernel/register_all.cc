@@ -14,14 +14,20 @@
 #include "src/kernel/reshape.h"
 #include "src/kernel/relu.h"
 #include "src/kernel/resize.h"
+#include "src/kernel/silu.h"
 #include "src/kernel/sigmoid.h"
 #include "src/kernel/slice.h"
 #include "src/kernel/softmax.h"
 #include "src/kernel/split.h"
 #include "src/kernel/transpose.h"
+#include "src/kernel/yolo_decode.h"
 
 namespace feather {
 namespace kernel {
+
+#ifdef FEATHER_WITH_CUDA
+void EnsureCudaKernelsRegistered();
+#endif
 
 void EnsureBuiltinKernelsRegistered() {
     EnsureAddKernelsRegistered();
@@ -38,11 +44,16 @@ void EnsureBuiltinKernelsRegistered() {
     EnsureReshapeKernelsRegistered();
     EnsureReluKernelsRegistered();
     EnsureResizeKernelsRegistered();
+    EnsureSiluKernelsRegistered();
     EnsureSigmoidKernelsRegistered();
     EnsureSliceKernelsRegistered();
     EnsureSoftmaxKernelsRegistered();
     EnsureSplitKernelsRegistered();
     EnsureTransposeKernelsRegistered();
+    EnsureYoloDecodeKernelsRegistered();
+#ifdef FEATHER_WITH_CUDA
+    EnsureCudaKernelsRegistered();
+#endif
 }
 
 }  // namespace kernel

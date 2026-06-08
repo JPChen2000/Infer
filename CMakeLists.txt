@@ -3,9 +3,13 @@ project(Infer CXX)
 
 option(BUILD_UNITTEST "BUILD UNITTEST" OFF)
 option(FEATHER_DEBUG "Enable Feather debug logging and operator timers" OFF)
+option(FEATHER_ENABLE_CUDA "Enable CUDA kernels when a CUDA compiler is available" ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_EXTENSIONS OFF)
 
 set(CMAKE_BUILD_TYPE "Release")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
@@ -14,6 +18,19 @@ List(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(util)
 
 find_package(Threads REQUIRED)
+
+set(FEATHER_WITH_CUDA OFF)
+if (FEATHER_ENABLE_CUDA)
+    include(CheckLanguage)
+    check_language(CUDA)
+    if (CMAKE_CUDA_COMPILER)
+        enable_language(CUDA)
+        find_package(CUDAToolkit REQUIRED)
+        set(FEATHER_WITH_CUDA ON)
+    else()
+        message(WARNING "CUDA compiler not found, CUDA kernels will not be built")
+    endif()
+endif()
 
 Normalize(BUILD_UNITTEST)
 
@@ -42,6 +59,8 @@ set(SRC "src/core/memory.cc"
     "src/core/dead_node_elimination_pass.cc"
     "src/core/dim.cc"
     "src/core/graph_pass.cc"
+    "src/core/sigmoid_mul_fusion_pass.cc"
+    "src/core/yolo_decode_fusion_pass.cc"
     "src/core/tensor.cc"
     "src/core/graph.cc"
     "src/core/graph_lowering.cc"
@@ -64,11 +83,13 @@ set(SRC "src/core/memory.cc"
     "src/operator/relu_op.cc"
     "src/operator/reshape_op.cc"
     "src/operator/resize_op.cc"
+    "src/operator/silu_op.cc"
     "src/operator/slice_op.cc"
     "src/operator/softmax_op.cc"
     "src/operator/sigmoid_op.cc"
     "src/operator/split_op.cc"
     "src/operator/transpose_op.cc"
+    "src/operator/yolo_decode_op.cc"
     "src/kernel/common/add.cc"
     "src/kernel/common/concat.cc"
     "src/kernel/common/conv2d.cc"
@@ -83,12 +104,14 @@ set(SRC "src/core/memory.cc"
     "src/kernel/register_all.cc"
     "src/kernel/common/reshape.cc"
     "src/kernel/common/relu.cc"
+    "src/kernel/common/silu.cc"
     "src/kernel/common/slice.cc"
     "src/kernel/common/softmax.cc"
     "src/kernel/common/sigmoid.cc"
     "src/kernel/common/split.cc"
     "src/kernel/common/transpose.cc"
     "src/kernel/common/resize.cc"
+    "src/kernel/common/yolo_decode.cc"
     "src/kernel/x86/add.cc"
     "src/kernel/x86/concat.cc"
     "src/kernel/x86/conv2d.cc"
@@ -107,6 +130,7 @@ set(SRC "src/core/memory.cc"
     "src/kernel/x86/relu.cc"
     "src/kernel/x86/resize.cc"
     "src/kernel/x86/reshape.cc"
+    "src/kernel/x86/silu.cc"
     "src/kernel/x86/sigmoid.cc"
     "src/kernel/x86/slice.cc"
     "src/kernel/x86/split.cc"
@@ -116,11 +140,48 @@ set(SRC "src/core/memory.cc"
     "src/demo/yolov5_postprocess.cc"
     "src/demo/yolov5_runner.cc")
 
+set(CUDA_SRC
+    "src/kernel/cuda/add.cu"
+    "src/kernel/cuda/concat.cu"
+    "src/kernel/cuda/conv2d.cu"
+    "src/kernel/cuda/fc.cu"
+    "src/kernel/cuda/flatten.cu"
+    "src/kernel/cuda/gemm.cu"
+    "src/kernel/cuda/identity.cu"
+    "src/kernel/cuda/matmul.cu"
+    "src/kernel/cuda/mul.cu"
+    "src/kernel/cuda/pool.cu"
+    "src/kernel/cuda/pow.cu"
+    "src/kernel/cuda/register_all.cu"
+    "src/kernel/cuda/relu.cu"
+    "src/kernel/cuda/reshape.cu"
+    "src/kernel/cuda/resize.cu"
+    "src/kernel/cuda/runtime.cu"
+    "src/kernel/cuda/silu.cu"
+    "src/kernel/cuda/sigmoid.cu"
+    "src/kernel/cuda/slice.cu"
+    "src/kernel/cuda/softmax.cu"
+    "src/kernel/cuda/split.cu"
+    "src/kernel/cuda/transpose.cu"
+    "src/kernel/cuda/yolo_decode.cu")
+
+if (FEATHER_WITH_CUDA)
+    list(APPEND SRC ${CUDA_SRC})
+endif()
+
 add_library(infer ${SRC})
 target_link_libraries(infer
     PUBLIC
     Threads::Threads
     )
+if (FEATHER_WITH_CUDA)
+    target_compile_definitions(infer PUBLIC FEATHER_WITH_CUDA)
+    target_link_libraries(infer PUBLIC CUDA::cudart)
+    set_target_properties(infer PROPERTIES
+        CUDA_STANDARD 17
+        CUDA_STANDARD_REQUIRED ON
+        CUDA_EXTENSIONS OFF)
+endif()
 
 add_executable(yolov5_demo demo/yolov5_infer_demo.cc)
 add_executable(yolov5_benchmark_demo demo/yolov5_benchmark_demo.cc)
@@ -153,6 +214,7 @@ set_source_files_properties(
     src/kernel/x86/relu.cc
     src/kernel/x86/resize.cc
     src/kernel/x86/reshape.cc
+    src/kernel/x86/silu.cc
     src/kernel/x86/sigmoid.cc
     src/kernel/x86/slice.cc
     src/kernel/x86/split.cc
@@ -198,4 +260,5 @@ endif()
 message("\n")
 message("unittest: " ${BUILD_UNITTEST})
 message("debug: " ${FEATHER_DEBUG})
+message("cuda: " ${FEATHER_WITH_CUDA})
 message("\n")

@@ -1,4 +1,5 @@
 #include <cstdlib>
+#include <algorithm>
 #include <chrono>
 #include <iomanip>
 #include <iostream>
@@ -12,7 +13,26 @@ namespace {
 
 void PrintUsage() {
     std::cerr << "usage: yolov5_demo --model <model.fth> --image <image> "
-                 "[--backend common|x86] [--conf-thresh 0.25] [--iou-thresh 0.45]\n";
+                 "[--backend host|common|x86|cuda] [--conf-thresh 0.25] [--iou-thresh 0.45] [--profile]\n";
+}
+
+void PrintRuntimeProfile(const feather::demo::Yolov5Runner& runner, size_t limit) {
+    auto summaries = runner.RuntimeProfileSummaries();
+    std::sort(summaries.begin(), summaries.end(),
+              [](const feather::RuntimeProfileSummary& lhs, const feather::RuntimeProfileSummary& rhs) {
+                  return lhs.total_ms > rhs.total_ms;
+              });
+    const size_t count = std::min(limit, summaries.size());
+    std::cout << "[profile] top_runtime_nodes=" << count << '\n';
+    for (size_t i = 0; i < count; ++i) {
+        const auto& item = summaries[i];
+        std::cout << "[profile] #" << (i + 1)
+                  << " node=" << item.node_name
+                  << " op=" << item.op_type
+                  << " calls=" << item.call_count
+                  << " total_ms=" << item.total_ms
+                  << " avg_ms=" << item.avg_ms << '\n';
+    }
 }
 
 }  // namespace
@@ -24,6 +44,7 @@ int main(int argc, char** argv) {
     feather::demo::Yolov5Backend backend = feather::demo::Yolov5Backend::kHost;
     float conf_thresh = 0.25f;
     float iou_thresh = 0.45f;
+    bool profile = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -43,6 +64,8 @@ int main(int argc, char** argv) {
             conf_thresh = std::strtof(argv[++i], nullptr);
         } else if (arg == "--iou-thresh" && i + 1 < argc) {
             iou_thresh = std::strtof(argv[++i], nullptr);
+        } else if (arg == "--profile") {
+            profile = true;
         } else {
             PrintUsage();
             return 1;
@@ -59,6 +82,7 @@ int main(int argc, char** argv) {
         std::cerr << "failed to load model: " << model_path << '\n';
         return 1;
     }
+    runner.SetRuntimeProfilingEnabled(profile);
     std::cout << "[framework] " << runner.DescribeLastBuild() << '\n';
 
     std::vector<feather::demo::Detection> detections;
@@ -67,6 +91,9 @@ int main(int argc, char** argv) {
         return 1;
     }
     std::cout << "[framework] " << runner.DescribeLastRun() << '\n';
+    if (profile) {
+        PrintRuntimeProfile(runner, 20);
+    }
 
     std::cout << "detections: " << detections.size() << '\n';
     std::cout << std::fixed << std::setprecision(4);

@@ -10,8 +10,38 @@
 
 #include "util/threading.h"
 #include "util/timer.h"
+#include "util/types.h"
+#ifdef FEATHER_WITH_CUDA
+#include "src/kernel/cuda/runtime.h"
+#endif
 
 namespace feather {
+
+namespace {
+
+int32_t SynchronizeRuntimeNodeForProfiling(const RuntimeNode& node) {
+#ifdef FEATHER_WITH_CUDA
+    if (node.kernel_device == DeviceType::CUDA) {
+        return kernel::cuda_detail::SynchronizeInferenceStream();
+    }
+#endif
+    (void)node;
+    return 0;
+}
+
+size_t TensorByteSizeForNode(const Tensor& tensor, const RuntimeNode& node) {
+    auto dtype = tensor.data_type();
+    if (dtype == DataType::UNKNOWN && node.kernel != nullptr) {
+        dtype = node.kernel->data_type();
+    }
+    const auto element_bytes = DataTypeBytes(dtype);
+    if (element_bytes == 0) {
+        return tensor.memory_size();
+    }
+    return static_cast<size_t>(std::max<int64_t>(0, tensor.numel())) * element_bytes;
+}
+
+}  // namespace
 
 RuntimeGraph::RuntimeGraph()
     : thread_mode_(RuntimeThreadMode::kParallelGraph),
@@ -80,6 +110,7 @@ void RuntimeGraph::RecordNodeProfile(const std::string& node_name, const std::st
         return;
     }
 
+    std::lock_guard<std::mutex> lock(profile_mutex_);
     auto it = std::find_if(profile_summaries_.begin(), profile_summaries_.end(),
                            [&](const RuntimeProfileSummary& summary) { return summary.node_name == node_name; });
     if (it == profile_summaries_.end()) {
@@ -200,6 +231,63 @@ void RuntimeGraph::ResetPendingDependencies() {
     }
 }
 
+int32_t RuntimeGraph::PrepareNodeForRun(const RuntimeNode& node) {
+#ifdef FEATHER_WITH_CUDA
+    if (node.kernel_device == DeviceType::CUDA) {
+        return 0;
+    }
+    for (const auto& input_name : node.inputs) {
+        auto tensor = GetTensor(input_name);
+        if (tensor == nullptr || !tensor->IsInitialized()) {
+            continue;
+        }
+        const size_t bytes = TensorByteSizeForNode(*tensor, node);
+        if (kernel::cuda_detail::SyncTensorToHostIfNeeded(tensor.get(), bytes, tensor->raw_data()) != 0) {
+            return -1;
+        }
+    }
+#else
+    (void)node;
+#endif
+    return 0;
+}
+
+int32_t RuntimeGraph::FinalizeNodeRun(const RuntimeNode& node, int32_t status) {
+#ifdef FEATHER_WITH_CUDA
+    if (status != 0 || node.kernel_device == DeviceType::CUDA) {
+        return status;
+    }
+    for (const auto& output_name : node.outputs) {
+        auto tensor = GetTensor(output_name);
+        if (tensor != nullptr) {
+            kernel::cuda_detail::InvalidateTensorDevice(tensor.get());
+        }
+    }
+#else
+    (void)node;
+#endif
+    return status;
+}
+
+int32_t RuntimeGraph::RunNode(size_t index) {
+    if (index >= nodes_.size()) {
+        return -1;
+    }
+    auto& node = nodes_[index];
+    const auto begin = std::chrono::steady_clock::now();
+    auto status = PrepareNodeForRun(node);
+    if (status == 0) {
+        status = node.Run();
+    }
+    status = FinalizeNodeRun(node, status);
+    if (profiling_enabled_ && status == 0) {
+        status = SynchronizeRuntimeNodeForProfiling(node);
+    }
+    const auto end = std::chrono::steady_clock::now();
+    RecordNodeProfile(node.name, node.op_type, std::chrono::duration<double, std::milli>(end - begin).count());
+    return status;
+}
+
 int32_t RuntimeGraph::RunSerial() {
     if (nodes_.size() < 2 || worker_count_ == 1 || thread_pool_ == nullptr) {
         std::queue<size_t> ready;
@@ -213,11 +301,7 @@ int32_t RuntimeGraph::RunSerial() {
         while (!ready.empty()) {
             const size_t index = ready.front();
             ready.pop();
-            const auto begin = std::chrono::steady_clock::now();
-            auto status = nodes_[index].Run();
-            const auto end = std::chrono::steady_clock::now();
-            RecordNodeProfile(nodes_[index].name, nodes_[index].op_type,
-                              std::chrono::duration<double, std::milli>(end - begin).count());
+            const auto status = RunNode(index);
             if (status != 0) {
                 return status;
             }
@@ -255,11 +339,7 @@ int32_t RuntimeGraph::RunSerial() {
     }
 
     auto run_node = [&](int /*tid*/, size_t index) -> int {
-        const auto begin = std::chrono::steady_clock::now();
-        const auto status = nodes_[index].Run();
-        const auto end = std::chrono::steady_clock::now();
-        RecordNodeProfile(nodes_[index].name, nodes_[index].op_type,
-                          std::chrono::duration<double, std::milli>(end - begin).count());
+        const auto status = RunNode(index);
         {
             std::lock_guard<std::mutex> lock(mutex);
             --in_flight;

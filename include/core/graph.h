@@ -33,6 +33,7 @@ struct RuntimeNode {
     std::vector<std::string> outputs;
     std::shared_ptr<OpBase> owner;
     std::unique_ptr<KernelBase> kernel;
+    DeviceType kernel_device{DeviceType::UNKNOWN};
     std::vector<size_t> predecessors;
     std::vector<size_t> successors;
     size_t pending_dependencies{};
@@ -72,6 +73,9 @@ class RuntimeGraph {
     int32_t BuildDependencies();
     void ResetPendingDependencies();
     int32_t RunSerial();
+    int32_t RunNode(size_t index);
+    int32_t PrepareNodeForRun(const RuntimeNode& node);
+    int32_t FinalizeNodeRun(const RuntimeNode& node, int32_t status);
 
     std::unordered_map<std::string, std::shared_ptr<Tensor>> tensors_;
     std::vector<RuntimeNode> nodes_;

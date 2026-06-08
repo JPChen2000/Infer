@@ -48,6 +48,8 @@ class StaticGraph {
     std::vector<std::string> GetUsers(const std::string& value_name) const;
     bool RemoveNode(const std::string& node_name);
     bool ReplaceInputValue(const std::string& node_name, const std::string& from, const std::string& to);
+    bool ReplaceNodeOp(const std::string& node_name, const std::string& op_type,
+                       const std::vector<std::string>& inputs);
 
     const std::vector<std::shared_ptr<OpBase>>& operators() const { return operators_; }
     const std::unordered_map<std::string, std::shared_ptr<Tensor>>& tensors() const { return tensors_; }
