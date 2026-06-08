@@ -6,8 +6,10 @@
 #include "core/kernel.h"
 #include "core/operator.h"
 #include "core/tensor.h"
+#include "src/kernel/gemm.h"
 #include "src/operator/params.h"
 #include "src/operator/gemm_op.h"
+#include "util/fp16.h"
 
 using feather::KernelDispatcher;
 using feather::OpBase;
@@ -49,5 +51,81 @@ TEST(gemm_op_test, GemmRunsOnX86) {
     };
     for (size_t i = 0; i < expected.size(); ++i) {
         EXPECT_FLOAT_EQ(out->data<float>()[i], expected[i]);
+    }
+}
+
+TEST(gemm_op_test, CommonFp16KernelRunsCorrectly) {
+    auto lhs = std::make_shared<Tensor>();
+    lhs->Assign<uint16_t>({feather::FloatToHalf(1.0f), feather::FloatToHalf(2.0f), feather::FloatToHalf(3.0f),
+                           feather::FloatToHalf(4.0f), feather::FloatToHalf(5.0f), feather::FloatToHalf(6.0f)},
+                          {2, 3});
+
+    auto rhs = std::make_shared<Tensor>();
+    rhs->Assign<uint16_t>({feather::FloatToHalf(1.0f), feather::FloatToHalf(2.0f), feather::FloatToHalf(3.0f),
+                           feather::FloatToHalf(4.0f), feather::FloatToHalf(5.0f), feather::FloatToHalf(6.0f)},
+                          {3, 2});
+
+    auto bias = std::make_shared<Tensor>();
+    bias->Assign<uint16_t>({feather::FloatToHalf(1.0f), feather::FloatToHalf(1.0f), feather::FloatToHalf(2.0f),
+                            feather::FloatToHalf(2.0f)},
+                           {2, 2});
+
+    auto out = std::make_shared<Tensor>(std::vector<int64_t>{2, 2});
+    out->mutable_data<uint16_t>();
+
+    GemmParam param{};
+    param.a = lhs;
+    param.b = rhs;
+    param.bias = bias;
+    param.out = out;
+
+    auto kernel = KernelDispatcher::instance().create(DeviceType::COMMON, DataType::FP16, "Gemm");
+    ASSERT_NE(kernel, nullptr);
+    auto* common_kernel = dynamic_cast<feather::kernel::GemmKernel<DeviceType::COMMON, DataType::FP16>*>(kernel.get());
+    ASSERT_NE(common_kernel, nullptr);
+
+    kernel->SetParam(&param);
+    ASSERT_EQ(kernel->compute(), 0);
+
+    const std::vector<float> expected = {23.0f, 29.0f, 51.0f, 66.0f};
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[i]), expected[i], 2e-2f);
+    }
+}
+
+TEST(gemm_op_test, X86Fp16KernelIsRegisteredAndRuns) {
+    auto lhs = std::make_shared<Tensor>();
+    lhs->Assign<uint16_t>({feather::FloatToHalf(1.0f), feather::FloatToHalf(2.0f), feather::FloatToHalf(3.0f),
+                           feather::FloatToHalf(4.0f), feather::FloatToHalf(5.0f), feather::FloatToHalf(6.0f)},
+                          {2, 3});
+
+    auto rhs = std::make_shared<Tensor>();
+    rhs->Assign<uint16_t>({feather::FloatToHalf(1.0f), feather::FloatToHalf(2.0f), feather::FloatToHalf(3.0f),
+                           feather::FloatToHalf(4.0f), feather::FloatToHalf(5.0f), feather::FloatToHalf(6.0f)},
+                          {3, 2});
+
+    auto bias = std::make_shared<Tensor>();
+    bias->Assign<uint16_t>({feather::FloatToHalf(1.0f), feather::FloatToHalf(2.0f)}, {2});
+
+    auto out = std::make_shared<Tensor>(std::vector<int64_t>{2, 2});
+    out->mutable_data<uint16_t>();
+
+    GemmParam param{};
+    param.a = lhs;
+    param.b = rhs;
+    param.bias = bias;
+    param.out = out;
+
+    auto kernel = KernelDispatcher::instance().create(DeviceType::X86, DataType::FP16, "Gemm");
+    ASSERT_NE(kernel, nullptr);
+    auto* x86_kernel = dynamic_cast<feather::kernel::GemmKernel<DeviceType::X86, DataType::FP16>*>(kernel.get());
+    ASSERT_NE(x86_kernel, nullptr);
+
+    kernel->SetParam(&param);
+    ASSERT_EQ(kernel->compute(), 0);
+
+    const std::vector<float> expected = {23.0f, 30.0f, 50.0f, 66.0f};
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[i]), expected[i], 2e-2f);
     }
 }

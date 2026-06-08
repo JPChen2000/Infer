@@ -20,12 +20,24 @@
 - 基础模型存储/加载格式
 - 一组已经接入执行主链路的 `Common + FP32/FP16` 常用算子与测试
 - 新的两阶段图执行骨架
+- 独立的 YOLOv5 Google Benchmark 入口与 runtime profiling 汇总
 
 当前阶段不再适合把所有职责都塞进一个运行时类里。项目现在已经明确采用两阶段图架构：
 
 `ModelDesc -> StaticGraph(Op DAG) -> GraphLowering -> RuntimeGraph(Kernel DAG)`
 
 这也是后续做图优化、算子融合、多后端扩展时最稳的主线。
+
+### 2.1 CPU benchmark 入口
+
+仓库里已经有一个独立的 Google Benchmark demo：
+
+- `yolov5_benchmark_demo`
+- 支持 `--model`、`--image`、`--conf-thresh`、`--iou-thresh`
+- 标准 benchmark 参数由 Google Benchmark 接管
+- profiling 打开时会附带 per-op 统计
+
+这条路径是后续 x86 kernel 提速的测量基线，不替代普通推理 demo。
 
 ---
 

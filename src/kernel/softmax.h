@@ -7,6 +7,7 @@
 namespace feather {
 namespace kernel {
 
+void EnsureX86SoftmaxKernelsRegistered();
 void EnsureSoftmaxKernelsRegistered();
 
 template <DeviceType dev, DataType dtype>

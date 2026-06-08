@@ -51,7 +51,10 @@ REGISTER_KERNEL(COMMON, FP32, Identity, IdentityCommonFP32Kernel);
 typedef feather::kernel::IdentityKernel<DeviceType::COMMON, DataType::FP16> IdentityCommonFP16Kernel;
 REGISTER_KERNEL(COMMON, FP16, Identity, IdentityCommonFP16Kernel);
 
-void EnsureIdentityKernelsRegistered() { (void)g_identity_kernels_registered; }
+void EnsureIdentityKernelsRegistered() {
+    (void)g_identity_kernels_registered;
+    EnsureX86IdentityKernelsRegistered();
+}
 
 }  // namespace kernel
 }  // namespace feather

@@ -3,13 +3,17 @@ project(Infer CXX)
 
 option(BUILD_UNITTEST "BUILD UNITTEST" OFF)
 option(FEATHER_DEBUG "Enable Feather debug logging and operator timers" OFF)
-set(CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(CMAKE_BUILD_TYPE "Release")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
 
 List(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(util)
+
+find_package(Threads REQUIRED)
 
 Normalize(BUILD_UNITTEST)
 
@@ -24,11 +28,11 @@ else()
     endif()
     include(${CMAKE_BINARY_DIR}/conan.cmake)
     conan_cmake_run(CONANFILE conanfile.py
-        BASIC_SETUP CMAKE_TARGETS UPDATE 
+        BASIC_SETUP CMAKE_TARGETS UPDATE
         BUILD missing
         PROFILE ${CONAN_PROFILE_PATH}
         SETTINGS build_type=${CMAKE_BUILD_TYPE}
-        OPTIONS 
+        OPTIONS
         BUILD_UNITTEST=${BUILD_UNITTEST})
 endif()
 
@@ -88,23 +92,40 @@ set(SRC "src/core/memory.cc"
     "src/kernel/x86/add.cc"
     "src/kernel/x86/concat.cc"
     "src/kernel/x86/conv2d.cc"
+    "src/kernel/x86/direct_conv_fp32.cc"
+    "src/kernel/x86/fc.cc"
+    "src/kernel/x86/flatten.cc"
     "src/kernel/x86/gemm.cc"
+    "src/kernel/x86/identity.cc"
+    "src/kernel/x86/linear_fp16.cc"
+    "src/kernel/x86/linear_fp32.cc"
     "src/kernel/x86/matmul.cc"
     "src/kernel/x86/mul.cc"
+    "src/kernel/x86/pointwise_conv_fp32.cc"
     "src/kernel/x86/pool.cc"
     "src/kernel/x86/pow.cc"
     "src/kernel/x86/relu.cc"
     "src/kernel/x86/resize.cc"
     "src/kernel/x86/reshape.cc"
     "src/kernel/x86/sigmoid.cc"
+    "src/kernel/x86/slice.cc"
     "src/kernel/x86/split.cc"
+    "src/kernel/x86/softmax.cc"
     "src/kernel/x86/transpose.cc"
     "src/demo/image_io.cc"
     "src/demo/yolov5_postprocess.cc"
     "src/demo/yolov5_runner.cc")
 
 add_library(infer ${SRC})
+target_link_libraries(infer
+    PUBLIC
+    Threads::Threads
+    )
+
 add_executable(yolov5_demo demo/yolov5_infer_demo.cc)
+add_executable(yolov5_benchmark_demo demo/yolov5_benchmark_demo.cc)
+add_executable(x86_conv_benchmark_demo demo/x86_conv_benchmark_demo.cc)
+add_executable(x86_linear_benchmark_demo demo/x86_linear_benchmark_demo.cc)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(infer PUBLIC
@@ -116,21 +137,39 @@ set_source_files_properties(
     src/kernel/x86/add.cc
     src/kernel/x86/concat.cc
     src/kernel/x86/conv2d.cc
+    src/kernel/x86/direct_conv_fp32.cc
+    src/kernel/x86/fc.cc
+    src/kernel/x86/flatten.cc
     src/kernel/x86/gemm.cc
+    src/kernel/x86/identity.cc
+    src/kernel/x86/linear_fp16.cc
+    src/kernel/x86/linear_fp32.cc
     src/kernel/x86/matmul.cc
     src/kernel/x86/mul.cc
+    src/kernel/x86/pointwise_conv_fp32.cc
     src/kernel/x86/pool.cc
     src/kernel/x86/pow.cc
     src/kernel/x86/relu.cc
     src/kernel/x86/resize.cc
     src/kernel/x86/reshape.cc
     src/kernel/x86/sigmoid.cc
+    src/kernel/x86/slice.cc
     src/kernel/x86/split.cc
+    src/kernel/x86/softmax.cc
     src/kernel/x86/transpose.cc
     PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-mf16c")
 target_include_directories(yolov5_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(yolov5_demo infer)
+target_include_directories(yolov5_benchmark_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(yolov5_benchmark_demo infer CONAN_PKG::benchmark)
+target_include_directories(x86_conv_benchmark_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(x86_conv_benchmark_demo infer CONAN_PKG::benchmark)
+target_include_directories(x86_linear_benchmark_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(x86_linear_benchmark_demo infer CONAN_PKG::benchmark)
 message("${CMAKE_CURRENT_SOURCE_DIR}")
 
 if (BUILD_UNITTEST)

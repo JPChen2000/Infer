@@ -7,6 +7,7 @@
 #include "core/kernel.h"
 #include "core/operator.h"
 #include "core/tensor.h"
+#include "src/kernel/softmax.h"
 #include "util/fp16.h"
 #include "src/operator/params.h"
 #include "src/operator/softmax_op.h"
@@ -195,4 +196,88 @@ TEST(softmax_transpose_op_test, TransposeSupportsYolov5HeadLayoutOnX86FP16) {
     for (size_t i = 0; i < expected.size(); ++i) {
         EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[i]), expected[i], 1e-3f);
     }
+}
+
+TEST(softmax_transpose_op_test, CommonFp16SoftmaxKernelRunsCorrectly) {
+    auto input = std::make_shared<Tensor>();
+    input->Assign<uint16_t>({feather::FloatToHalf(1.0f), feather::FloatToHalf(2.0f), feather::FloatToHalf(3.0f),
+                             feather::FloatToHalf(0.0f), feather::FloatToHalf(0.0f), feather::FloatToHalf(0.0f)},
+                            {2, 3});
+
+    auto out = std::make_shared<Tensor>(std::vector<int64_t>{2, 3});
+    out->mutable_data<uint16_t>();
+
+    SoftmaxParam param{};
+    param.input = input;
+    param.out = out;
+    param.axis = 1;
+
+    auto kernel = KernelDispatcher::instance().create(DeviceType::COMMON, DataType::FP16, "Softmax");
+    ASSERT_NE(kernel, nullptr);
+    auto* common_kernel =
+        dynamic_cast<feather::kernel::SoftmaxKernel<DeviceType::COMMON, DataType::FP16>*>(kernel.get());
+    ASSERT_NE(common_kernel, nullptr);
+
+    kernel->SetParam(&param);
+    ASSERT_EQ(kernel->compute(), 0);
+
+    const float e1 = std::exp(1.0f);
+    const float e2 = std::exp(2.0f);
+    const float e3 = std::exp(3.0f);
+    const float sum = e1 + e2 + e3;
+    EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[0]), e1 / sum, 2e-3f);
+    EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[1]), e2 / sum, 2e-3f);
+    EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[2]), e3 / sum, 2e-3f);
+    EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[3]), 1.0f / 3.0f, 2e-3f);
+    EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[4]), 1.0f / 3.0f, 2e-3f);
+    EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[5]), 1.0f / 3.0f, 2e-3f);
+}
+
+TEST(softmax_transpose_op_test, X86Fp32SoftmaxUsesRegisteredKernel) {
+    auto kernel = KernelDispatcher::instance().create(DeviceType::X86, DataType::FP32, "Softmax");
+    ASSERT_NE(kernel, nullptr);
+    auto* x86_kernel = dynamic_cast<feather::kernel::SoftmaxKernel<DeviceType::X86, DataType::FP32>*>(kernel.get());
+    EXPECT_NE(x86_kernel, nullptr);
+}
+
+TEST(softmax_transpose_op_test, X86Fp16SoftmaxUsesRegisteredKernel) {
+    auto kernel = KernelDispatcher::instance().create(DeviceType::X86, DataType::FP16, "Softmax");
+    ASSERT_NE(kernel, nullptr);
+    auto* x86_kernel = dynamic_cast<feather::kernel::SoftmaxKernel<DeviceType::X86, DataType::FP16>*>(kernel.get());
+    EXPECT_NE(x86_kernel, nullptr);
+}
+
+TEST(softmax_transpose_op_test, SoftmaxRunsOnX86FP16) {
+    auto input = std::make_shared<Tensor>();
+    input->Assign<uint16_t>({feather::FloatToHalf(1.0f), feather::FloatToHalf(2.0f), feather::FloatToHalf(3.0f),
+                             feather::FloatToHalf(0.0f), feather::FloatToHalf(0.0f), feather::FloatToHalf(0.0f)},
+                            {2, 3});
+
+    auto out = std::make_shared<Tensor>(std::vector<int64_t>{2, 3});
+    out->mutable_data<uint16_t>();
+
+    SoftmaxParam param{};
+    param.input = input;
+    param.out = out;
+    param.axis = 1;
+
+    std::shared_ptr<OpBase> op = std::make_shared<feather::operators::SoftmaxOp>("softmax_fp16", param);
+    ASSERT_EQ(op->CheckShape(), 0);
+    ASSERT_EQ(op->InferOutputShapes(), 0);
+
+    auto kernel = KernelDispatcher::instance().create(DeviceType::X86, DataType::FP16, "Softmax");
+    ASSERT_NE(kernel, nullptr);
+    op->AttachKernel(std::move(kernel));
+    ASSERT_EQ(op->Run(), 0);
+
+    const float e1 = std::exp(1.0f);
+    const float e2 = std::exp(2.0f);
+    const float e3 = std::exp(3.0f);
+    const float sum = e1 + e2 + e3;
+    EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[0]), e1 / sum, 2e-3f);
+    EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[1]), e2 / sum, 2e-3f);
+    EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[2]), e3 / sum, 2e-3f);
+    EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[3]), 1.0f / 3.0f, 2e-3f);
+    EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[4]), 1.0f / 3.0f, 2e-3f);
+    EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[5]), 1.0f / 3.0f, 2e-3f);
 }

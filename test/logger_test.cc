@@ -7,11 +7,15 @@
 #include "src/kernel/add.h"
 #include "src/kernel/concat.h"
 #include "src/kernel/conv2d.h"
+#include "src/kernel/flatten.h"
+#include "src/kernel/identity.h"
 #include "src/kernel/pool.h"
 #include "src/kernel/pow.h"
 #include "src/kernel/resize.h"
 #include "src/kernel/reshape.h"
 #include "src/kernel/sigmoid.h"
+#include "src/kernel/slice.h"
+#include "src/kernel/softmax.h"
 #include "src/kernel/split.h"
 #include "src/kernel/transpose.h"
 #include "src/operator/add_op.h"
@@ -25,9 +29,11 @@ TEST(logger_test, DebugLoggingFlagMatchesBuildMacro) {
 #endif
 }
 
-TEST(logger_test, KernelSelectionFallsBackToCommonWhenX86KernelMissing) {
-    auto kernel = feather::CreateKernelForTensor(feather::DeviceType::X86, "Softmax", {}, feather::DataType::FP32);
+TEST(logger_test, KernelSelectionFallsBackToCommonOnArmWhenOnlyCommonKernelExists) {
+    auto kernel = feather::CreateKernelForTensor(feather::DeviceType::ARM64, "Softmax", {}, feather::DataType::FP32);
     ASSERT_NE(kernel, nullptr);
+    EXPECT_EQ(typeid(*kernel),
+              typeid(feather::kernel::SoftmaxKernel<feather::DeviceType::COMMON, feather::DataType::FP32>));
 }
 
 TEST(logger_test, KernelSelectionUsesExactX86KernelWhenRegistered) {
@@ -97,6 +103,34 @@ TEST(logger_test, KernelSelectionUsesExactX86ReshapeKernelWhenRegistered) {
     ASSERT_NE(kernel, nullptr);
     EXPECT_EQ(typeid(*kernel),
               typeid(feather::kernel::ReshapeKernel<feather::DeviceType::X86, feather::DataType::FP16>));
+}
+
+TEST(logger_test, KernelSelectionUsesExactX86SoftmaxKernelWhenRegistered) {
+    auto kernel = feather::CreateKernelForTensor(feather::DeviceType::X86, "Softmax", {}, feather::DataType::FP16);
+    ASSERT_NE(kernel, nullptr);
+    EXPECT_EQ(typeid(*kernel),
+              typeid(feather::kernel::SoftmaxKernel<feather::DeviceType::X86, feather::DataType::FP16>));
+}
+
+TEST(logger_test, KernelSelectionUsesExactX86FlattenKernelWhenRegistered) {
+    auto kernel = feather::CreateKernelForTensor(feather::DeviceType::X86, "Flatten", {}, feather::DataType::FP16);
+    ASSERT_NE(kernel, nullptr);
+    EXPECT_EQ(typeid(*kernel),
+              typeid(feather::kernel::FlattenKernel<feather::DeviceType::X86, feather::DataType::FP16>));
+}
+
+TEST(logger_test, KernelSelectionUsesExactX86IdentityKernelWhenRegistered) {
+    auto kernel = feather::CreateKernelForTensor(feather::DeviceType::X86, "Identity", {}, feather::DataType::FP16);
+    ASSERT_NE(kernel, nullptr);
+    EXPECT_EQ(typeid(*kernel),
+              typeid(feather::kernel::IdentityKernel<feather::DeviceType::X86, feather::DataType::FP16>));
+}
+
+TEST(logger_test, KernelSelectionUsesExactX86SliceKernelWhenRegistered) {
+    auto kernel = feather::CreateKernelForTensor(feather::DeviceType::X86, "Slice", {}, feather::DataType::FP16);
+    ASSERT_NE(kernel, nullptr);
+    EXPECT_EQ(typeid(*kernel),
+              typeid(feather::kernel::SliceKernel<feather::DeviceType::X86, feather::DataType::FP16>));
 }
 
 TEST(logger_test, KernelSelectionSupportsDirectCommonLookup) {

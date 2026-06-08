@@ -7,7 +7,9 @@ using feather::Tensor;
 namespace feather {
 namespace kernel {
 
+void EnsureCommonFcKernelsRegistered();
 void EnsureFcKernelsRegistered();
+void EnsureX86FcKernelsRegistered();
 
 template <DeviceType dev, DataType dtype>
 class FcKernel : public KernelBase {

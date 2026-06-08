@@ -50,7 +50,10 @@ REGISTER_KERNEL(COMMON, FP32, Flatten, FlattenCommonFP32Kernel);
 typedef feather::kernel::FlattenKernel<DeviceType::COMMON, DataType::FP16> FlattenCommonFP16Kernel;
 REGISTER_KERNEL(COMMON, FP16, Flatten, FlattenCommonFP16Kernel);
 
-void EnsureFlattenKernelsRegistered() { (void)g_flatten_kernels_registered; }
+void EnsureFlattenKernelsRegistered() {
+    (void)g_flatten_kernels_registered;
+    EnsureX86FlattenKernelsRegistered();
+}
 
 }  // namespace kernel
 }  // namespace feather

@@ -7,6 +7,7 @@
 namespace feather {
 namespace kernel {
 
+void EnsureX86SliceKernelsRegistered();
 void EnsureSliceKernelsRegistered();
 
 template <DeviceType dev, DataType dtype>

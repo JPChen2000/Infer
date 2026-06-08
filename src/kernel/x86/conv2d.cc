@@ -9,6 +9,8 @@
 
 #include "src/kernel/common/kernel_io.h"
 #include "src/operator/params.h"
+#include "src/kernel/x86/direct_conv_fp32.h"
+#include "src/kernel/x86/pointwise_conv_fp32.h"
 #include "util/thread_pool_nv.h"
 #include "util/timer.h"
 
@@ -74,11 +76,6 @@ bool IsPointwiseConv2D(const feather::operators::Conv2dParam* param) {
         return false;
     }
     return param->w->dims()[2] == 1 && param->w->dims()[3] == 1 && param->pad_h == 0 && param->pad_w == 0;
-}
-
-void FillOutputWithBias(float* output_base, int64_t spatial_size, const float* bias, int64_t oc) {
-    const float bias_value = bias != nullptr ? bias[oc] : 0.0f;
-    std::fill(output_base, output_base + spatial_size, bias_value);
 }
 
 float HorizontalAdd(__m256 vec) {
@@ -162,32 +159,14 @@ void ComputePointwiseConv2DKernelFastX86Fp32(const feather::operators::Conv2dPar
     const int64_t in_h = param->input->dims()[2];
     const int64_t in_w = param->input->dims()[3];
     const int64_t out_c = param->w->dims()[0];
-    const int64_t out_h = param->out->dims()[2];
-    const int64_t out_w = param->out->dims()[3];
-    const int64_t input_spatial = in_h * in_w;
-    const int64_t output_spatial = out_h * out_w;
     const int64_t total_work_items = batch * out_c;
 
     ParallelForWorkItems(total_work_items, [&](int64_t begin, int64_t end) {
         for (int64_t work_index = begin; work_index < end; ++work_index) {
             const int64_t n = work_index / out_c;
             const int64_t oc = work_index % out_c;
-            float* out_base = output + work_index * output_spatial;
-            FillOutputWithBias(out_base, output_spatial, bias, oc);
-
-            const float* weight_base = weight + oc * in_c;
-            for (int64_t oh = 0; oh < out_h; ++oh) {
-                const int64_t ih = oh * param->stride_h;
-                for (int64_t ow = 0; ow < out_w; ++ow) {
-                    const int64_t iw = ow * param->stride_w;
-                    std::vector<float> input_patch(static_cast<size_t>(in_c));
-                    for (int64_t ic = 0; ic < in_c; ++ic) {
-                        const float* input_base = input + (n * in_c + ic) * input_spatial;
-                        input_patch[static_cast<size_t>(ic)] = input_base[ih * in_w + iw];
-                    }
-                    out_base[oh * out_w + ow] += DotProductAvx(input_patch.data(), weight_base, in_c);
-                }
-            }
+            x86::ComputePointwiseConv2DOutputChannelX86Fp32(input, weight, bias, n, oc, in_c, in_h, in_w, out_c,
+                                                            param->stride_h, param->stride_w, output);
         }
     });
 }
@@ -208,6 +187,7 @@ void PackPointwiseInputFp16ToFloat(const feather::operators::Conv2dParam* param,
         packed_input->resize(packed_size);
     }
     float* packed = packed_input->data();
+
     for (int64_t n = 0; n < batch; ++n) {
         for (int64_t oh = 0; oh < out_h; ++oh) {
             const int64_t ih = oh * param->stride_h;
@@ -259,43 +239,18 @@ void ComputeDirectConv2DKernelFastX86Fp32(const feather::operators::Conv2dParam*
     const int64_t kernel_w = param->w->dims()[3];
     const int64_t out_h = param->out->dims()[2];
     const int64_t out_w = param->out->dims()[3];
-    const int64_t input_spatial = in_h * in_w;
     const int64_t output_spatial = out_h * out_w;
-    const int64_t kernel_spatial = kernel_h * kernel_w;
-    const int64_t patch_size = in_c * kernel_spatial;
-    const int64_t total_work_items = batch * out_c;
+    const int64_t patch_size = in_c * kernel_h * kernel_w;
+    const int64_t total_work_items = batch * output_spatial;
 
     ParallelForWorkItems(total_work_items, [&](int64_t begin, int64_t end) {
         std::vector<float> input_patch(static_cast<size_t>(patch_size));
         for (int64_t work_index = begin; work_index < end; ++work_index) {
-            const int64_t n = work_index / out_c;
-            const int64_t oc = work_index % out_c;
-            float* out_base = output + work_index * output_spatial;
-            FillOutputWithBias(out_base, output_spatial, bias, oc);
-
-            const float* weight_oc = weight + oc * patch_size;
-            for (int64_t oh = 0; oh < out_h; ++oh) {
-                const int64_t ih_base = oh * param->stride_h - param->pad_h;
-                for (int64_t ow = 0; ow < out_w; ++ow) {
-                    const int64_t iw_base = ow * param->stride_w - param->pad_w;
-                    int64_t patch_index = 0;
-                    for (int64_t ic = 0; ic < in_c; ++ic) {
-                        const float* input_plane = input + (n * in_c + ic) * input_spatial;
-                        for (int64_t kh = 0; kh < kernel_h; ++kh) {
-                            const int64_t ih = ih_base + kh;
-                            for (int64_t kw = 0; kw < kernel_w; ++kw) {
-                                const int64_t iw = iw_base + kw;
-                                float value = 0.0f;
-                                if (ih >= 0 && ih < in_h && iw >= 0 && iw < in_w) {
-                                    value = input_plane[ih * in_w + iw];
-                                }
-                                input_patch[static_cast<size_t>(patch_index++)] = value;
-                            }
-                        }
-                    }
-                    out_base[oh * out_w + ow] += DotProductAvx(input_patch.data(), weight_oc, patch_size);
-                }
-            }
+            const int64_t n = work_index / output_spatial;
+            const int64_t spatial_idx = work_index % output_spatial;
+            x86::ComputeDirectConv2DSpatialOutputX86Fp32(
+                input, weight, bias, n, spatial_idx, in_c, in_h, in_w, out_c, kernel_h, kernel_w, out_h, out_w,
+                param->stride_h, param->stride_w, param->pad_h, param->pad_w, input_patch.data(), output);
         }
     });
 }
@@ -552,6 +507,16 @@ int32_t Conv2DKernel<DeviceType::X86, DataType::FP32>::compute() {
     param->out->set_data_type(DataType::FP32);
 
     if (CanUseFastConv2DPath(param)) {
+        if (cached_weight_tensor_ != param->w.get()) {
+            cached_direct_weight_oc8_buffer_.clear();
+            cached_weight_tensor_ = param->w.get();
+        }
+        const Tensor* current_bias_tensor =
+            param->bias != nullptr && param->bias->IsInitialized() ? param->bias.get() : nullptr;
+        if (cached_bias_tensor_ != current_bias_tensor) {
+            cached_direct_bias_oc8_buffer_.clear();
+            cached_bias_tensor_ = current_bias_tensor;
+        }
         const float* input = param->input->data<float>();
         const float* weight = param->w->data<float>();
         const float* bias =
@@ -561,6 +526,19 @@ int32_t Conv2DKernel<DeviceType::X86, DataType::FP32>::compute() {
         if (IsPointwiseConv2D(param)) {
             ComputePointwiseConv2DKernelFastX86Fp32(param, input, weight, bias, output);
             return 0;
+        }
+
+        if (CanUseDirectConvOc8Kernel(param)) {
+            if (cached_direct_weight_oc8_buffer_.empty()) {
+                x86::PackDirectConvWeightsOc8Fp32(
+                    weight, bias, param->w->dims()[0], param->w->dims()[1] * param->w->dims()[2] * param->w->dims()[3],
+                    &cached_direct_weight_oc8_buffer_, &cached_direct_bias_oc8_buffer_);
+            }
+            return x86::ComputeDirectConv2DOc8X86Fp32(
+                input, cached_direct_weight_oc8_buffer_.data(), cached_direct_bias_oc8_buffer_.data(), weight, bias,
+                param->input->dims()[0], param->input->dims()[1], param->input->dims()[2], param->input->dims()[3],
+                param->w->dims()[0], param->w->dims()[2], param->w->dims()[3], param->stride_h, param->stride_w,
+                param->pad_h, param->pad_w, output);
         }
 
         ComputeDirectConv2DKernelFastX86Fp32(param, input, weight, bias, output);
@@ -599,6 +577,20 @@ int32_t Conv2DKernel<DeviceType::X86, DataType::FP16>::compute() {
 
         if (IsPointwiseConv2D(param)) {
             PackPointwiseInputFp16ToFloat(param, param->input->data<uint16_t>(), &cached_packed_input_buffer_);
+            if (param->w->dims()[0] >= 8) {
+                if (cached_direct_weight_oc8_buffer_.empty()) {
+                    x86::PackPointwiseWeightsOc8Fp32(
+                        cached_weight_buffer_.data(),
+                        cached_bias_buffer_.empty() ? nullptr : cached_bias_buffer_.data(), param->w->dims()[0],
+                        param->w->dims()[1], &cached_direct_weight_oc8_buffer_, &cached_direct_bias_oc8_buffer_);
+                }
+                return x86::ComputePointwiseConvPackedOc8X86Fp32(
+                    cached_packed_input_buffer_.data(), cached_direct_weight_oc8_buffer_.data(),
+                    cached_direct_bias_oc8_buffer_.data(), cached_weight_buffer_.data(),
+                    cached_bias_buffer_.empty() ? nullptr : cached_bias_buffer_.data(), param->input->dims()[0],
+                    param->out->dims()[2] * param->out->dims()[3], param->input->dims()[1], param->w->dims()[0],
+                    param->out->mutable_data<uint16_t>());
+            }
             ComputePointwiseConv2DKernelPackedX86Fp32(
                 param, cached_packed_input_buffer_.data(), cached_weight_buffer_.data(),
                 cached_bias_buffer_.empty() ? nullptr : cached_bias_buffer_.data(),

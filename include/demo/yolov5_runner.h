@@ -20,12 +20,18 @@ class Yolov5Runner {
     int32_t Load(const std::string& model_path);
     int32_t Run(const std::string& image_path, float conf_thresh, float iou_thresh,
                 std::vector<Detection>* detections);
+    int32_t RunPreparedImage(const ImageData& image, float conf_thresh, float iou_thresh,
+                             std::vector<Detection>* detections);
     const std::string& DescribeLastBuild() const { return last_build_summary_; }
     const std::string& DescribeLastRun() const { return last_run_summary_; }
+    void SetRuntimeProfilingEnabled(bool enabled) { runtime_graph_.SetProfilingEnabled(enabled); }
+    const std::vector<RuntimeProfileSummary>& RuntimeProfileSummaries() const { return runtime_graph_.ProfileSummaries(); }
 
    private:
     const model::ValueDesc* FindValueDesc(const std::string& name) const;
     int32_t PrepareExecutableGraph();
+    int32_t RunOnImage(const std::string& image_path, const ImageData& image, float conf_thresh,
+                       float iou_thresh, std::vector<Detection>* detections, bool record_summary);
 
     model::ModelLoader loader_;
     StaticGraph static_graph_;

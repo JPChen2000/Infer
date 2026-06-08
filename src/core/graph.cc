@@ -1,5 +1,7 @@
 #include "core/graph.h"
 
+#include <algorithm>
+#include <chrono>
 #include <condition_variable>
 #include <fstream>
 #include <mutex>
@@ -10,6 +12,10 @@
 #include "util/timer.h"
 
 namespace feather {
+
+RuntimeGraph::RuntimeGraph()
+    : thread_mode_(RuntimeThreadMode::kParallelGraph),
+      configured_thread_count_(std::max<size_t>(1, std::thread::hardware_concurrency())) {}
 
 int32_t RuntimeGraph::load_from_buffer(const char* buffer, size_t size) {
     if (buffer == nullptr || size == 0) {
@@ -62,12 +68,42 @@ const RuntimeNode* RuntimeGraph::GetNode(const std::string& name) const {
     return &nodes_[it->second];
 }
 
+void RuntimeGraph::SetProfilingEnabled(bool enabled) {
+    profiling_enabled_ = enabled;
+    if (!profiling_enabled_) {
+        profile_summaries_.clear();
+    }
+}
+
+void RuntimeGraph::RecordNodeProfile(const std::string& node_name, const std::string& op_type, double elapsed_ms) {
+    if (!profiling_enabled_) {
+        return;
+    }
+
+    auto it = std::find_if(profile_summaries_.begin(), profile_summaries_.end(),
+                           [&](const RuntimeProfileSummary& summary) { return summary.node_name == node_name; });
+    if (it == profile_summaries_.end()) {
+        profile_summaries_.push_back(RuntimeProfileSummary{node_name, op_type, 1, elapsed_ms, elapsed_ms});
+        return;
+    }
+
+    it->call_count += 1;
+    it->total_ms += elapsed_ms;
+    it->avg_ms = it->total_ms / static_cast<double>(it->call_count);
+}
+
+void RuntimeGraph::SetThreadCount(size_t count) {
+    configured_thread_count_ = std::max<size_t>(1, count);
+}
+
 void RuntimeGraph::Clear() {
     nodes_.clear();
     tensors_.clear();
     node_index_by_name_.clear();
     thread_pool_.reset();
     worker_count_ = 1;
+    profiling_enabled_ = false;
+    profile_summaries_.clear();
 }
 
 int32_t RuntimeGraph::Check() const {
@@ -101,7 +137,13 @@ int32_t RuntimeGraph::Finalize() {
         return status;
     }
 
-    worker_count_ = std::max<size_t>(1, std::thread::hardware_concurrency());
+    if (thread_mode_ == RuntimeThreadMode::kSerialGraph) {
+        thread_pool_.reset();
+        worker_count_ = 1;
+        return 0;
+    }
+
+    worker_count_ = std::max<size_t>(1, configured_thread_count_);
     worker_count_ = std::min(worker_count_, nodes_.size());
     if (worker_count_ <= 1) {
         thread_pool_.reset();
@@ -171,7 +213,11 @@ int32_t RuntimeGraph::RunSerial() {
         while (!ready.empty()) {
             const size_t index = ready.front();
             ready.pop();
+            const auto begin = std::chrono::steady_clock::now();
             auto status = nodes_[index].Run();
+            const auto end = std::chrono::steady_clock::now();
+            RecordNodeProfile(nodes_[index].name, nodes_[index].op_type,
+                              std::chrono::duration<double, std::milli>(end - begin).count());
             if (status != 0) {
                 return status;
             }
@@ -209,7 +255,11 @@ int32_t RuntimeGraph::RunSerial() {
     }
 
     auto run_node = [&](int /*tid*/, size_t index) -> int {
+        const auto begin = std::chrono::steady_clock::now();
         const auto status = nodes_[index].Run();
+        const auto end = std::chrono::steady_clock::now();
+        RecordNodeProfile(nodes_[index].name, nodes_[index].op_type,
+                          std::chrono::duration<double, std::milli>(end - begin).count());
         {
             std::lock_guard<std::mutex> lock(mutex);
             --in_flight;

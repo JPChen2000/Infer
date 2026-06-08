@@ -16,6 +16,7 @@ class InferConan(ConanFile):
     install_folder = "./"
 
     def requirements(self):
+        self.requires("benchmark/1.8.5")
         if self.options.BUILD_UNITTEST:
             self.requires("gtest/1.11.0")
 

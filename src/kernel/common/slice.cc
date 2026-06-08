@@ -2,6 +2,7 @@
 
 #include <cstring>
 
+#include "src/kernel/common/kernel_io.h"
 #include "util/timer.h"
 
 namespace feather {
@@ -20,15 +21,15 @@ std::vector<int64_t> ComputeStrides(const std::vector<int64_t>& dims) {
 bool g_slice_kernels_registered = []() {
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP32, "Slice",
                                                 []() { return std::make_unique<SliceKernel<DeviceType::COMMON, DataType::FP32>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP16, "Slice",
+                                                []() { return std::make_unique<SliceKernel<DeviceType::COMMON, DataType::FP16>>(); });
     return true;
 }();
 
 }  // namespace
 
-template <>
-int32_t SliceKernel<DeviceType::COMMON, DataType::FP32>::compute() {
-    AutoTimer timer("Common::Slice::FP32");
-    auto* param = static_cast<feather::operators::SliceParam*>(param_);
+template <DataType dtype>
+int32_t ComputeSliceCommon(feather::operators::SliceParam* param) {
     if (param == nullptr || param->input == nullptr || param->out == nullptr) {
         return -1;
     }
@@ -47,8 +48,7 @@ int32_t SliceKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     start = std::max<int64_t>(0, start);
     end = std::min<int64_t>(dim, end);
 
-    const float* input = param->input->data<float>();
-    float* output = param->out->mutable_data<float>();
+    param->out->set_data_type(dtype);
     const auto out_strides = ComputeStrides(out_dims);
     const auto in_strides = ComputeStrides(in_dims);
     std::vector<int64_t> out_coords(out_dims.size(), 0);
@@ -69,15 +69,35 @@ int32_t SliceKernel<DeviceType::COMMON, DataType::FP32>::compute() {
         for (size_t i = 0; i < in_dims.size(); ++i) {
             input_offset += in_coords[i] * in_strides[i];
         }
-        output[linear] = input[input_offset];
+        TensorIO<dtype>::Write(param->out.get(), linear, TensorIO<dtype>::Read(param->input.get(), input_offset));
     }
     return 0;
+}
+
+template <>
+int32_t SliceKernel<DeviceType::COMMON, DataType::FP32>::compute() {
+    AutoTimer timer("Common::Slice::FP32");
+    auto* param = static_cast<feather::operators::SliceParam*>(param_);
+    return ComputeSliceCommon<DataType::FP32>(param);
+}
+
+template <>
+int32_t SliceKernel<DeviceType::COMMON, DataType::FP16>::compute() {
+    AutoTimer timer("Common::Slice::FP16");
+    auto* param = static_cast<feather::operators::SliceParam*>(param_);
+    return ComputeSliceCommon<DataType::FP16>(param);
 }
 
 typedef feather::kernel::SliceKernel<DeviceType::COMMON, DataType::FP32> SliceCommonFP32Kernel;
 REGISTER_KERNEL(COMMON, FP32, Slice, SliceCommonFP32Kernel);
 
-void EnsureSliceKernelsRegistered() { (void)g_slice_kernels_registered; }
+typedef feather::kernel::SliceKernel<DeviceType::COMMON, DataType::FP16> SliceCommonFP16Kernel;
+REGISTER_KERNEL(COMMON, FP16, Slice, SliceCommonFP16Kernel);
+
+void EnsureSliceKernelsRegistered() {
+    (void)g_slice_kernels_registered;
+    EnsureX86SliceKernelsRegistered();
+}
 
 }  // namespace kernel
 }  // namespace feather

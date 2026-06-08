@@ -92,6 +92,16 @@
 - `x86` 目录里逐步补 `AVX` 加速版本
 - 统一 backend 查表绑定逻辑在更多算子上收口
 - 数值正确性与图级测试
+- `yolov5_benchmark_demo` 作为 x86 CPU 性能回归基线
+
+### 4.1 现阶段 benchmark 口径
+
+为了让后续 x86 优化有稳定参照，当前 benchmark 口径固定为：
+
+- warmup 与 measure 分离
+- 默认输出 min/max/avg
+- profiling 只统计测量阶段的运行时节点
+- 图级执行默认保持串行，避免和 kernel 内部并行互相干扰
 
 ### P2：中期扩展
 

@@ -1,0 +1,35 @@
+#include <gtest/gtest.h>
+
+#include "core/graph.h"
+
+namespace feather {
+namespace {
+
+TEST(runtime_profile_test, EmptyProfileSummaryStartsEmpty) {
+    RuntimeGraph graph;
+    EXPECT_TRUE(graph.ProfileSummaries().empty());
+}
+
+TEST(runtime_profile_test, ProfilingIsDisabledByDefault) {
+    RuntimeGraph graph;
+    EXPECT_FALSE(graph.ProfilingEnabled());
+}
+
+TEST(runtime_profile_test, ProfileSummaryAccumulatesNodeTiming) {
+    RuntimeGraph graph;
+    graph.SetProfilingEnabled(true);
+
+    graph.RecordNodeProfile("conv0", "Conv2D", 1.5);
+    graph.RecordNodeProfile("conv0", "Conv2D", 2.5);
+
+    const auto summaries = graph.ProfileSummaries();
+    ASSERT_EQ(summaries.size(), 1u);
+    EXPECT_EQ(summaries[0].node_name, "conv0");
+    EXPECT_EQ(summaries[0].op_type, "Conv2D");
+    EXPECT_EQ(summaries[0].call_count, 2);
+    EXPECT_DOUBLE_EQ(summaries[0].total_ms, 4.0);
+    EXPECT_DOUBLE_EQ(summaries[0].avg_ms, 2.0);
+}
+
+}  // namespace
+}  // namespace feather
