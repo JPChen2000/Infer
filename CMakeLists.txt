@@ -4,6 +4,7 @@ project(Infer CXX)
 option(BUILD_UNITTEST "BUILD UNITTEST" OFF)
 option(FEATHER_DEBUG "Enable Feather debug logging and operator timers" OFF)
 option(FEATHER_ENABLE_CUDA "Enable CUDA kernels when a CUDA compiler is available" ON)
+option(FEATHER_ENABLE_CUDNN "Enable cuDNN acceleration when cuDNN is available" ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -20,6 +21,7 @@ include(util)
 find_package(Threads REQUIRED)
 
 set(FEATHER_WITH_CUDA OFF)
+set(FEATHER_WITH_CUDNN OFF)
 if (FEATHER_ENABLE_CUDA)
     include(CheckLanguage)
     check_language(CUDA)
@@ -27,6 +29,23 @@ if (FEATHER_ENABLE_CUDA)
         enable_language(CUDA)
         find_package(CUDAToolkit REQUIRED)
         set(FEATHER_WITH_CUDA ON)
+        if (FEATHER_ENABLE_CUDNN)
+            find_path(CUDNN_INCLUDE_DIR cudnn.h
+                HINTS
+                ${CUDAToolkit_INCLUDE_DIRS}
+                /usr/local/cuda/include
+                /usr/include)
+            find_library(CUDNN_LIBRARY cudnn
+                HINTS
+                /usr/local/cuda/targets/x86_64-linux/lib
+                /usr/local/cuda/lib64
+                /usr/lib/x86_64-linux-gnu)
+            if (CUDNN_INCLUDE_DIR AND CUDNN_LIBRARY)
+                set(FEATHER_WITH_CUDNN ON)
+            else()
+                message(WARNING "cuDNN not found, CUDA Conv2D will use fallback kernels only")
+            endif()
+        endif()
     else()
         message(WARNING "CUDA compiler not found, CUDA kernels will not be built")
     endif()
@@ -67,6 +86,7 @@ set(SRC "src/core/memory.cc"
     "src/pass/identity_elimination_pass.cc"
     "src/pass/matmul_add_fusion_pass.cc"
     "src/pass/no_op_elimination_pass.cc"
+    "src/pass/resize_concat_fusion_pass.cc"
     "src/pass/reshape_chain_elimination_pass.cc"
     "src/pass/sigmoid_mul_fusion_pass.cc"
     "src/pass/yolo_decode_fusion_pass.cc"
@@ -88,6 +108,7 @@ set(SRC "src/core/memory.cc"
     "src/operator/relu_op.cc"
     "src/operator/reshape_op.cc"
     "src/operator/resize_op.cc"
+    "src/operator/resize_concat_op.cc"
     "src/operator/silu_op.cc"
     "src/operator/slice_op.cc"
     "src/operator/softmax_op.cc"
@@ -162,6 +183,7 @@ set(CUDA_SRC
     "src/kernel/cuda/relu.cu"
     "src/kernel/cuda/reshape.cu"
     "src/kernel/cuda/resize.cu"
+    "src/kernel/cuda/resize_concat.cu"
     "src/kernel/cuda/runtime.cu"
     "src/kernel/cuda/silu.cu"
     "src/kernel/cuda/sigmoid.cu"
@@ -183,6 +205,11 @@ target_link_libraries(infer
 if (FEATHER_WITH_CUDA)
     target_compile_definitions(infer PUBLIC FEATHER_WITH_CUDA)
     target_link_libraries(infer PUBLIC CUDA::cudart CUDA::cublas)
+    if (FEATHER_WITH_CUDNN)
+        target_compile_definitions(infer PUBLIC FEATHER_WITH_CUDNN)
+        target_include_directories(infer PUBLIC ${CUDNN_INCLUDE_DIR})
+        target_link_libraries(infer PUBLIC ${CUDNN_LIBRARY})
+    endif()
     set_target_properties(infer PROPERTIES
         CUDA_STANDARD 17
         CUDA_STANDARD_REQUIRED ON
@@ -272,4 +299,5 @@ message("\n")
 message("unittest: " ${BUILD_UNITTEST})
 message("debug: " ${FEATHER_DEBUG})
 message("cuda: " ${FEATHER_WITH_CUDA})
+message("cudnn: " ${FEATHER_WITH_CUDNN})
 message("\n")

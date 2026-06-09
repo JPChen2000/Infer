@@ -71,6 +71,23 @@ int& CublasCreateStatus() {
     return status;
 }
 
+#ifdef FEATHER_WITH_CUDNN
+cudnnHandle_t& CudnnHandleStorage() {
+    static cudnnHandle_t handle = nullptr;
+    return handle;
+}
+
+std::once_flag& CudnnCreateOnceFlag() {
+    static std::once_flag once;
+    return once;
+}
+
+int& CudnnCreateStatus() {
+    static int status = -1;
+    return status;
+}
+#endif
+
 int CudaStatus(cudaError_t status) {
     return status == cudaSuccess ? 0 : -1;
 }
@@ -78,6 +95,12 @@ int CudaStatus(cudaError_t status) {
 int CublasStatus(cublasStatus_t status) {
     return status == CUBLAS_STATUS_SUCCESS ? 0 : -1;
 }
+
+#ifdef FEATHER_WITH_CUDNN
+int CudnnStatus(cudnnStatus_t status) {
+    return status == CUDNN_STATUS_SUCCESS ? 0 : -1;
+}
+#endif
 
 int EnsureInferenceStreamCreated();
 
@@ -129,6 +152,19 @@ void CreateCublasHandleOnce() {
     }
 }
 
+#ifdef FEATHER_WITH_CUDNN
+void CreateCudnnHandleOnce() {
+    if (EnsureInferenceStreamCreated() != 0) {
+        CudnnCreateStatus() = -1;
+        return;
+    }
+    CudnnCreateStatus() = CudnnStatus(cudnnCreate(&CudnnHandleStorage()));
+    if (CudnnCreateStatus() == 0) {
+        CudnnCreateStatus() = CudnnStatus(cudnnSetStream(CudnnHandleStorage(), StreamStorage()));
+    }
+}
+#endif
+
 int EnsureInferenceStreamCreated() {
     std::call_once(StreamCreateOnceFlag(), CreateInferenceStreamOnce);
     return StreamCreateStatus();
@@ -141,6 +177,16 @@ int EnsureCublasHandleCreated() {
     }
     return CublasStatus(cublasSetStream(CublasHandleStorage(), StreamStorage()));
 }
+
+#ifdef FEATHER_WITH_CUDNN
+int EnsureCudnnHandleCreated() {
+    std::call_once(CudnnCreateOnceFlag(), CreateCudnnHandleOnce);
+    if (CudnnCreateStatus() != 0) {
+        return CudnnCreateStatus();
+    }
+    return CudnnStatus(cudnnSetStream(CudnnHandleStorage(), StreamStorage()));
+}
+#endif
 
 int EnsureDeviceAllocation(CachedTensorDeviceState* state, size_t bytes) {
     if (state == nullptr) {
@@ -398,6 +444,15 @@ cublasHandle_t CublasHandle() {
     }
     return CublasHandleStorage();
 }
+
+#ifdef FEATHER_WITH_CUDNN
+cudnnHandle_t CudnnHandle() {
+    if (EnsureCudnnHandleCreated() != 0) {
+        return nullptr;
+    }
+    return CudnnHandleStorage();
+}
+#endif
 
 DeferredHostSyncScope::DeferredHostSyncScope() : previous_(DeferredHostSyncEnabled()) {
     SetDeferredHostSync(true);

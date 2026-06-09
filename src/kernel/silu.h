@@ -7,6 +7,21 @@
 namespace feather {
 namespace kernel {
 
+enum class CudaSiluBackend {
+    kUnknown,
+    kFallback,
+    kDirect,
+    kCudnn,
+};
+
+namespace detail {
+inline thread_local CudaSiluBackend g_last_cuda_silu_backend = CudaSiluBackend::kUnknown;
+}
+
+inline CudaSiluBackend LastCudaSiluBackend() { return detail::g_last_cuda_silu_backend; }
+inline void ResetLastCudaSiluBackend() { detail::g_last_cuda_silu_backend = CudaSiluBackend::kUnknown; }
+inline void SetLastCudaSiluBackend(CudaSiluBackend backend) { detail::g_last_cuda_silu_backend = backend; }
+
 void EnsureCommonSiluKernelsRegistered();
 void EnsureX86SiluKernelsRegistered();
 void EnsureSiluKernelsRegistered();

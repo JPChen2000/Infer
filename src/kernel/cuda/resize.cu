@@ -46,6 +46,44 @@ __global__ void ResizeKernelCuda(const T* input, T* out, int64_t numel, cuda_det
     out[linear] = input[in_offset];
 }
 
+template <typename T>
+__global__ void Resize4DNchwKernelCuda(const T* input, T* out, int64_t total, int64_t channels, int64_t in_h,
+                                       int64_t in_w, int64_t out_h, int64_t out_w, float scale_h, float scale_w) {
+    const int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (idx >= total) {
+        return;
+    }
+    const int64_t ow = idx % out_w;
+    const int64_t oh = (idx / out_w) % out_h;
+    const int64_t c = (idx / (out_w * out_h)) % channels;
+    const int64_t n = idx / (channels * out_h * out_w);
+    int64_t ih = static_cast<int64_t>(static_cast<double>(oh) / scale_h);
+    int64_t iw = static_cast<int64_t>(static_cast<double>(ow) / scale_w);
+    ih = ih < 0 ? 0 : (ih >= in_h ? in_h - 1 : ih);
+    iw = iw < 0 ? 0 : (iw >= in_w ? in_w - 1 : iw);
+    const int64_t input_offset = ((n * channels + c) * in_h + ih) * in_w + iw;
+    out[idx] = input[input_offset];
+}
+
+template <typename T>
+__global__ void Resize4DNhwcKernelCuda(const T* input, T* out, int64_t total, int64_t channels, int64_t in_h,
+                                       int64_t in_w, int64_t out_h, int64_t out_w, float scale_h, float scale_w) {
+    const int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (idx >= total) {
+        return;
+    }
+    const int64_t c = idx % channels;
+    const int64_t ow = (idx / channels) % out_w;
+    const int64_t oh = (idx / (channels * out_w)) % out_h;
+    const int64_t n = idx / (channels * out_w * out_h);
+    int64_t ih = static_cast<int64_t>(static_cast<double>(oh) / scale_h);
+    int64_t iw = static_cast<int64_t>(static_cast<double>(ow) / scale_w);
+    ih = ih < 0 ? 0 : (ih >= in_h ? in_h - 1 : ih);
+    iw = iw < 0 ? 0 : (iw >= in_w ? in_w - 1 : iw);
+    const int64_t input_offset = ((n * in_h + ih) * in_w + iw) * channels + c;
+    out[idx] = input[input_offset];
+}
+
 template <DataType dtype>
 int RunResize(feather::operators::ResizeParam* param, const char* timer_name) {
     AutoTimer timer(timer_name);
@@ -75,9 +113,36 @@ int RunResize(feather::operators::ResizeParam* param, const char* timer_name) {
         cuda_detail::AllocateTensorOnDevice(param->out.get(), &out) != 0) {
         return -1;
     }
-    ResizeKernelCuda<T><<<static_cast<int>(cuda_detail::DivUp(param->out->numel(), cuda_detail::kCudaThreads)),
-                         cuda_detail::kCudaThreads, 0, cuda_detail::InferenceStream()>>>(
-        input.get(), out.get(), param->out->numel(), in_shape, out_shape, scales);
+    const auto total = param->out->numel();
+    bool used_direct_4d = false;
+    if (in_dims.size() == 4) {
+        ImageShape4D input_shape;
+        ImageShape4D output_shape;
+        if (DecodeImageShape4D(param->input->dims().data(), param->input->layout(), &input_shape) &&
+            DecodeImageShape4D(param->out->dims().data(), param->out->layout(), &output_shape)) {
+            const float scale_h = param->scales[IsChannelLastLayout(param->input->layout()) ? 1 : 2];
+            const float scale_w = param->scales[IsChannelLastLayout(param->input->layout()) ? 2 : 3];
+            if (IsChannelLastLayout(param->input->layout())) {
+                Resize4DNhwcKernelCuda<T><<<static_cast<int>(cuda_detail::DivUp(total, cuda_detail::kCudaThreads)),
+                                           cuda_detail::kCudaThreads, 0, cuda_detail::InferenceStream()>>>(
+                    input.get(), out.get(), total, input_shape.c, input_shape.h, input_shape.w, output_shape.h,
+                    output_shape.w, scale_h, scale_w);
+            } else {
+                Resize4DNchwKernelCuda<T><<<static_cast<int>(cuda_detail::DivUp(total, cuda_detail::kCudaThreads)),
+                                           cuda_detail::kCudaThreads, 0, cuda_detail::InferenceStream()>>>(
+                    input.get(), out.get(), total, input_shape.c, input_shape.h, input_shape.w, output_shape.h,
+                    output_shape.w, scale_h, scale_w);
+            }
+            used_direct_4d = true;
+            SetLastCudaResizeBackend(CudaResizeBackend::kDirect4D);
+        }
+    }
+    if (!used_direct_4d) {
+        ResizeKernelCuda<T><<<static_cast<int>(cuda_detail::DivUp(total, cuda_detail::kCudaThreads)),
+                             cuda_detail::kCudaThreads, 0, cuda_detail::InferenceStream()>>>(
+            input.get(), out.get(), total, in_shape, out_shape, scales);
+        SetLastCudaResizeBackend(CudaResizeBackend::kGeneric);
+    }
     if (cuda_detail::CudaCheck(cudaGetLastError()) != 0) {
         return -1;
     }

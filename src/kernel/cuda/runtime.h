@@ -3,6 +3,9 @@
 
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
+#ifdef FEATHER_WITH_CUDNN
+#include <cudnn.h>
+#endif
 
 #include <cstddef>
 
@@ -38,6 +41,9 @@ int AcquireOutputTensorDevice(Tensor* tensor, size_t bytes, void** device_ptr);
 int SyncTensorToHost(Tensor* tensor, size_t bytes, void* host_data);
 int SyncTensorToHostIfNeeded(Tensor* tensor, size_t bytes, void* host_data);
 cublasHandle_t CublasHandle();
+#ifdef FEATHER_WITH_CUDNN
+cudnnHandle_t CudnnHandle();
+#endif
 
 class DeferredHostSyncScope {
    public:

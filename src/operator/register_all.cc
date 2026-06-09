@@ -17,6 +17,7 @@ void EnsurePowOperatorRegistered();
 void EnsureReluOperatorRegistered();
 void EnsureReshapeOperatorRegistered();
 void EnsureResizeOperatorRegistered();
+void EnsureResizeConcatOperatorRegistered();
 void EnsureSiluOperatorRegistered();
 void EnsureSigmoidOperatorRegistered();
 void EnsureSliceOperatorRegistered();
@@ -40,6 +41,7 @@ void EnsureBuiltinOperatorsRegistered() {
     EnsureReluOperatorRegistered();
     EnsureReshapeOperatorRegistered();
     EnsureResizeOperatorRegistered();
+    EnsureResizeConcatOperatorRegistered();
     EnsureSiluOperatorRegistered();
     EnsureSigmoidOperatorRegistered();
     EnsureSliceOperatorRegistered();

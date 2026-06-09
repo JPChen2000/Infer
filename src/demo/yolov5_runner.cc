@@ -58,6 +58,60 @@ const char* DeviceBackendName(DeviceType device) {
     }
 }
 
+size_t TensorTransferBytes(const Tensor& tensor) {
+    const auto dtype_bytes = DataTypeBytes(tensor.data_type());
+    if (dtype_bytes == 0) {
+        return tensor.memory_size();
+    }
+    return static_cast<size_t>(std::max<int64_t>(0, tensor.numel())) * dtype_bytes;
+}
+
+#ifdef FEATHER_WITH_CUDA
+int PrimeTensorDevice(Tensor* tensor) {
+    if (tensor == nullptr || !tensor->IsInitialized()) {
+        return 0;
+    }
+    void* device_ptr = nullptr;
+    return kernel::cuda_detail::AcquireTensorDevice(tensor, TensorTransferBytes(*tensor), tensor->raw_data(), &device_ptr);
+}
+
+int PrimeConstantTensorDevices(const model::ModelDesc& model, RuntimeGraph* runtime_graph) {
+    if (runtime_graph == nullptr) {
+        return -1;
+    }
+    for (const auto& value : model.graph.values) {
+        if (!value.constant) {
+            continue;
+        }
+        auto tensor = runtime_graph->GetTensor(value.tensor.name);
+        if (tensor == nullptr || PrimeTensorDevice(tensor.get()) != 0) {
+            return -1;
+        }
+    }
+    return kernel::cuda_detail::SynchronizeInferenceStream();
+}
+
+int WarmupRuntimeGraph(RuntimeGraph* runtime_graph, const std::string& output_name) {
+    if (runtime_graph == nullptr) {
+        return -1;
+    }
+    {
+        kernel::cuda_detail::DeferredHostSyncScope deferred_host_sync;
+        if (runtime_graph->Run() != 0) {
+            return -1;
+        }
+    }
+    if (kernel::cuda_detail::SynchronizeInferenceStream() != 0) {
+        return -1;
+    }
+    auto output_tensor = runtime_graph->GetTensor(output_name);
+    if (output_tensor != nullptr) {
+        kernel::cuda_detail::ReleaseTensorDevice(output_tensor.get());
+    }
+    return 0;
+}
+#endif
+
 }  // namespace
 
 bool ParseYolov5Backend(const std::string& value, Yolov5Backend* backend) {
@@ -181,9 +235,16 @@ int32_t Yolov5Runner::RunOnImage(const std::string& image_path, const ImageData&
     if (PreprocessImageToTensor(image, input_size_, input_dtype_, runtime_input.get(), &letterbox) != 0) {
         return -1;
     }
+    double input_copy_ms = 0.0;
 #ifdef FEATHER_WITH_CUDA
     if (backend_device_ == DeviceType::CUDA) {
         kernel::cuda_detail::InvalidateTensorDevice(runtime_input.get());
+        const auto input_copy_begin = std::chrono::steady_clock::now();
+        if (PrimeTensorDevice(runtime_input.get()) != 0 || kernel::cuda_detail::SynchronizeInferenceStream() != 0) {
+            return -1;
+        }
+        const auto input_copy_end = std::chrono::steady_clock::now();
+        input_copy_ms = ElapsedMilliseconds(input_copy_begin, input_copy_end);
     }
 #endif
     const auto preprocess_end = std::chrono::steady_clock::now();
@@ -261,7 +322,7 @@ int32_t Yolov5Runner::RunOnImage(const std::string& image_path, const ImageData&
                << " pad=[" << letterbox.pad_x << "," << letterbox.pad_y << "]"
                << " detections=" << detections->size()
                << " preprocess_ms=" << ElapsedMilliseconds(preprocess_begin, preprocess_end)
-               << " input_copy_ms=0"
+               << " input_copy_ms=" << input_copy_ms
                << " build_ms=0"
                << " lower_ms=0"
                << " rungraph_ms=" << ElapsedMilliseconds(rungraph_begin, rungraph_end)
@@ -387,6 +448,14 @@ int32_t Yolov5Runner::Load(const std::string& model_path, Yolov5Backend backend,
     if (PrepareExecutableGraph() != 0) {
         return -1;
     }
+#ifdef FEATHER_WITH_CUDA
+    if (backend_device_ == DeviceType::CUDA) {
+        if (PrimeConstantTensorDevices(model, &runtime_graph_) != 0 ||
+            WarmupRuntimeGraph(&runtime_graph_, output_name_) != 0) {
+            return -1;
+        }
+    }
+#endif
     const auto prepare_end = std::chrono::steady_clock::now();
 
     std::ostringstream ss;

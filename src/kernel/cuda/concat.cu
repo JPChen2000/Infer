@@ -62,22 +62,24 @@ int RunConcat(feather::operators::ConcatParam* param, const char* timer_name) {
         return -1;
     }
     param->out->set_data_type(dtype);
+    const size_t element_bytes = sizeof(T);
+    const size_t dst_pitch_bytes = static_cast<size_t>(out_axis * inner) * element_bytes;
     int64_t axis_offset = 0;
     for (size_t i = 0; i < param->inputs.size(); ++i) {
         const auto& input_tensor = param->inputs[i];
         const int64_t input_axis = input_tensor->dims()[axis];
-        const int64_t copy_count = input_axis * inner;
-        const int64_t total = outer * copy_count;
-        if (total > 0) {
-            ConcatCopyKernelCuda<T><<<static_cast<int>(cuda_detail::DivUp(total, cuda_detail::kCudaThreads)),
-                                      cuda_detail::kCudaThreads, 0, cuda_detail::InferenceStream()>>>(
-                inputs[i].get(), out.get(), total, input_axis, inner, out_axis, axis_offset);
-            if (cuda_detail::CudaCheck(cudaGetLastError()) != 0) {
+        const size_t width_bytes = static_cast<size_t>(input_axis * inner) * element_bytes;
+        if (outer > 0 && width_bytes > 0) {
+            char* dst_ptr = reinterpret_cast<char*>(out.get()) + static_cast<size_t>(axis_offset * inner) * element_bytes;
+            if (cuda_detail::CudaCheck(cudaMemcpy2DAsync(dst_ptr, dst_pitch_bytes, inputs[i].get(), width_bytes,
+                                                         width_bytes, static_cast<size_t>(outer),
+                                                         cudaMemcpyDeviceToDevice, cuda_detail::InferenceStream())) != 0) {
                 return -1;
             }
         }
         axis_offset += input_axis;
     }
+    SetLastCudaConcatBackend(CudaConcatBackend::kMemcpy2D);
     return cuda_detail::CopyDeviceToTensor(&out, param->out.get());
 }
 

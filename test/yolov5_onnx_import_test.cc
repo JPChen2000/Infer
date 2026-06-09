@@ -99,6 +99,54 @@ std::vector<float> TensorToFloatVector(const Tensor& tensor) {
     return data;
 }
 
+bool WriteDecodeOpsOnnxModel(const std::filesystem::path& model_path) {
+    const auto script_path = std::filesystem::temp_directory_path() / "feather_decode_ops_model.py";
+    std::ofstream script(script_path, std::ios::trunc);
+    if (!script.good()) {
+        return false;
+    }
+    script << R"PY(
+import sys
+import numpy as np
+import onnx
+from onnx import helper, numpy_helper, TensorProto
+
+output_path = sys.argv[1]
+
+input_info = helper.make_tensor_value_info("input", TensorProto.FLOAT, [1, 4])
+output_info = helper.make_tensor_value_info("output", TensorProto.FLOAT, [1, 2])
+
+bias = numpy_helper.from_array(np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32), name="bias")
+scale = numpy_helper.from_array(np.array([2.0], dtype=np.float32), name="scale")
+starts = numpy_helper.from_array(np.array([0], dtype=np.int64), name="starts")
+ends = numpy_helper.from_array(np.array([2], dtype=np.int64), name="ends")
+axes = numpy_helper.from_array(np.array([1], dtype=np.int64), name="axes")
+steps = numpy_helper.from_array(np.array([1], dtype=np.int64), name="steps")
+
+nodes = [
+    helper.make_node("Softmax", ["input"], ["softmax_out"], axis=1, name="softmax0"),
+    helper.make_node("Sub", ["softmax_out", "bias"], ["sub_out"], name="sub0"),
+    helper.make_node("Div", ["sub_out", "scale"], ["div_out"], name="div0"),
+    helper.make_node("Exp", ["div_out"], ["exp_out"], name="exp0"),
+    helper.make_node("Slice", ["exp_out", "starts", "ends", "axes", "steps"], ["output"], name="slice0"),
+]
+
+graph = helper.make_graph(nodes, "decode_ops_graph", [input_info], [output_info],
+                          [bias, scale, starts, ends, axes, steps])
+model = helper.make_model(graph, opset_imports=[helper.make_operatorsetid("", 13)])
+model.ir_version = 8
+onnx.checker.check_model(model)
+onnx.save(model, output_path)
+)PY";
+    script.close();
+    if (!script.good()) {
+        return false;
+    }
+    const std::string command =
+        "/home/jarvis/miniconda3/bin/python3 \"" + script_path.string() + "\" \"" + model_path.string() + "\"";
+    return std::system(command.c_str()) == 0;
+}
+
 void PrintTensorPreview(const std::string& name, const Tensor& tensor, size_t limit = 12) {
     const auto values = TensorToFloatVector(tensor);
     std::cerr << name << " dims=";

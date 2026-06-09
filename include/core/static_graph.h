@@ -50,6 +50,7 @@ class StaticGraph {
     bool ReplaceInputValue(const std::string& node_name, const std::string& from, const std::string& to);
     bool ReplaceNodeOp(const std::string& node_name, const std::string& op_type,
                        const std::vector<std::string>& inputs);
+    bool ReplaceNodeDesc(const model::NodeDesc& desc);
 
     const std::vector<std::shared_ptr<OpBase>>& operators() const { return operators_; }
     const std::unordered_map<std::string, std::shared_ptr<Tensor>>& tensors() const { return tensors_; }

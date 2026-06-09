@@ -17,6 +17,7 @@ void EnsureCudaPowKernelsRegistered();
 void EnsureCudaReluKernelsRegistered();
 void EnsureCudaReshapeKernelsRegistered();
 void EnsureCudaResizeKernelsRegistered();
+void EnsureCudaResizeConcatKernelsRegistered();
 void EnsureCudaSiluKernelsRegistered();
 void EnsureCudaSigmoidKernelsRegistered();
 void EnsureCudaSliceKernelsRegistered();
@@ -40,6 +41,7 @@ void EnsureCudaKernelsRegistered() {
     EnsureCudaReluKernelsRegistered();
     EnsureCudaReshapeKernelsRegistered();
     EnsureCudaResizeKernelsRegistered();
+    EnsureCudaResizeConcatKernelsRegistered();
     EnsureCudaSiluKernelsRegistered();
     EnsureCudaSigmoidKernelsRegistered();
     EnsureCudaSliceKernelsRegistered();

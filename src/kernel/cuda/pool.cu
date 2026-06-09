@@ -1,9 +1,11 @@
 #include "src/kernel/pool.h"
 
+#include <limits>
 #include <memory>
 
 #include "core/kernel.h"
 #include "src/kernel/cuda/kernel_io.cuh"
+#include "src/kernel/cuda/runtime.h"
 #include "src/operator/params.h"
 #include "util/timer.h"
 
@@ -24,6 +26,92 @@ bool g_cuda_pool_kernels_registered = []() {
                               []() { return std::make_unique<MaxPoolKernel<DeviceType::CUDA, DataType::FP16>>(); });
     return true;
 }();
+
+#ifdef FEATHER_WITH_CUDNN
+bool CudnnCheck(cudnnStatus_t status) {
+    return status == CUDNN_STATUS_SUCCESS;
+}
+
+bool SetCudnnTensor4dDescriptor(cudnnTensorDescriptor_t desc, DataType dtype, DataLayout layout,
+                                const ImageShape4D& shape) {
+    const auto tensor_format =
+        NormalizeDataLayout(layout) == DataLayout::NHWC ? CUDNN_TENSOR_NHWC : CUDNN_TENSOR_NCHW;
+    const auto tensor_dtype = dtype == DataType::FP16 ? CUDNN_DATA_HALF : CUDNN_DATA_FLOAT;
+    return CudnnCheck(cudnnSetTensor4dDescriptor(desc, tensor_format, tensor_dtype, static_cast<int>(shape.n),
+                                                 static_cast<int>(shape.c), static_cast<int>(shape.h),
+                                                 static_cast<int>(shape.w)));
+}
+
+template <DataType dtype, bool IsMax>
+bool RunPoolWithCudnn(feather::operators::PoolParam* param) {
+    using T = cuda_detail::StorageT<dtype>;
+    if (param == nullptr || param->input == nullptr || param->out == nullptr) {
+        return false;
+    }
+    if (param->input->dims().size() != 4 || param->out->dims().size() != 4) {
+        return false;
+    }
+
+    auto handle = cuda_detail::CudnnHandle();
+    if (handle == nullptr) {
+        return false;
+    }
+
+    ImageShape4D input_shape;
+    ImageShape4D output_shape;
+    if (!DecodeImageShape4D(param->input->dims().data(), param->input->layout(), &input_shape) ||
+        !DecodeImageShape4D(param->out->dims().data(), param->out->layout(), &output_shape)) {
+        return false;
+    }
+
+    cuda_detail::DeviceBuffer<T> input;
+    cuda_detail::DeviceBuffer<T> output;
+    if (cuda_detail::CopyTensorToDevice(param->input.get(), &input) != 0 ||
+        cuda_detail::AllocateTensorOnDevice(param->out.get(), &output) != 0) {
+        return false;
+    }
+
+    cudnnTensorDescriptor_t input_desc = nullptr;
+    cudnnTensorDescriptor_t output_desc = nullptr;
+    cudnnPoolingDescriptor_t pooling_desc = nullptr;
+    if (!CudnnCheck(cudnnCreateTensorDescriptor(&input_desc)) ||
+        !CudnnCheck(cudnnCreateTensorDescriptor(&output_desc)) ||
+        !CudnnCheck(cudnnCreatePoolingDescriptor(&pooling_desc))) {
+        if (input_desc != nullptr) {
+            cudnnDestroyTensorDescriptor(input_desc);
+        }
+        if (output_desc != nullptr) {
+            cudnnDestroyTensorDescriptor(output_desc);
+        }
+        if (pooling_desc != nullptr) {
+            cudnnDestroyPoolingDescriptor(pooling_desc);
+        }
+        return false;
+    }
+
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+    const bool ok =
+        SetCudnnTensor4dDescriptor(input_desc, dtype, param->input->layout(), input_shape) &&
+        SetCudnnTensor4dDescriptor(output_desc, dtype, param->out->layout(), output_shape) &&
+        CudnnCheck(cudnnSetPooling2dDescriptor(pooling_desc,
+                                               IsMax ? CUDNN_POOLING_MAX : CUDNN_POOLING_AVERAGE_COUNT_EXCLUDE_PADDING,
+                                               CUDNN_NOT_PROPAGATE_NAN, param->kernel_h, param->kernel_w, param->pad_h,
+                                               param->pad_w, param->stride_h, param->stride_w)) &&
+        CudnnCheck(cudnnPoolingForward(handle, pooling_desc, &alpha, input_desc, input.get(), &beta, output_desc,
+                                       output.get()));
+
+    cudnnDestroyPoolingDescriptor(pooling_desc);
+    cudnnDestroyTensorDescriptor(output_desc);
+    cudnnDestroyTensorDescriptor(input_desc);
+
+    if (!ok || cuda_detail::CudaCheck(cudaGetLastError()) != 0) {
+        return false;
+    }
+    SetLastCudaPoolBackend(CudaPoolBackend::kCudnn);
+    return cuda_detail::CopyDeviceToTensor(&output, param->out.get()) == 0;
+}
+#endif
 
 template <typename T, bool IsMax>
 __global__ void PoolKernelCuda(const T* input, T* out, int64_t batch, int64_t channels, int64_t in_h, int64_t in_w,
@@ -75,6 +163,12 @@ int RunPool(feather::operators::PoolParam* param, const char* timer_name) {
     if (param == nullptr || param->input == nullptr || param->out == nullptr) {
         return -1;
     }
+#ifdef FEATHER_WITH_CUDNN
+    if (RunPoolWithCudnn<dtype, IsMax>(param)) {
+        return 0;
+    }
+#endif
+    SetLastCudaPoolBackend(CudaPoolBackend::kFallback);
     const bool is_4d = param->input->dims().size() == 4;
     ImageShape4D input_shape;
     ImageShape4D output_shape;

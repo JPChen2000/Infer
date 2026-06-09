@@ -113,6 +113,15 @@ struct ResizeParam : ParamBase {
     std::vector<float> scales;
 };
 
+struct ResizeConcatParam : ParamBase {
+    std::shared_ptr<Tensor> resize_input;
+    std::shared_ptr<Tensor> concat_input;
+    std::shared_ptr<Tensor> out;
+    std::vector<float> scales;
+    int32_t axis{1};
+    int32_t resize_input_index{0};
+};
+
 struct PowParam : ParamBase {
     std::shared_ptr<Tensor> input;
     std::shared_ptr<Tensor> out;

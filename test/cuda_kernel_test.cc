@@ -15,6 +15,7 @@
 #include "src/kernel/conv2d.h"
 #include "src/kernel/gemm.h"
 #include "src/kernel/matmul.h"
+#include "src/kernel/pool.h"
 #include "src/kernel/resize.h"
 #include "src/kernel/silu.h"
 #include "src/kernel/slice.h"
@@ -34,6 +35,48 @@ bool HasCudaDevice() {
 #endif
 
 }  // namespace
+
+#ifdef FEATHER_WITH_CUDNN
+TEST(cuda_kernel_test, CudnnPerfSelectionPrefersTensorImplicitGemmForPointwise) {
+    const feather::kernel::CudnnConvSelectionShape shape{
+        feather::DataType::FP32, feather::DataLayout::NCHW, {1, 256, 20, 20}, {256, 256, 1, 1}, {1, 256, 20, 20}, 1, 1, 1};
+    cudnnConvolutionFwdAlgoPerf_t perf[3]{};
+    perf[0].algo = CUDNN_CONVOLUTION_FWD_ALGO_DIRECT;
+    perf[0].status = CUDNN_STATUS_SUCCESS;
+    perf[0].memory = static_cast<size_t>(4) << 20;
+    perf[0].mathType = CUDNN_DEFAULT_MATH;
+    perf[1].algo = CUDNN_CONVOLUTION_FWD_ALGO_FFT_TILING;
+    perf[1].status = CUDNN_STATUS_SUCCESS;
+    perf[1].memory = static_cast<size_t>(96) << 20;
+    perf[1].mathType = CUDNN_DEFAULT_MATH;
+    perf[2].algo = CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM;
+    perf[2].status = CUDNN_STATUS_SUCCESS;
+    perf[2].memory = static_cast<size_t>(8) << 20;
+    perf[2].mathType = CUDNN_TENSOR_OP_MATH;
+
+    EXPECT_EQ(feather::kernel::SelectPreferredCudaConv2DPerfIndex(shape, perf, 3), 2);
+}
+
+TEST(cuda_kernel_test, CudnnPerfSelectionCapsWorkspaceForGrouped) {
+    const feather::kernel::CudnnConvSelectionShape shape{
+        feather::DataType::FP32, feather::DataLayout::NCHW, {1, 64, 80, 80}, {64, 16, 3, 3}, {1, 64, 80, 80}, 1, 1, 4};
+    cudnnConvolutionFwdAlgoPerf_t perf[3]{};
+    perf[0].algo = CUDNN_CONVOLUTION_FWD_ALGO_FFT_TILING;
+    perf[0].status = CUDNN_STATUS_SUCCESS;
+    perf[0].memory = static_cast<size_t>(64) << 20;
+    perf[0].mathType = CUDNN_DEFAULT_MATH;
+    perf[1].algo = CUDNN_CONVOLUTION_FWD_ALGO_DIRECT;
+    perf[1].status = CUDNN_STATUS_SUCCESS;
+    perf[1].memory = static_cast<size_t>(8) << 20;
+    perf[1].mathType = CUDNN_DEFAULT_MATH;
+    perf[2].algo = CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM;
+    perf[2].status = CUDNN_STATUS_SUCCESS;
+    perf[2].memory = static_cast<size_t>(12) << 20;
+    perf[2].mathType = CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION;
+
+    EXPECT_EQ(feather::kernel::SelectPreferredCudaConv2DPerfIndex(shape, perf, 3), 2);
+}
+#endif
 
 TEST(cuda_kernel_test, AddRunsOnCudaFP32WithBroadcast) {
 #ifndef FEATHER_WITH_CUDA
@@ -112,8 +155,10 @@ TEST(cuda_kernel_test, Conv2DRunsOnCudaFP16) {
     ASSERT_NE((dynamic_cast<feather::kernel::Conv2DKernel<feather::DeviceType::CUDA, feather::DataType::FP16>*>(
                   kernel.get())),
               nullptr);
+    feather::kernel::ResetLastCudaConv2DBackend();
     kernel->SetParam(&param);
     ASSERT_EQ(kernel->compute(), 0);
+    EXPECT_EQ(feather::kernel::LastCudaConv2DBackend(), feather::kernel::CudaConv2DBackend::kCudnn);
 
     const std::vector<float> expected = {-3.5f, -3.5f, -3.5f, -3.5f};
     for (size_t i = 0; i < expected.size(); ++i) {
@@ -154,8 +199,10 @@ TEST(cuda_kernel_test, Conv2DPointwiseRunsOnCudaFP32) {
     auto kernel =
         feather::KernelDispatcher::instance().create(feather::DeviceType::CUDA, feather::DataType::FP32, "Conv2D");
     ASSERT_NE(kernel, nullptr);
+    feather::kernel::ResetLastCudaConv2DBackend();
     kernel->SetParam(&param);
     ASSERT_EQ(kernel->compute(), 0);
+    EXPECT_EQ(feather::kernel::LastCudaConv2DBackend(), feather::kernel::CudaConv2DBackend::kCudnn);
 
     const std::vector<float> expected = {1.5f, 2.5f, 3.5f, 4.5f, 9.0f, 19.0f,
                                          29.0f, 39.0f, 32.0f, 64.0f, 96.0f, 128.0f};
@@ -245,8 +292,10 @@ TEST(cuda_kernel_test, Conv2DPointwiseRunsOnCudaFP32Nhwc) {
     auto kernel = feather::CreateKernelForTensor(feather::DeviceType::CUDA, "Conv2D",
                                                  {input, weight, bias, out}, feather::DataType::FP32);
     ASSERT_NE(kernel, nullptr);
+    feather::kernel::ResetLastCudaConv2DBackend();
     kernel->SetParam(&param);
     ASSERT_EQ(kernel->compute(), 0);
+    EXPECT_EQ(feather::kernel::LastCudaConv2DBackend(), feather::kernel::CudaConv2DBackend::kCudnn);
 
     const std::vector<float> expected = {1.5f, 9.0f, 32.0f, 2.5f, 19.0f, 64.0f,
                                          3.5f, 29.0f, 96.0f, 4.5f, 39.0f, 128.0f};
@@ -297,12 +346,71 @@ TEST(cuda_kernel_test, Conv2DDepthwiseRunsOnCudaFP16) {
     auto kernel =
         feather::KernelDispatcher::instance().create(feather::DeviceType::CUDA, feather::DataType::FP16, "Conv2D");
     ASSERT_NE(kernel, nullptr);
+    feather::kernel::ResetLastCudaConv2DBackend();
     kernel->SetParam(&param);
     ASSERT_EQ(kernel->compute(), 0);
+    EXPECT_EQ(feather::kernel::LastCudaConv2DBackend(), feather::kernel::CudaConv2DBackend::kCudnn);
 
     const std::vector<float> expected = {-4.0f, -4.0f, -4.0f, -4.0f, 60.0f, 80.0f, 120.0f, 140.0f};
     for (size_t i = 0; i < expected.size(); ++i) {
         EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[i]), expected[i], 1e-3f);
+    }
+#endif
+}
+
+TEST(cuda_kernel_test, Conv2DGroupedRunsOnCudaFP32) {
+#ifndef FEATHER_WITH_CUDA
+    GTEST_SKIP() << "CUDA kernels are not built";
+#else
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
+    auto input = std::make_shared<feather::Tensor>();
+    input->Assign<float>(
+        {1.0f, 2.0f, 3.0f, 4.0f,
+         10.0f, 20.0f, 30.0f, 40.0f,
+         5.0f, 6.0f, 7.0f, 8.0f,
+         50.0f, 60.0f, 70.0f, 80.0f},
+        {1, 4, 2, 2});
+    auto weight = std::make_shared<feather::Tensor>();
+    weight->Assign<float>(
+        {1.0f, 0.0f,
+         0.0f, 1.0f,
+         1.0f, 1.0f,
+         2.0f, -1.0f},
+        {4, 2, 1, 1});
+    auto bias = std::make_shared<feather::Tensor>();
+    bias->Assign<float>({0.5f, -1.0f, 0.0f, 3.0f}, {4});
+    auto out = std::make_shared<feather::Tensor>(std::vector<int64_t>{1, 4, 2, 2});
+
+    feather::operators::Conv2dParam param{};
+    param.input = input;
+    param.w = weight;
+    param.bias = bias;
+    param.out = out;
+    param.stride_h = 1;
+    param.stride_w = 1;
+    param.pad_h = 0;
+    param.pad_w = 0;
+    param.dilation_h = 1;
+    param.dilation_w = 1;
+    param.group = 2;
+
+    auto kernel =
+        feather::KernelDispatcher::instance().create(feather::DeviceType::CUDA, feather::DataType::FP32, "Conv2D");
+    ASSERT_NE(kernel, nullptr);
+    feather::kernel::ResetLastCudaConv2DBackend();
+    kernel->SetParam(&param);
+    ASSERT_EQ(kernel->compute(), 0);
+    EXPECT_EQ(feather::kernel::LastCudaConv2DBackend(), feather::kernel::CudaConv2DBackend::kCudnn);
+
+    const std::vector<float> expected = {1.5f, 2.5f, 3.5f, 4.5f,
+                                         9.0f, 19.0f, 29.0f, 39.0f,
+                                         55.0f, 66.0f, 77.0f, 88.0f,
+                                         -37.0f, -45.0f, -53.0f, -61.0f};
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_FLOAT_EQ(out->data<float>()[i], expected[i]);
     }
 #endif
 }
@@ -450,8 +558,10 @@ TEST(cuda_kernel_test, ConcatRunsOnCudaFP32AlongMiddleAxis) {
     ASSERT_NE((dynamic_cast<feather::kernel::ConcatKernel<feather::DeviceType::CUDA, feather::DataType::FP32>*>(
                   kernel.get())),
               nullptr);
+    feather::kernel::ResetLastCudaConcatBackend();
     kernel->SetParam(&param);
     ASSERT_EQ(kernel->compute(), 0);
+    EXPECT_EQ(feather::kernel::LastCudaConcatBackend(), feather::kernel::CudaConcatBackend::kMemcpy2D);
 
     const std::vector<float> expected = {1.0f,   2.0f,   3.0f,   4.0f,   5.0f,   6.0f,
                                          101.0f, 102.0f, 103.0f, 7.0f,   8.0f,   9.0f,
@@ -494,8 +604,10 @@ TEST(cuda_kernel_test, ConcatRunsOnCudaFP16AlongNegativeAxis) {
     ASSERT_NE((dynamic_cast<feather::kernel::ConcatKernel<feather::DeviceType::CUDA, feather::DataType::FP16>*>(
                   kernel.get())),
               nullptr);
+    feather::kernel::ResetLastCudaConcatBackend();
     kernel->SetParam(&param);
     ASSERT_EQ(kernel->compute(), 0);
+    EXPECT_EQ(feather::kernel::LastCudaConcatBackend(), feather::kernel::CudaConcatBackend::kMemcpy2D);
 
     const std::vector<float> expected = {1.0f, 2.0f, 10.0f, 20.0f, 30.0f,
                                          3.0f, 4.0f, 40.0f, 50.0f, 60.0f};
@@ -689,8 +801,10 @@ TEST(cuda_kernel_test, ResizeRunsOnCudaFP32NearestNeighborNchw) {
     ASSERT_NE((dynamic_cast<feather::kernel::ResizeKernel<feather::DeviceType::CUDA, feather::DataType::FP32>*>(
                   kernel.get())),
               nullptr);
+    feather::kernel::ResetLastCudaResizeBackend();
     kernel->SetParam(&param);
     ASSERT_EQ(kernel->compute(), 0);
+    EXPECT_EQ(feather::kernel::LastCudaResizeBackend(), feather::kernel::CudaResizeBackend::kDirect4D);
 
     const std::vector<float> expected = {1.0f, 1.0f, 2.0f, 2.0f, 1.0f, 1.0f, 2.0f, 2.0f,
                                          3.0f, 3.0f, 4.0f, 4.0f, 3.0f, 3.0f, 4.0f, 4.0f};
@@ -722,8 +836,10 @@ TEST(cuda_kernel_test, ResizeRunsOnCudaFP32NearestNeighborNhwc) {
     auto kernel =
         feather::CreateKernelForTensor(feather::DeviceType::CUDA, "Resize", {input, out}, feather::DataType::FP32);
     ASSERT_NE(kernel, nullptr);
+    feather::kernel::ResetLastCudaResizeBackend();
     kernel->SetParam(&param);
     ASSERT_EQ(kernel->compute(), 0);
+    EXPECT_EQ(feather::kernel::LastCudaResizeBackend(), feather::kernel::CudaResizeBackend::kDirect4D);
 
     const std::vector<float> expected = {
         1, 10, 1, 10, 2, 20, 2, 20,
@@ -769,8 +885,10 @@ TEST(cuda_kernel_test, MaxPoolRunsOnCudaFP32Nhwc) {
     auto kernel =
         feather::CreateKernelForTensor(feather::DeviceType::CUDA, "MaxPool", {input, out}, feather::DataType::FP32);
     ASSERT_NE(kernel, nullptr);
+    feather::kernel::ResetLastCudaPoolBackend();
     kernel->SetParam(&param);
     ASSERT_EQ(kernel->compute(), 0);
+    EXPECT_EQ(feather::kernel::LastCudaPoolBackend(), feather::kernel::CudaPoolBackend::kCudnn);
 
     EXPECT_FLOAT_EQ(out->data<float>()[0], 4.0f);
     EXPECT_FLOAT_EQ(out->data<float>()[1], 40.0f);
@@ -799,8 +917,10 @@ TEST(cuda_kernel_test, SiluRunsOnCudaFP32) {
     ASSERT_NE((dynamic_cast<feather::kernel::SiluKernel<feather::DeviceType::CUDA, feather::DataType::FP32>*>(
                   kernel.get())),
               nullptr);
+    feather::kernel::ResetLastCudaSiluBackend();
     kernel->SetParam(&param);
     ASSERT_EQ(kernel->compute(), 0);
+    EXPECT_EQ(feather::kernel::LastCudaSiluBackend(), feather::kernel::CudaSiluBackend::kDirect);
 
     for (int64_t i = 0; i < input->numel(); ++i) {
         const float expected = input->data<float>()[i] / (1.0f + std::exp(-input->data<float>()[i]));
@@ -834,8 +954,10 @@ TEST(cuda_kernel_test, SiluRunsOnCudaFP16) {
     ASSERT_NE((dynamic_cast<feather::kernel::SiluKernel<feather::DeviceType::CUDA, feather::DataType::FP16>*>(
                   kernel.get())),
               nullptr);
+    feather::kernel::ResetLastCudaSiluBackend();
     kernel->SetParam(&param);
     ASSERT_EQ(kernel->compute(), 0);
+    EXPECT_EQ(feather::kernel::LastCudaSiluBackend(), feather::kernel::CudaSiluBackend::kDirect);
 
     for (int64_t i = 0; i < input->numel(); ++i) {
         const float value = feather::HalfToFloat(input->data<uint16_t>()[i]);

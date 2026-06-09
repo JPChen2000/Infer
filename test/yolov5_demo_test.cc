@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,8 @@
 
 #ifdef FEATHER_WITH_CUDA
 #include <cuda_runtime.h>
+
+#include "src/kernel/cuda/runtime.h"
 #endif
 
 namespace {
@@ -28,6 +31,21 @@ std::filesystem::path WriteTestPpmImage(const std::filesystem::path& path) {
     };
     out.write(reinterpret_cast<const char*>(pixels.data()), static_cast<std::streamsize>(pixels.size()));
     return path;
+}
+
+std::optional<double> ExtractMetricValue(const std::string& summary, const std::string& key) {
+    const auto key_pos = summary.find(key + "=");
+    if (key_pos == std::string::npos) {
+        return std::nullopt;
+    }
+    const auto value_begin = key_pos + key.size() + 1;
+    const auto value_end = summary.find(' ', value_begin);
+    const auto value_text = summary.substr(value_begin, value_end - value_begin);
+    try {
+        return std::stod(value_text);
+    } catch (...) {
+        return std::nullopt;
+    }
 }
 
 #ifdef FEATHER_WITH_CUDA
@@ -240,6 +258,60 @@ TEST(yolov5_demo_test, CudaRunSummaryReportsDeviceCacheStats) {
     EXPECT_NE(runner.DescribeLastRun().find("cuda_active_bytes="), std::string::npos);
     EXPECT_NE(runner.DescribeLastRun().find("cuda_pooled_bytes="), std::string::npos);
     EXPECT_NE(runner.DescribeLastRun().find("cuda_active_tensors="), std::string::npos);
+#endif
+}
+
+TEST(yolov5_demo_test, CudaLoadPrimesPersistentTensorDevices) {
+#ifndef FEATHER_WITH_CUDA
+    GTEST_SKIP() << "CUDA kernels are not built";
+#else
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
+    const auto repo_root = std::filesystem::path(__FILE__).parent_path().parent_path();
+    const auto model_path = repo_root / "yolov5n_fp32.fth";
+
+    ASSERT_TRUE(std::filesystem::exists(model_path));
+
+    feather::kernel::cuda_detail::ClearTensorCache();
+
+    feather::demo::Yolov5Runner runner;
+    ASSERT_EQ(runner.Load(model_path.string(), feather::demo::Yolov5Backend::kCuda), 0);
+
+    const auto stats = feather::kernel::cuda_detail::GetTensorCacheStats();
+    EXPECT_GT(stats.persistent_tensor_count, 0U);
+    EXPECT_GT(stats.active_tensor_count, 0U);
+    EXPECT_GT(stats.active_bytes, 0U);
+
+    feather::kernel::cuda_detail::ClearTensorCache();
+#endif
+}
+
+TEST(yolov5_demo_test, CudaRunSummaryReportsMeasuredInputCopyTime) {
+#ifndef FEATHER_WITH_CUDA
+    GTEST_SKIP() << "CUDA kernels are not built";
+#else
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
+    const auto repo_root = std::filesystem::path(__FILE__).parent_path().parent_path();
+    const auto model_path = repo_root / "yolov5n_fp32.fth";
+    const auto image_path = WriteTestPpmImage(std::filesystem::temp_directory_path() / "yolov5n_demo_cuda_input_copy.ppm");
+
+    ASSERT_TRUE(std::filesystem::exists(model_path));
+
+    feather::demo::Yolov5Runner runner;
+    ASSERT_EQ(runner.Load(model_path.string(), feather::demo::Yolov5Backend::kCuda), 0);
+
+    std::vector<feather::demo::Detection> detections;
+    ASSERT_EQ(runner.Run(image_path.string(), 0.25f, 0.45f, &detections), 0);
+    const auto input_copy_ms = ExtractMetricValue(runner.DescribeLastRun(), "input_copy_ms");
+    ASSERT_TRUE(input_copy_ms.has_value());
+    EXPECT_GT(*input_copy_ms, 0.0);
+
+    feather::kernel::cuda_detail::ClearTensorCache();
 #endif
 }
 

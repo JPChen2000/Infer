@@ -11,6 +11,7 @@
 #include "pass/identity_elimination_pass.h"
 #include "pass/matmul_add_fusion_pass.h"
 #include "pass/no_op_elimination_pass.h"
+#include "pass/resize_concat_fusion_pass.h"
 #include "pass/reshape_chain_elimination_pass.h"
 #include "pass/sigmoid_mul_fusion_pass.h"
 #include "core/static_graph.h"
@@ -20,11 +21,13 @@
 
 using feather::DataType;
 using feather::DeadNodeEliminationPass;
+using feather::DeviceType;
 using feather::GraphPass;
 using feather::IdentityEliminationPass;
 using feather::MatMulAddFusionPass;
 using feather::NoOpEliminationPass;
 using feather::PassManager;
+using feather::ResizeConcatFusionPass;
 using feather::ReshapeChainEliminationPass;
 using feather::SigmoidMulFusionPass;
 using feather::StaticGraph;
@@ -447,6 +450,45 @@ ModelDesc BuildYoloDecodePatternModelDesc() {
     return model;
 }
 
+ModelDesc BuildResizeConcatPatternModelDesc() {
+    ModelDesc model;
+    model.name = "resize_concat_pattern";
+    model.version = 1;
+    model.graph.name = "main";
+    model.graph.inputs = {"resize_input", "skip_input"};
+    model.graph.outputs = {"output"};
+
+    auto value = [](const std::string& name, std::vector<int64_t> dims) {
+        ValueDesc desc;
+        desc.tensor.name = name;
+        desc.tensor.dims = std::move(dims);
+        desc.tensor.data_type = DataType::FP32;
+        return desc;
+    };
+
+    model.graph.values = {value("resize_input", {1, 64, 40, 40}),
+                          value("skip_input", {1, 32, 80, 80}),
+                          value("resize_out", {1, 64, 80, 80}),
+                          value("output", {1, 96, 80, 80})};
+
+    NodeDesc resize;
+    resize.name = "resize0";
+    resize.op_type = "Resize";
+    resize.inputs = {"resize_input"};
+    resize.outputs = {"resize_out"};
+    resize.attributes["scales"] = std::vector<float>{1.0f, 1.0f, 2.0f, 2.0f};
+
+    NodeDesc concat;
+    concat.name = "concat0";
+    concat.op_type = "Concat";
+    concat.inputs = {"resize_out", "skip_input"};
+    concat.outputs = {"output"};
+    concat.attributes["axis"] = static_cast<int64_t>(1);
+
+    model.graph.nodes = {resize, concat};
+    return model;
+}
+
 void BindSiluGraphInputs(StaticGraph* graph) {
     auto input_tensor = std::make_shared<Tensor>();
     input_tensor->Assign<float>({-2.0f, -1.0f, 0.0f, 2.0f}, {4});
@@ -529,6 +571,16 @@ void BindYoloDecodePatternInputs(StaticGraph* graph) {
     ASSERT_EQ(graph->SetTensor("stride", stride), 0);
     ASSERT_EQ(graph->SetTensor("wh_scale", wh_scale), 0);
     ASSERT_EQ(graph->SetTensor("anchor", anchor), 0);
+}
+
+void BindResizeConcatPatternInputs(StaticGraph* graph) {
+    auto resize_input = std::make_shared<Tensor>();
+    resize_input->Assign<float>(std::vector<float>(static_cast<size_t>(1 * 64 * 40 * 40), 1.0f), {1, 64, 40, 40});
+    auto skip_input = std::make_shared<Tensor>();
+    skip_input->Assign<float>(std::vector<float>(static_cast<size_t>(1 * 32 * 80 * 80), 2.0f), {1, 32, 80, 80});
+
+    ASSERT_EQ(graph->SetTensor("resize_input", resize_input), 0);
+    ASSERT_EQ(graph->SetTensor("skip_input", skip_input), 0);
 }
 
 class RecordingPass : public GraphPass {
@@ -796,7 +848,7 @@ TEST(static_graph_pass_test, DefaultPassManagerIncludesGeneralFusionPasses) {
 TEST(static_graph_pass_test, YoloPassManagerAddsDecodeFusionOnTopOfDefaultPasses) {
     auto pass_manager = feather::CreateYoloPassManager();
     ASSERT_NE(pass_manager, nullptr);
-    EXPECT_EQ(pass_manager->PassCount(), 8U);
+    EXPECT_EQ(pass_manager->PassCount(), 9U);
 }
 
 TEST(static_graph_pass_test, ReshapeChainEliminationPassRemovesInnerReshape) {
@@ -903,3 +955,30 @@ TEST(static_graph_pass_test, YoloDecodeFusionPassRewritesDecodeScalePattern) {
     EXPECT_EQ(graph.GetNode("concat0"), nullptr);
     EXPECT_EQ(graph.GetNode("transpose0"), nullptr);
 }
+
+#ifdef FEATHER_WITH_CUDA
+TEST(static_graph_pass_test, ResizeConcatFusionPassRewritesResizeConcatPatternOnCuda) {
+    StaticGraph graph;
+    graph.SetKernelDevice(DeviceType::CUDA);
+    ASSERT_EQ(graph.SetModel(BuildResizeConcatPatternModelDesc()), 0);
+    BindResizeConcatPatternInputs(&graph);
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<ResizeConcatFusionPass>());
+    graph.SetPassManager(pass_manager);
+
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+    EXPECT_EQ(graph.NodeSize(), 1U);
+    EXPECT_EQ(graph.OperatorSize(), 1U);
+    EXPECT_EQ(graph.GetNode("resize0"), nullptr);
+
+    const auto* fused = graph.GetNode("concat0");
+    ASSERT_NE(fused, nullptr);
+    EXPECT_EQ(fused->op_type, "ResizeConcat");
+    EXPECT_EQ(fused->inputs, (std::vector<std::string>{"resize_input", "skip_input"}));
+    EXPECT_EQ(fused->outputs, std::vector<std::string>({"output"}));
+    EXPECT_EQ(graph.GetProducer("output"), "concat0");
+    EXPECT_EQ(graph.GetUsers("resize_out"), std::vector<std::string>{});
+}
+#endif

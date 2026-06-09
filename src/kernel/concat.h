@@ -7,6 +7,20 @@
 namespace feather {
 namespace kernel {
 
+enum class CudaConcatBackend {
+    kUnknown,
+    kKernel,
+    kMemcpy2D,
+};
+
+namespace detail {
+inline thread_local CudaConcatBackend g_last_cuda_concat_backend = CudaConcatBackend::kUnknown;
+}
+
+inline CudaConcatBackend LastCudaConcatBackend() { return detail::g_last_cuda_concat_backend; }
+inline void ResetLastCudaConcatBackend() { detail::g_last_cuda_concat_backend = CudaConcatBackend::kUnknown; }
+inline void SetLastCudaConcatBackend(CudaConcatBackend backend) { detail::g_last_cuda_concat_backend = backend; }
+
 void EnsureCommonConcatKernelsRegistered();
 void EnsureX86ConcatKernelsRegistered();
 void EnsureConcatKernelsRegistered();

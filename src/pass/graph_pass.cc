@@ -4,6 +4,7 @@
 #include "pass/identity_elimination_pass.h"
 #include "pass/matmul_add_fusion_pass.h"
 #include "pass/no_op_elimination_pass.h"
+#include "pass/resize_concat_fusion_pass.h"
 #include "pass/reshape_chain_elimination_pass.h"
 #include "pass/sigmoid_mul_fusion_pass.h"
 #include "pass/yolo_decode_fusion_pass.h"
@@ -59,6 +60,7 @@ std::shared_ptr<PassManager> CreateDefaultPassManager() {
 
 std::shared_ptr<PassManager> CreateYoloPassManager() {
     auto manager = CreateDefaultPassManager();
+    manager->AddPass(std::make_unique<ResizeConcatFusionPass>());
     manager->AddPass(std::make_unique<YoloDecodeFusionPass>());
     manager->AddPass(std::make_unique<DeadNodeEliminationPass>());
     return manager;

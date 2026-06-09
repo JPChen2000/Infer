@@ -14,6 +14,7 @@
 #include "src/kernel/reshape.h"
 #include "src/kernel/relu.h"
 #include "src/kernel/resize.h"
+#include "src/kernel/resize_concat.h"
 #include "src/kernel/silu.h"
 #include "src/kernel/sigmoid.h"
 #include "src/kernel/slice.h"
@@ -44,6 +45,7 @@ void EnsureBuiltinKernelsRegistered() {
     EnsureReshapeKernelsRegistered();
     EnsureReluKernelsRegistered();
     EnsureResizeKernelsRegistered();
+    EnsureResizeConcatKernelsRegistered();
     EnsureSiluKernelsRegistered();
     EnsureSigmoidKernelsRegistered();
     EnsureSliceKernelsRegistered();
