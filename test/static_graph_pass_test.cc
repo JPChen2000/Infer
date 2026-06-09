@@ -1,22 +1,31 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <numeric>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "core/graph_pass.h"
-#include "core/dead_node_elimination_pass.h"
-#include "core/sigmoid_mul_fusion_pass.h"
+#include "pass/graph_pass.h"
+#include "pass/dead_node_elimination_pass.h"
+#include "pass/identity_elimination_pass.h"
+#include "pass/matmul_add_fusion_pass.h"
+#include "pass/no_op_elimination_pass.h"
+#include "pass/reshape_chain_elimination_pass.h"
+#include "pass/sigmoid_mul_fusion_pass.h"
 #include "core/static_graph.h"
 #include "core/tensor.h"
-#include "core/yolo_decode_fusion_pass.h"
+#include "pass/yolo_decode_fusion_pass.h"
 #include "model/model_format.h"
 
 using feather::DataType;
 using feather::DeadNodeEliminationPass;
 using feather::GraphPass;
+using feather::IdentityEliminationPass;
+using feather::MatMulAddFusionPass;
+using feather::NoOpEliminationPass;
 using feather::PassManager;
+using feather::ReshapeChainEliminationPass;
 using feather::SigmoidMulFusionPass;
 using feather::StaticGraph;
 using feather::Tensor;
@@ -128,6 +137,189 @@ ModelDesc BuildSigmoidMulModelDesc(bool reverse_mul_inputs) {
 
     model.graph.values = {input, sigmoid_out, output};
     model.graph.nodes = {sigmoid, mul};
+    return model;
+}
+
+ModelDesc BuildIdentityRelayModelDesc(bool identity_output_is_graph_output = false) {
+    ModelDesc model;
+    model.name = "identity_relay_graph";
+    model.version = 1;
+    model.graph.name = "main";
+    model.graph.inputs = {"input"};
+    model.graph.outputs = {identity_output_is_graph_output ? "identity_out" : "output"};
+
+    ValueDesc input;
+    input.tensor.name = "input";
+    input.tensor.dims = {2, 2};
+    input.tensor.data_type = DataType::FP32;
+
+    ValueDesc identity_out;
+    identity_out.tensor.name = "identity_out";
+    identity_out.tensor.dims = {2, 2};
+    identity_out.tensor.data_type = DataType::FP32;
+
+    ValueDesc output;
+    output.tensor.name = "output";
+    output.tensor.dims = {2, 2};
+    output.tensor.data_type = DataType::FP32;
+
+    NodeDesc identity;
+    identity.name = "identity0";
+    identity.op_type = "Identity";
+    identity.inputs = {"input"};
+    identity.outputs = {"identity_out"};
+
+    NodeDesc relu;
+    relu.name = "relu0";
+    relu.op_type = "ReLU";
+    relu.inputs = {"identity_out"};
+    relu.outputs = {"output"};
+
+    model.graph.values = {input, identity_out, output};
+    model.graph.nodes = identity_output_is_graph_output ? std::vector<NodeDesc>{identity} : std::vector<NodeDesc>{identity, relu};
+    return model;
+}
+
+ModelDesc BuildMatMulAddModelDesc(bool keep_matmul_output_live = false) {
+    ModelDesc model;
+    model.name = "matmul_add_graph";
+    model.version = 1;
+    model.graph.name = "main";
+    model.graph.inputs = {"a", "b", "bias"};
+    model.graph.outputs = keep_matmul_output_live ? std::vector<std::string>{"output", "matmul_out"}
+                                                  : std::vector<std::string>{"output"};
+
+    auto value = [](const std::string& name, std::vector<int64_t> dims) {
+        ValueDesc desc;
+        desc.tensor.name = name;
+        desc.tensor.dims = std::move(dims);
+        desc.tensor.data_type = DataType::FP32;
+        return desc;
+    };
+
+    model.graph.values = {value("a", {2, 3}), value("b", {3, 4}), value("bias", {4}), value("matmul_out", {2, 4}),
+                          value("output", {2, 4})};
+
+    NodeDesc matmul;
+    matmul.name = "matmul0";
+    matmul.op_type = "MatMul";
+    matmul.inputs = {"a", "b"};
+    matmul.outputs = {"matmul_out"};
+
+    NodeDesc add;
+    add.name = "add0";
+    add.op_type = "Add";
+    add.inputs = {"matmul_out", "bias"};
+    add.outputs = {"output"};
+
+    model.graph.nodes = {matmul, add};
+    return model;
+}
+
+ModelDesc BuildNoOpReshapeModelDesc() {
+    ModelDesc model;
+    model.name = "no_op_reshape_graph";
+    model.version = 1;
+    model.graph.name = "main";
+    model.graph.inputs = {"input"};
+    model.graph.outputs = {"output"};
+
+    auto value = [](const std::string& name, std::vector<int64_t> dims) {
+        ValueDesc desc;
+        desc.tensor.name = name;
+        desc.tensor.dims = std::move(dims);
+        desc.tensor.data_type = DataType::FP32;
+        return desc;
+    };
+
+    model.graph.values = {value("input", {2, 2}), value("reshape_out", {2, 2}), value("output", {2, 2})};
+
+    NodeDesc reshape;
+    reshape.name = "reshape0";
+    reshape.op_type = "Reshape";
+    reshape.inputs = {"input"};
+    reshape.outputs = {"reshape_out"};
+    reshape.attributes["shape"] = std::vector<int64_t>{2, 2};
+
+    NodeDesc relu;
+    relu.name = "relu0";
+    relu.op_type = "ReLU";
+    relu.inputs = {"reshape_out"};
+    relu.outputs = {"output"};
+
+    model.graph.nodes = {reshape, relu};
+    return model;
+}
+
+ModelDesc BuildIdentityTransposeModelDesc() {
+    ModelDesc model;
+    model.name = "identity_transpose_graph";
+    model.version = 1;
+    model.graph.name = "main";
+    model.graph.inputs = {"input"};
+    model.graph.outputs = {"output"};
+
+    auto value = [](const std::string& name, std::vector<int64_t> dims) {
+        ValueDesc desc;
+        desc.tensor.name = name;
+        desc.tensor.dims = std::move(dims);
+        desc.tensor.data_type = DataType::FP32;
+        return desc;
+    };
+
+    model.graph.values = {value("input", {1, 2, 3}), value("transpose_out", {1, 2, 3}), value("output", {1, 2, 3})};
+
+    NodeDesc transpose;
+    transpose.name = "transpose0";
+    transpose.op_type = "Transpose";
+    transpose.inputs = {"input"};
+    transpose.outputs = {"transpose_out"};
+    transpose.attributes["perm"] = std::vector<int64_t>{0, 1, 2};
+
+    NodeDesc relu;
+    relu.name = "relu0";
+    relu.op_type = "ReLU";
+    relu.inputs = {"transpose_out"};
+    relu.outputs = {"output"};
+
+    model.graph.nodes = {transpose, relu};
+    return model;
+}
+
+ModelDesc BuildReshapeChainModelDesc(bool keep_inner_output_live = false) {
+    ModelDesc model;
+    model.name = "reshape_chain_graph";
+    model.version = 1;
+    model.graph.name = "main";
+    model.graph.inputs = {"input"};
+    model.graph.outputs = keep_inner_output_live ? std::vector<std::string>{"output", "reshape0_out"}
+                                                 : std::vector<std::string>{"output"};
+
+    auto value = [](const std::string& name, std::vector<int64_t> dims) {
+        ValueDesc desc;
+        desc.tensor.name = name;
+        desc.tensor.dims = std::move(dims);
+        desc.tensor.data_type = DataType::FP32;
+        return desc;
+    };
+
+    model.graph.values = {value("input", {2, 3}), value("reshape0_out", {1, 6}), value("output", {3, 2})};
+
+    NodeDesc reshape0;
+    reshape0.name = "reshape0";
+    reshape0.op_type = "Reshape";
+    reshape0.inputs = {"input"};
+    reshape0.outputs = {"reshape0_out"};
+    reshape0.attributes["shape"] = std::vector<int64_t>{1, 6};
+
+    NodeDesc reshape1;
+    reshape1.name = "reshape1";
+    reshape1.op_type = "Reshape";
+    reshape1.inputs = {"reshape0_out"};
+    reshape1.outputs = {"output"};
+    reshape1.attributes["shape"] = std::vector<int64_t>{3, 2};
+
+    model.graph.nodes = {reshape0, reshape1};
     return model;
 }
 
@@ -258,6 +450,32 @@ ModelDesc BuildYoloDecodePatternModelDesc() {
 void BindSiluGraphInputs(StaticGraph* graph) {
     auto input_tensor = std::make_shared<Tensor>();
     input_tensor->Assign<float>({-2.0f, -1.0f, 0.0f, 2.0f}, {4});
+    ASSERT_EQ(graph->SetTensor("input", input_tensor), 0);
+}
+
+void BindIdentityRelayInputs(StaticGraph* graph) {
+    auto input_tensor = std::make_shared<Tensor>();
+    input_tensor->Assign<float>({-1.0f, 2.0f, -3.0f, 4.0f}, {2, 2});
+    ASSERT_EQ(graph->SetTensor("input", input_tensor), 0);
+}
+
+void BindMatMulAddInputs(StaticGraph* graph) {
+    auto a = std::make_shared<Tensor>();
+    a->Assign<float>({1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}, {2, 3});
+    auto b = std::make_shared<Tensor>();
+    b->Assign<float>({1.0f, 0.0f, 2.0f, 1.0f, 0.0f, 1.0f, 3.0f, 2.0f, 1.0f, 0.0f, 1.0f, 4.0f}, {3, 4});
+    auto bias = std::make_shared<Tensor>();
+    bias->Assign<float>({0.5f, -1.0f, 1.5f, 0.0f}, {4});
+    ASSERT_EQ(graph->SetTensor("a", a), 0);
+    ASSERT_EQ(graph->SetTensor("b", b), 0);
+    ASSERT_EQ(graph->SetTensor("bias", bias), 0);
+}
+
+void BindNoOpGraphInputs(StaticGraph* graph, const std::vector<int64_t>& dims) {
+    auto input_tensor = std::make_shared<Tensor>();
+    const int64_t numel = std::accumulate(dims.begin(), dims.end(), int64_t{1}, std::multiplies<int64_t>());
+    std::vector<float> values(static_cast<size_t>(numel), 1.0f);
+    input_tensor->Assign<float>(values, dims);
     ASSERT_EQ(graph->SetTensor("input", input_tensor), 0);
 }
 
@@ -413,6 +631,20 @@ TEST(static_graph_pass_test, ApplyPassesUsesInstalledPassManager) {
     EXPECT_EQ(trace, (std::vector<std::string>{"installed"}));
 }
 
+TEST(static_graph_pass_test, SetModelPreservesPreinstalledPassManager) {
+    StaticGraph graph;
+    std::vector<std::string> trace;
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<RecordingPass>(&trace, "preinstalled"));
+    graph.SetPassManager(pass_manager);
+
+    ASSERT_EQ(graph.SetModel(BuildConvReluModelDesc()), 0);
+    BindConvReluGraphInputs(&graph);
+    ASSERT_EQ(graph.Build(), 0);
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+    EXPECT_EQ(trace, (std::vector<std::string>{"preinstalled"}));
+}
+
 TEST(static_graph_pass_test, ReplaceInputValueRebuildsAffectedNode) {
     StaticGraph graph;
     ASSERT_EQ(graph.SetModel(BuildConvReluModelDesc()), 0);
@@ -484,6 +716,166 @@ TEST(static_graph_pass_test, SigmoidMulFusionPassAcceptsReversedMulInputs) {
     ASSERT_NE(fused, nullptr);
     EXPECT_EQ(fused->op_type, "SiLU");
     EXPECT_EQ(fused->inputs, std::vector<std::string>({"input"}));
+}
+
+TEST(static_graph_pass_test, IdentityEliminationPassRemovesInteriorIdentity) {
+    StaticGraph graph;
+    ASSERT_EQ(graph.SetModel(BuildIdentityRelayModelDesc(false)), 0);
+    BindIdentityRelayInputs(&graph);
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<IdentityEliminationPass>());
+    graph.SetPassManager(pass_manager);
+
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+    EXPECT_EQ(graph.NodeSize(), 1U);
+    EXPECT_EQ(graph.GetNode("identity0"), nullptr);
+    const auto* relu = graph.GetNode("relu0");
+    ASSERT_NE(relu, nullptr);
+    EXPECT_EQ(relu->inputs, std::vector<std::string>({"input"}));
+}
+
+TEST(static_graph_pass_test, IdentityEliminationPassPreservesGraphOutputIdentity) {
+    StaticGraph graph;
+    ASSERT_EQ(graph.SetModel(BuildIdentityRelayModelDesc(true)), 0);
+    BindIdentityRelayInputs(&graph);
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<IdentityEliminationPass>());
+    graph.SetPassManager(pass_manager);
+
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+    EXPECT_EQ(graph.NodeSize(), 1U);
+    EXPECT_NE(graph.GetNode("identity0"), nullptr);
+}
+
+TEST(static_graph_pass_test, MatMulAddFusionPassRewritesToGemm) {
+    StaticGraph graph;
+    ASSERT_EQ(graph.SetModel(BuildMatMulAddModelDesc(false)), 0);
+    BindMatMulAddInputs(&graph);
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<MatMulAddFusionPass>());
+    graph.SetPassManager(pass_manager);
+
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+    EXPECT_EQ(graph.NodeSize(), 1U);
+    EXPECT_EQ(graph.GetNode("matmul0"), nullptr);
+    const auto* fused = graph.GetNode("add0");
+    ASSERT_NE(fused, nullptr);
+    EXPECT_EQ(fused->op_type, "Gemm");
+    EXPECT_EQ(fused->inputs, (std::vector<std::string>{"a", "b", "bias"}));
+}
+
+TEST(static_graph_pass_test, MatMulAddFusionPassSkipsWhenMatMulOutputIsGraphOutput) {
+    StaticGraph graph;
+    ASSERT_EQ(graph.SetModel(BuildMatMulAddModelDesc(true)), 0);
+    BindMatMulAddInputs(&graph);
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<MatMulAddFusionPass>());
+    graph.SetPassManager(pass_manager);
+
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+    EXPECT_NE(graph.GetNode("matmul0"), nullptr);
+    const auto* add = graph.GetNode("add0");
+    ASSERT_NE(add, nullptr);
+    EXPECT_EQ(add->op_type, "Add");
+}
+
+TEST(static_graph_pass_test, DefaultPassManagerIncludesGeneralFusionPasses) {
+    auto pass_manager = feather::CreateDefaultPassManager();
+    ASSERT_NE(pass_manager, nullptr);
+    EXPECT_EQ(pass_manager->PassCount(), 6U);
+}
+
+TEST(static_graph_pass_test, YoloPassManagerAddsDecodeFusionOnTopOfDefaultPasses) {
+    auto pass_manager = feather::CreateYoloPassManager();
+    ASSERT_NE(pass_manager, nullptr);
+    EXPECT_EQ(pass_manager->PassCount(), 8U);
+}
+
+TEST(static_graph_pass_test, ReshapeChainEliminationPassRemovesInnerReshape) {
+    StaticGraph graph;
+    ASSERT_EQ(graph.SetModel(BuildReshapeChainModelDesc(false)), 0);
+    BindNoOpGraphInputs(&graph, {2, 3});
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<ReshapeChainEliminationPass>());
+    graph.SetPassManager(pass_manager);
+
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+    EXPECT_EQ(graph.GetNode("reshape0"), nullptr);
+    const auto* reshape1 = graph.GetNode("reshape1");
+    ASSERT_NE(reshape1, nullptr);
+    EXPECT_EQ(reshape1->inputs, std::vector<std::string>({"input"}));
+}
+
+TEST(static_graph_pass_test, ReshapeChainEliminationPassPreservesGraphOutputIntermediate) {
+    StaticGraph graph;
+    ASSERT_EQ(graph.SetModel(BuildReshapeChainModelDesc(true)), 0);
+    BindNoOpGraphInputs(&graph, {2, 3});
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<ReshapeChainEliminationPass>());
+    graph.SetPassManager(pass_manager);
+
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+    EXPECT_NE(graph.GetNode("reshape0"), nullptr);
+    EXPECT_NE(graph.GetNode("reshape1"), nullptr);
+}
+
+TEST(static_graph_pass_test, NoOpEliminationPassRemovesSameShapeReshape) {
+    StaticGraph graph;
+    ASSERT_EQ(graph.SetModel(BuildNoOpReshapeModelDesc()), 0);
+    BindNoOpGraphInputs(&graph, {2, 2});
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<NoOpEliminationPass>());
+    graph.SetPassManager(pass_manager);
+
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+    EXPECT_EQ(graph.GetNode("reshape0"), nullptr);
+    const auto* relu = graph.GetNode("relu0");
+    ASSERT_NE(relu, nullptr);
+    EXPECT_EQ(relu->inputs, std::vector<std::string>({"input"}));
+}
+
+TEST(static_graph_pass_test, NoOpEliminationPassRemovesIdentityTranspose) {
+    StaticGraph graph;
+    ASSERT_EQ(graph.SetModel(BuildIdentityTransposeModelDesc()), 0);
+    BindNoOpGraphInputs(&graph, {1, 2, 3});
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<NoOpEliminationPass>());
+    graph.SetPassManager(pass_manager);
+
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+    EXPECT_EQ(graph.GetNode("transpose0"), nullptr);
+    const auto* relu = graph.GetNode("relu0");
+    ASSERT_NE(relu, nullptr);
+    EXPECT_EQ(relu->inputs, std::vector<std::string>({"input"}));
+}
+
+TEST(static_graph_pass_test, ApplyPassesUsesDefaultPassManagerWhenNotOverridden) {
+    StaticGraph graph;
+    ASSERT_EQ(graph.SetModel(BuildIdentityRelayModelDesc(false)), 0);
+    BindIdentityRelayInputs(&graph);
+    ASSERT_EQ(graph.Build(), 0);
+
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+    EXPECT_EQ(graph.GetNode("identity0"), nullptr);
+    const auto* relu = graph.GetNode("relu0");
+    ASSERT_NE(relu, nullptr);
+    EXPECT_EQ(relu->inputs, std::vector<std::string>({"input"}));
 }
 
 TEST(static_graph_pass_test, YoloDecodeFusionPassRewritesDecodeScalePattern) {

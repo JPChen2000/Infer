@@ -127,10 +127,19 @@ void RuntimeGraph::SetThreadCount(size_t count) {
     configured_thread_count_ = std::max<size_t>(1, count);
 }
 
+void RuntimeGraph::SetOutputNames(std::vector<std::string> output_names) {
+    output_names_.clear();
+    for (auto& name : output_names) {
+        output_names_.insert(std::move(name));
+    }
+}
+
 void RuntimeGraph::Clear() {
     nodes_.clear();
     tensors_.clear();
     node_index_by_name_.clear();
+    remaining_uses_.clear();
+    output_names_.clear();
     thread_pool_.reset();
     worker_count_ = 1;
     profiling_enabled_ = false;
@@ -152,6 +161,7 @@ int32_t RuntimeGraph::Run() {
         return status;
     }
     ResetPendingDependencies();
+    ResetRemainingUses();
     return RunSerial();
 }
 
@@ -231,6 +241,59 @@ void RuntimeGraph::ResetPendingDependencies() {
     }
 }
 
+void RuntimeGraph::ResetRemainingUses() {
+    remaining_uses_.clear();
+    for (const auto& node : nodes_) {
+        for (const auto& input_name : node.inputs) {
+            ++remaining_uses_[input_name];
+        }
+    }
+}
+
+bool RuntimeGraph::ShouldKeepTensorDevice(const std::string& value_name, const std::shared_ptr<Tensor>& tensor) const {
+    if (tensor == nullptr) {
+        return true;
+    }
+#ifdef FEATHER_WITH_CUDA
+    if (output_names_.find(value_name) != output_names_.end()) {
+        return true;
+    }
+    if (kernel::cuda_detail::IsTensorDevicePersistent(tensor.get())) {
+        return true;
+    }
+#else
+    (void)value_name;
+#endif
+    return false;
+}
+
+void RuntimeGraph::ReleaseUnusedInputs(const RuntimeNode& node) {
+#ifdef FEATHER_WITH_CUDA
+    for (const auto& input_name : node.inputs) {
+        auto it = remaining_uses_.find(input_name);
+        if (it == remaining_uses_.end()) {
+            continue;
+        }
+        if (it->second == 0) {
+            continue;
+        }
+        --it->second;
+        if (it->second != 0) {
+            continue;
+        }
+        auto tensor = GetTensor(input_name);
+        if (ShouldKeepTensorDevice(input_name, tensor)) {
+            continue;
+        }
+        if (tensor != nullptr) {
+            kernel::cuda_detail::ReleaseTensorDevice(tensor.get());
+        }
+    }
+#else
+    (void)node;
+#endif
+}
+
 int32_t RuntimeGraph::PrepareNodeForRun(const RuntimeNode& node) {
 #ifdef FEATHER_WITH_CUDA
     if (node.kernel_device == DeviceType::CUDA) {
@@ -282,6 +345,9 @@ int32_t RuntimeGraph::RunNode(size_t index) {
     status = FinalizeNodeRun(node, status);
     if (profiling_enabled_ && status == 0) {
         status = SynchronizeRuntimeNodeForProfiling(node);
+    }
+    if (status == 0) {
+        ReleaseUnusedInputs(node);
     }
     const auto end = std::chrono::steady_clock::now();
     RecordNodeProfile(node.name, node.op_type, std::chrono::duration<double, std::milli>(end - begin).count());

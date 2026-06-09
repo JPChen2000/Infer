@@ -168,7 +168,7 @@ void PackPointwiseWeightsOc8Fp32(const float* weight, const float* bias, int64_t
 int32_t ComputePointwiseConvPackedOc8X86Fp32(const float* packed_input, const float* packed_weight_oc8,
                                              const float* packed_bias_oc8, const float* weight, const float* bias,
                                              int64_t batch, int64_t output_spatial, int64_t in_c, int64_t out_c,
-                                             uint16_t* output) {
+                                             float* output) {
     if (packed_input == nullptr || packed_weight_oc8 == nullptr || packed_bias_oc8 == nullptr || weight == nullptr ||
         output == nullptr || batch <= 0 || output_spatial <= 0 || in_c <= 0 || out_c <= 0) {
         return -1;
@@ -176,6 +176,104 @@ int32_t ComputePointwiseConvPackedOc8X86Fp32(const float* packed_input, const fl
 
     const int64_t oc8_blocks = out_c / 8;
     const int64_t oc_tail_begin = oc8_blocks * 8;
+    const int64_t total_work_items = batch * output_spatial;
+
+    ParallelForPointwiseWorkItems(total_work_items, [&](int64_t begin, int64_t end) {
+        for (int64_t work_index = begin; work_index < end; ++work_index) {
+            const int64_t n = work_index / output_spatial;
+            const int64_t spatial_idx = work_index % output_spatial;
+            const float* input_row = packed_input + ((n * output_spatial + spatial_idx) * in_c);
+
+            for (int64_t block = 0; block < oc8_blocks; ++block) {
+                __m256 acc = _mm256_loadu_ps(packed_bias_oc8 + block * 8);
+                const float* block_weight = packed_weight_oc8 + block * in_c * 8;
+                for (int64_t ic = 0; ic < in_c; ++ic) {
+                    const __m256 weight_vec = _mm256_loadu_ps(block_weight + ic * 8);
+                    const __m256 input_vec = _mm256_set1_ps(input_row[ic]);
+                    acc = _mm256_fmadd_ps(input_vec, weight_vec, acc);
+                }
+                alignas(32) float tmp[8];
+                _mm256_store_ps(tmp, acc);
+                float* out_ptr = output + ((n * out_c + block * 8) * output_spatial) + spatial_idx;
+                for (int lane = 0; lane < 8; ++lane) {
+                    out_ptr[static_cast<int64_t>(lane) * output_spatial] = tmp[lane];
+                }
+            }
+
+            for (int64_t oc = oc_tail_begin; oc < out_c; ++oc) {
+                const float* weight_row = weight + oc * in_c;
+                float sum = bias != nullptr ? bias[oc] : 0.0f;
+                for (int64_t ic = 0; ic < in_c; ++ic) {
+                    sum += input_row[ic] * weight_row[ic];
+                }
+                output[((n * out_c + oc) * output_spatial) + spatial_idx] = sum;
+            }
+        }
+    });
+    return 0;
+}
+
+int32_t ComputePointwiseConvPackedOc8NhwcX86Fp32(const float* packed_input, const float* packed_weight_oc8,
+                                                 const float* packed_bias_oc8, const float* weight, const float* bias,
+                                                 int64_t batch, int64_t output_spatial, int64_t in_c, int64_t out_c,
+                                                 float* output) {
+    if (packed_input == nullptr || weight == nullptr || output == nullptr || batch <= 0 || output_spatial <= 0 ||
+        in_c <= 0 || out_c <= 0) {
+        return -1;
+    }
+
+    const int64_t oc8_blocks = out_c / 8;
+    const int64_t oc_tail_begin = oc8_blocks * 8;
+    if (oc8_blocks > 0 && (packed_weight_oc8 == nullptr || packed_bias_oc8 == nullptr)) {
+        return -1;
+    }
+    const int64_t total_work_items = batch * output_spatial;
+
+    ParallelForPointwiseWorkItems(total_work_items, [&](int64_t begin, int64_t end) {
+        for (int64_t work_index = begin; work_index < end; ++work_index) {
+            const int64_t n = work_index / output_spatial;
+            const int64_t spatial_idx = work_index % output_spatial;
+            const float* input_row = packed_input + ((n * output_spatial + spatial_idx) * in_c);
+            float* out_row = output + ((n * output_spatial + spatial_idx) * out_c);
+
+            for (int64_t block = 0; block < oc8_blocks; ++block) {
+                __m256 acc = _mm256_loadu_ps(packed_bias_oc8 + block * 8);
+                const float* block_weight = packed_weight_oc8 + block * in_c * 8;
+                for (int64_t ic = 0; ic < in_c; ++ic) {
+                    const __m256 weight_vec = _mm256_loadu_ps(block_weight + ic * 8);
+                    const __m256 input_vec = _mm256_set1_ps(input_row[ic]);
+                    acc = _mm256_fmadd_ps(input_vec, weight_vec, acc);
+                }
+                _mm256_storeu_ps(out_row + block * 8, acc);
+            }
+
+            for (int64_t oc = oc_tail_begin; oc < out_c; ++oc) {
+                const float* weight_row = weight + oc * in_c;
+                float sum = bias != nullptr ? bias[oc] : 0.0f;
+                for (int64_t ic = 0; ic < in_c; ++ic) {
+                    sum += input_row[ic] * weight_row[ic];
+                }
+                out_row[oc] = sum;
+            }
+        }
+    });
+    return 0;
+}
+
+int32_t ComputePointwiseConvPackedOc8X86Fp32(const float* packed_input, const float* packed_weight_oc8,
+                                             const float* packed_bias_oc8, const float* weight, const float* bias,
+                                             int64_t batch, int64_t output_spatial, int64_t in_c, int64_t out_c,
+                                             uint16_t* output) {
+    if (packed_input == nullptr || weight == nullptr || output == nullptr || batch <= 0 || output_spatial <= 0 ||
+        in_c <= 0 || out_c <= 0) {
+        return -1;
+    }
+
+    const int64_t oc8_blocks = out_c / 8;
+    const int64_t oc_tail_begin = oc8_blocks * 8;
+    if (oc8_blocks > 0 && (packed_weight_oc8 == nullptr || packed_bias_oc8 == nullptr)) {
+        return -1;
+    }
     const int64_t total_work_items = batch * output_spatial;
 
     ParallelForPointwiseWorkItems(total_work_items, [&](int64_t begin, int64_t end) {
@@ -203,6 +301,57 @@ int32_t ComputePointwiseConvPackedOc8X86Fp32(const float* packed_input, const fl
                     sum += input_row[ic] * weight_row[ic];
                 }
                 output[((n * out_c + oc) * output_spatial) + spatial_idx] = FloatToHalf(sum);
+            }
+        }
+    });
+    return 0;
+}
+
+int32_t ComputePointwiseConvPackedOc8NhwcX86Fp32(const float* packed_input, const float* packed_weight_oc8,
+                                                 const float* packed_bias_oc8, const float* weight, const float* bias,
+                                                 int64_t batch, int64_t output_spatial, int64_t in_c, int64_t out_c,
+                                                 uint16_t* output) {
+    if (packed_input == nullptr || weight == nullptr || output == nullptr || batch <= 0 || output_spatial <= 0 ||
+        in_c <= 0 || out_c <= 0) {
+        return -1;
+    }
+
+    const int64_t oc8_blocks = out_c / 8;
+    const int64_t oc_tail_begin = oc8_blocks * 8;
+    if (oc8_blocks > 0 && (packed_weight_oc8 == nullptr || packed_bias_oc8 == nullptr)) {
+        return -1;
+    }
+    const int64_t total_work_items = batch * output_spatial;
+
+    ParallelForPointwiseWorkItems(total_work_items, [&](int64_t begin, int64_t end) {
+        for (int64_t work_index = begin; work_index < end; ++work_index) {
+            const int64_t n = work_index / output_spatial;
+            const int64_t spatial_idx = work_index % output_spatial;
+            const float* input_row = packed_input + ((n * output_spatial + spatial_idx) * in_c);
+            uint16_t* out_row = output + ((n * output_spatial + spatial_idx) * out_c);
+
+            for (int64_t block = 0; block < oc8_blocks; ++block) {
+                __m256 acc = _mm256_loadu_ps(packed_bias_oc8 + block * 8);
+                const float* block_weight = packed_weight_oc8 + block * in_c * 8;
+                for (int64_t ic = 0; ic < in_c; ++ic) {
+                    const __m256 weight_vec = _mm256_loadu_ps(block_weight + ic * 8);
+                    const __m256 input_vec = _mm256_set1_ps(input_row[ic]);
+                    acc = _mm256_fmadd_ps(input_vec, weight_vec, acc);
+                }
+                alignas(32) float tmp[8];
+                _mm256_store_ps(tmp, acc);
+                for (int lane = 0; lane < 8; ++lane) {
+                    out_row[block * 8 + lane] = FloatToHalf(tmp[lane]);
+                }
+            }
+
+            for (int64_t oc = oc_tail_begin; oc < out_c; ++oc) {
+                const float* weight_row = weight + oc * in_c;
+                float sum = bias != nullptr ? bias[oc] : 0.0f;
+                for (int64_t ic = 0; ic < in_c; ++ic) {
+                    sum += input_row[ic] * weight_row[ic];
+                }
+                out_row[oc] = FloatToHalf(sum);
             }
         }
     });

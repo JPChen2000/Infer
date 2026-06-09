@@ -6,6 +6,7 @@
 
 #include "core/kernel.h"
 #include "core/operator.h"
+#include "core/operator_registry.h"
 #include "core/tensor.h"
 #include "src/kernel/yolo_decode.h"
 #include "src/operator/params.h"
@@ -110,6 +111,68 @@ TEST(yolo_decode_op_test, YoloDecodeRunsOnCommonFP16) {
     ASSERT_EQ(op->InferOutputShapes(), 0);
 
     auto kernel = KernelDispatcher::instance().create(DeviceType::COMMON, DataType::FP16, "YoloDecode");
+    ASSERT_NE(kernel, nullptr);
+    op->AttachKernel(std::move(kernel));
+    ASSERT_EQ(op->Run(), 0);
+
+    const auto expected = ExpectedDecoded();
+    ASSERT_EQ(param.out->dims().data(), std::vector<int64_t>({1, 2, 6}));
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_NEAR(feather::HalfToFloat(param.out->data<uint16_t>()[i]), expected[i], 0.2f);
+    }
+}
+
+TEST(yolo_decode_op_test, YoloDecodeRunsOnCommonFP32Nhwc) {
+    auto param = MakeYoloDecodeParam(false);
+    param.input = MakeTensor({
+        0.0f, 0.0f, 0.0f, 0.0f, 1.0f, -1.0f,
+        2.0f, -2.0f, 0.5f, -0.5f, 0.0f, 4.0f,
+    }, {1, 1, 1, 12});
+    param.input->set_layout(feather::DataLayout::NHWC);
+    auto op = std::make_shared<feather::operators::YoloDecodeOp>("decode_nhwc", param);
+    ASSERT_EQ(op->CheckShape(), 0);
+    ASSERT_EQ(op->InferOutputShapes(), 0);
+
+    auto kernel = feather::CreateKernelForTensor(DeviceType::COMMON, "YoloDecode",
+                                                 {param.input, param.xy_scale, param.grid, param.stride,
+                                                  param.wh_scale, param.anchor_grid, param.out},
+                                                 DataType::FP32);
+    ASSERT_NE(kernel, nullptr);
+    op->AttachKernel(std::move(kernel));
+    ASSERT_EQ(op->Run(), 0);
+
+    const auto expected = ExpectedDecoded();
+    ASSERT_EQ(param.out->dims().data(), std::vector<int64_t>({1, 2, 6}));
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_NEAR(param.out->data<float>()[i], expected[i], 1e-5f);
+    }
+}
+
+TEST(yolo_decode_op_test, YoloDecodeRunsOnX86FP32) {
+    auto param = MakeYoloDecodeParam(false);
+    auto op = std::make_shared<feather::operators::YoloDecodeOp>("decode_x86_fp32", param);
+    ASSERT_EQ(op->CheckShape(), 0);
+    ASSERT_EQ(op->InferOutputShapes(), 0);
+
+    auto kernel = KernelDispatcher::instance().create(DeviceType::X86, DataType::FP32, "YoloDecode");
+    ASSERT_NE(kernel, nullptr);
+    op->AttachKernel(std::move(kernel));
+    ASSERT_EQ(op->Run(), 0);
+
+    const auto expected = ExpectedDecoded();
+    ASSERT_EQ(param.out->dims().data(), std::vector<int64_t>({1, 2, 6}));
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_NEAR(param.out->data<float>()[i], expected[i], 1e-5f);
+    }
+}
+
+TEST(yolo_decode_op_test, YoloDecodeRunsOnX86FP16) {
+    auto param = MakeYoloDecodeParam(true);
+    auto op = std::make_shared<feather::operators::YoloDecodeOp>("decode_x86_fp16", param);
+    ASSERT_EQ(op->CheckShape(), 0);
+    ASSERT_EQ(op->InferOutputShapes(), 0);
+
+    auto kernel = KernelDispatcher::instance().create(DeviceType::X86, DataType::FP16, "YoloDecode");
     ASSERT_NE(kernel, nullptr);
     op->AttachKernel(std::move(kernel));
     ASSERT_EQ(op->Run(), 0);

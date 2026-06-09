@@ -5,6 +5,7 @@
 
 #include "core/kernel.h"
 #include "core/operator.h"
+#include "core/operator_registry.h"
 #include "core/tensor.h"
 #include "util/fp16.h"
 #include "src/operator/params.h"
@@ -120,4 +121,80 @@ TEST(pool_op_test, MaxPoolRunsOnX86FP16) {
     for (size_t i = 0; i < expected.size(); ++i) {
         EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[i]), expected[i], 1e-3f);
     }
+}
+
+TEST(pool_op_test, MaxPoolRunsOnX86Nhwc) {
+    auto input = std::make_shared<Tensor>();
+    input->Assign<float>({
+        1, 10,
+        2, 20,
+        3, 30,
+        4, 40,
+    }, {1, 2, 2, 2});
+    input->set_layout(feather::DataLayout::NHWC);
+
+    auto out = std::make_shared<Tensor>(std::vector<int64_t>{1, 1, 1, 2});
+    out->set_layout(feather::DataLayout::NHWC);
+
+    PoolParam param{};
+    param.input = input;
+    param.out = out;
+    param.kernel_h = 2;
+    param.kernel_w = 2;
+    param.stride_h = 1;
+    param.stride_w = 1;
+    param.pad_h = 0;
+    param.pad_w = 0;
+
+    std::shared_ptr<OpBase> op = std::make_shared<feather::operators::MaxPoolOp>("maxpool_nhwc", param);
+    ASSERT_EQ(op->CheckShape(), 0);
+    ASSERT_EQ(op->InferOutputShapes(), 0);
+
+    auto kernel = feather::CreateKernelForTensor(DeviceType::X86, "MaxPool", {input, out}, DataType::FP32);
+    ASSERT_NE(kernel, nullptr);
+    op->AttachKernel(std::move(kernel));
+    ASSERT_EQ(op->Run(), 0);
+
+    EXPECT_EQ(out->dims().data(), std::vector<int64_t>({1, 1, 1, 2}));
+    EXPECT_EQ(out->layout(), feather::DataLayout::NHWC);
+    EXPECT_FLOAT_EQ(out->data<float>()[0], 4.0f);
+    EXPECT_FLOAT_EQ(out->data<float>()[1], 40.0f);
+}
+
+TEST(pool_op_test, MaxPoolRunsOnCommonNhwc) {
+    auto input = std::make_shared<Tensor>();
+    input->Assign<float>({
+        1, 10,
+        2, 20,
+        3, 30,
+        4, 40,
+    }, {1, 2, 2, 2});
+    input->set_layout(feather::DataLayout::NHWC);
+
+    auto out = std::make_shared<Tensor>(std::vector<int64_t>{1, 1, 1, 2});
+    out->set_layout(feather::DataLayout::NHWC);
+
+    PoolParam param{};
+    param.input = input;
+    param.out = out;
+    param.kernel_h = 2;
+    param.kernel_w = 2;
+    param.stride_h = 1;
+    param.stride_w = 1;
+    param.pad_h = 0;
+    param.pad_w = 0;
+
+    std::shared_ptr<OpBase> op = std::make_shared<feather::operators::MaxPoolOp>("maxpool_common_nhwc", param);
+    ASSERT_EQ(op->CheckShape(), 0);
+    ASSERT_EQ(op->InferOutputShapes(), 0);
+
+    auto kernel = feather::CreateKernelForTensor(DeviceType::COMMON, "MaxPool", {input, out}, DataType::FP32);
+    ASSERT_NE(kernel, nullptr);
+    op->AttachKernel(std::move(kernel));
+    ASSERT_EQ(op->Run(), 0);
+
+    EXPECT_EQ(out->dims().data(), std::vector<int64_t>({1, 1, 1, 2}));
+    EXPECT_EQ(out->layout(), feather::DataLayout::NHWC);
+    EXPECT_FLOAT_EQ(out->data<float>()[0], 4.0f);
+    EXPECT_FLOAT_EQ(out->data<float>()[1], 40.0f);
 }

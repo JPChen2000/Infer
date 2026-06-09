@@ -56,17 +56,22 @@ endif()
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 set(SRC "src/core/memory.cc"
-    "src/core/dead_node_elimination_pass.cc"
     "src/core/dim.cc"
-    "src/core/graph_pass.cc"
-    "src/core/sigmoid_mul_fusion_pass.cc"
-    "src/core/yolo_decode_fusion_pass.cc"
     "src/core/tensor.cc"
     "src/core/graph.cc"
     "src/core/graph_lowering.cc"
     "src/core/operator_registry.cc"
     "src/core/static_graph.cc"
+    "src/pass/dead_node_elimination_pass.cc"
+    "src/pass/graph_pass.cc"
+    "src/pass/identity_elimination_pass.cc"
+    "src/pass/matmul_add_fusion_pass.cc"
+    "src/pass/no_op_elimination_pass.cc"
+    "src/pass/reshape_chain_elimination_pass.cc"
+    "src/pass/sigmoid_mul_fusion_pass.cc"
+    "src/pass/yolo_decode_fusion_pass.cc"
     "src/model/model_io.cc"
+    "src/model/layout_transform.cc"
     "src/model/weight_store.cc"
     "src/operator/register_all.cc"
     "src/operator/conv2d_op.cc"
@@ -136,6 +141,7 @@ set(SRC "src/core/memory.cc"
     "src/kernel/x86/split.cc"
     "src/kernel/x86/softmax.cc"
     "src/kernel/x86/transpose.cc"
+    "src/kernel/x86/yolo_decode.cc"
     "src/demo/image_io.cc"
     "src/demo/yolov5_postprocess.cc"
     "src/demo/yolov5_runner.cc")
@@ -176,7 +182,7 @@ target_link_libraries(infer
     )
 if (FEATHER_WITH_CUDA)
     target_compile_definitions(infer PUBLIC FEATHER_WITH_CUDA)
-    target_link_libraries(infer PUBLIC CUDA::cudart)
+    target_link_libraries(infer PUBLIC CUDA::cudart CUDA::cublas)
     set_target_properties(infer PROPERTIES
         CUDA_STANDARD 17
         CUDA_STANDARD_REQUIRED ON
@@ -185,6 +191,7 @@ endif()
 
 add_executable(yolov5_demo demo/yolov5_infer_demo.cc)
 add_executable(yolov5_benchmark_demo demo/yolov5_benchmark_demo.cc)
+add_executable(fth_layout_convert demo/fth_layout_convert_demo.cc)
 add_executable(x86_conv_benchmark_demo demo/x86_conv_benchmark_demo.cc)
 add_executable(x86_linear_benchmark_demo demo/x86_linear_benchmark_demo.cc)
 add_executable(x86_softmax_benchmark_demo demo/x86_softmax_benchmark_demo.cc)
@@ -220,6 +227,7 @@ set_source_files_properties(
     src/kernel/x86/split.cc
     src/kernel/x86/softmax.cc
     src/kernel/x86/transpose.cc
+    src/kernel/x86/yolo_decode.cc
     PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-mf16c")
 target_include_directories(yolov5_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR})
@@ -227,6 +235,9 @@ target_link_libraries(yolov5_demo infer)
 target_include_directories(yolov5_benchmark_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(yolov5_benchmark_demo infer CONAN_PKG::benchmark)
+target_include_directories(fth_layout_convert PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(fth_layout_convert infer)
 target_include_directories(x86_conv_benchmark_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(x86_conv_benchmark_demo infer CONAN_PKG::benchmark)

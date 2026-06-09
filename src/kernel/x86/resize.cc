@@ -71,14 +71,21 @@ int32_t ComputeResizeRaw(feather::operators::ResizeParam* param, DataType dtype)
     param->out->set_data_type(dtype);
 
     if (in_dims.size() == 4) {
-        const int64_t batch = in_dims[0];
-        const int64_t channels = in_dims[1];
-        const int64_t in_h = in_dims[2];
-        const int64_t in_w = in_dims[3];
-        const int64_t out_h = out_dims[2];
-        const int64_t out_w = out_dims[3];
-        const float scale_h = param->scales[2];
-        const float scale_w = param->scales[3];
+        ImageShape4D input_shape;
+        ImageShape4D output_shape;
+        if (!DecodeImageShape4D(in_dims, param->input->layout(), &input_shape) ||
+            !DecodeImageShape4D(out_dims, param->out->layout(), &output_shape)) {
+            return -1;
+        }
+        const DataLayout layout = NormalizeDataLayout(param->input->layout());
+        const int64_t batch = input_shape.n;
+        const int64_t channels = input_shape.c;
+        const int64_t in_h = input_shape.h;
+        const int64_t in_w = input_shape.w;
+        const int64_t out_h = output_shape.h;
+        const int64_t out_w = output_shape.w;
+        const float scale_h = param->scales[static_cast<size_t>(HeightAxisForLayout(layout))];
+        const float scale_w = param->scales[static_cast<size_t>(WidthAxisForLayout(layout))];
         for (int64_t n = 0; n < batch; ++n) {
             for (int64_t c = 0; c < channels; ++c) {
                 for (int64_t oh = 0; oh < out_h; ++oh) {
@@ -87,8 +94,8 @@ int32_t ComputeResizeRaw(feather::operators::ResizeParam* param, DataType dtype)
                     for (int64_t ow = 0; ow < out_w; ++ow) {
                         const int64_t iw = std::max<int64_t>(
                             0, std::min<int64_t>(static_cast<int64_t>(static_cast<double>(ow) / scale_w), in_w - 1));
-                        const int64_t input_offset = ((n * channels + c) * in_h + ih) * in_w + iw;
-                        const int64_t output_offset = ((n * channels + c) * out_h + oh) * out_w + ow;
+                        const int64_t input_offset = OffsetForImage4D(layout, n, c, ih, iw, channels, in_h, in_w);
+                        const int64_t output_offset = OffsetForImage4D(layout, n, c, oh, ow, channels, out_h, out_w);
                         output[output_offset] = input[input_offset];
                     }
                 }

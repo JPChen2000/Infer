@@ -27,6 +27,8 @@ DTYPE_MAP = {
     onnx.TensorProto.INT64: 6,
 }
 
+LAYOUT_NCHW = 0
+LAYOUT_NHWC = 1
 LAYOUT_ND = 2
 
 
@@ -225,10 +227,47 @@ def get_attr(node: onnx.NodeProto, name: str, default: Any = None) -> Any:
 def make_tensor_desc(name: str, dims: List[int], dtype: int) -> TensorDesc:
     return TensorDesc(name=name, dims=[int(v) for v in dims], data_type=dtype)
 
+def permute_nchw_to_nhwc_4d(dims: List[int]) -> List[int]:
+    if len(dims) != 4:
+        return [int(v) for v in dims]
+    return [int(dims[0]), int(dims[2]), int(dims[3]), int(dims[1])]
 
-def convert_model(input_path: str, output_path: str) -> None:
+
+def remap_axis_nchw_to_nhwc(axis: int, rank: int) -> int:
+    if rank != 4:
+        return int(axis)
+    normalized = axis if axis >= 0 else axis + rank
+    mapping = {0: 0, 1: 3, 2: 1, 3: 2}
+    return mapping.get(normalized, normalized)
+
+
+def remap_scales_nchw_to_nhwc(scales: List[float]) -> List[float]:
+    if len(scales) != 4:
+        return [float(v) for v in scales]
+    return [float(scales[0]), float(scales[2]), float(scales[3]), float(scales[1])]
+
+
+def remap_yolo_head_shape_nchw_to_nhwc(shape: List[int]) -> List[int]:
+    if len(shape) == 5 and shape[1] > 0 and shape[2] > 0 and shape[3] > 0 and shape[4] > 0:
+        return [int(shape[0]), int(shape[3]), int(shape[4]), int(shape[1]), int(shape[2])]
+    return [int(v) for v in shape]
+
+
+def should_mark_nhwc_tensor(name: str, dims: List[int], graph_inputs: List[str], graph_outputs: List[str],
+                            op_type_by_output: Dict[str, str]) -> bool:
+    if len(dims) != 4:
+        return False
+    if name in graph_inputs:
+        return True
+    if op_type_by_output.get(name) in {"Conv", "MaxPool", "Resize", "Sigmoid", "Mul", "Add", "Concat"}:
+        return True
+    return False
+
+
+def convert_model(input_path: str, output_path: str, layout: str = "nchw") -> None:
     model = onnx.load(input_path)
     inferred = shape_inference.infer_shapes(model)
+    emit_nhwc = layout.lower() == "nhwc"
 
     value_infos: Dict[str, Tuple[List[int], int]] = {}
     for value in list(inferred.graph.input) + list(inferred.graph.output) + list(inferred.graph.value_info):
@@ -247,6 +286,12 @@ def convert_model(input_path: str, output_path: str) -> None:
             const_value = node_constant_to_array(node)
             constants[const_name] = const_value
             value_infos[const_name] = (list(const_value.shape if const_value.shape else [1]), dtype_from_numpy(np.asarray(const_value).reshape(-1)[:1] if np.asarray(const_value).shape == () else np.asarray(const_value)))
+
+    op_type_by_output: Dict[str, str] = {}
+    for node in inferred.graph.node:
+        for output_name in node.output:
+            if output_name:
+                op_type_by_output[output_name] = node.op_type
 
     values: Dict[str, ValueDesc] = {}
     weights: Dict[str, bytes] = {}
@@ -374,6 +419,37 @@ def convert_model(input_path: str, output_path: str) -> None:
     for output_name in graph_outputs:
         ensure_value(output_name, constant=False)
 
+    if emit_nhwc:
+        for value in values.values():
+            if should_mark_nhwc_tensor(value.tensor.name, value.tensor.dims, graph_inputs, graph_outputs, op_type_by_output):
+                value.tensor.dims = permute_nchw_to_nhwc_4d(value.tensor.dims)
+                value.tensor.layout = LAYOUT_NHWC
+
+        for node in nodes:
+            output_dims = []
+            if node.outputs and node.outputs[0] in values:
+                output_dims = values[node.outputs[0]].tensor.dims
+            if node.op_type == "Concat":
+                rank = len(values[node.inputs[0]].tensor.dims) if node.inputs and node.inputs[0] in values else 0
+                if "axis" in node.attributes:
+                    node.attributes["axis"] = remap_axis_nchw_to_nhwc(int(node.attributes["axis"]), rank)
+            elif node.op_type == "Split":
+                rank = len(values[node.inputs[0]].tensor.dims) if node.inputs and node.inputs[0] in values else 0
+                if "axis" in node.attributes:
+                    node.attributes["axis"] = remap_axis_nchw_to_nhwc(int(node.attributes["axis"]), rank)
+            elif node.op_type == "Resize":
+                scales = node.attributes.get("scales")
+                if isinstance(scales, list):
+                    node.attributes["scales"] = remap_scales_nchw_to_nhwc(scales)
+            elif node.op_type == "Transpose":
+                perm = node.attributes.get("perm")
+                if perm == [0, 1, 3, 4, 2]:
+                    node.attributes["perm"] = [0, 3, 1, 2, 4]
+            elif node.op_type == "Reshape":
+                shape = node.attributes.get("shape")
+                if isinstance(shape, list):
+                    node.attributes["shape"] = remap_yolo_head_shape_nchw_to_nhwc(shape)
+
     value_list = list(values.values())
 
     for _ in range(4):
@@ -427,8 +503,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Convert a YOLOv5-style ONNX model into Feather .fth format")
     parser.add_argument("--input", required=True, help="Path to input ONNX model")
     parser.add_argument("--output", required=True, help="Path to output .fth model")
+    parser.add_argument("--layout", choices=["nchw", "nhwc"], default="nchw",
+                        help="Target image layout recorded in the exported Feather model")
     args = parser.parse_args()
-    convert_model(args.input, args.output)
+    convert_model(args.input, args.output, args.layout)
 
 
 if __name__ == "__main__":

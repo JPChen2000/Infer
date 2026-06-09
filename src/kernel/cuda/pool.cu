@@ -28,7 +28,7 @@ bool g_cuda_pool_kernels_registered = []() {
 template <typename T, bool IsMax>
 __global__ void PoolKernelCuda(const T* input, T* out, int64_t batch, int64_t channels, int64_t in_h, int64_t in_w,
                                int64_t out_h, int64_t out_w, int kernel_h, int kernel_w, int stride_h,
-                               int stride_w, int pad_h, int pad_w, bool is_nchw) {
+                               int stride_w, int pad_h, int pad_w, bool is_channel_last) {
     const int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     const int64_t total = batch * channels * out_h * out_w;
     if (idx >= total) {
@@ -36,8 +36,8 @@ __global__ void PoolKernelCuda(const T* input, T* out, int64_t batch, int64_t ch
     }
     const int64_t ow = idx % out_w;
     const int64_t oh = (idx / out_w) % out_h;
-    const int64_t c = is_nchw ? (idx / (out_w * out_h)) % channels : 0;
-    const int64_t n = is_nchw ? idx / (channels * out_h * out_w) : 0;
+    const int64_t c = (idx / (out_w * out_h)) % channels;
+    const int64_t n = idx / (channels * out_h * out_w);
     float value = IsMax ? -3.4028234663852886e+38F : 0.0f;
     int count = 0;
     for (int kh = 0; kh < kernel_h; ++kh) {
@@ -50,7 +50,8 @@ __global__ void PoolKernelCuda(const T* input, T* out, int64_t batch, int64_t ch
             if (iw < 0 || iw >= in_w) {
                 continue;
             }
-            const int64_t input_offset = is_nchw ? ((n * channels + c) * in_h + ih) * in_w + iw : ih * in_w + iw;
+            const int64_t input_offset = is_channel_last ? ((n * in_h + ih) * in_w + iw) * channels + c
+                                                         : ((n * channels + c) * in_h + ih) * in_w + iw;
             const float input_value = cuda_detail::ReadDevice(input, input_offset);
             if constexpr (IsMax) {
                 value = fmaxf(value, input_value);
@@ -63,7 +64,8 @@ __global__ void PoolKernelCuda(const T* input, T* out, int64_t batch, int64_t ch
     if constexpr (!IsMax) {
         value = count == 0 ? 0.0f : value / static_cast<float>(count);
     }
-    cuda_detail::WriteDevice(out, idx, value);
+    const int64_t output_offset = is_channel_last ? ((n * out_h + oh) * out_w + ow) * channels + c : idx;
+    cuda_detail::WriteDevice(out, output_offset, value);
 }
 
 template <DataType dtype, bool IsMax>
@@ -73,13 +75,21 @@ int RunPool(feather::operators::PoolParam* param, const char* timer_name) {
     if (param == nullptr || param->input == nullptr || param->out == nullptr) {
         return -1;
     }
-    const bool is_nchw = param->input->dims().size() == 4;
-    const int64_t batch = is_nchw ? param->input->dims()[0] : 1;
-    const int64_t channels = is_nchw ? param->input->dims()[1] : 1;
-    const int64_t in_h = param->input->dims()[is_nchw ? 2 : 0];
-    const int64_t in_w = param->input->dims()[is_nchw ? 3 : 1];
-    const int64_t out_h = param->out->dims()[is_nchw ? 2 : 0];
-    const int64_t out_w = param->out->dims()[is_nchw ? 3 : 1];
+    const bool is_4d = param->input->dims().size() == 4;
+    ImageShape4D input_shape;
+    ImageShape4D output_shape;
+    if (is_4d &&
+        (!DecodeImageShape4D(param->input->dims().data(), param->input->layout(), &input_shape) ||
+         !DecodeImageShape4D(param->out->dims().data(), param->out->layout(), &output_shape))) {
+        return -1;
+    }
+    const int64_t batch = is_4d ? input_shape.n : 1;
+    const int64_t channels = is_4d ? input_shape.c : 1;
+    const int64_t in_h = is_4d ? input_shape.h : param->input->dims()[0];
+    const int64_t in_w = is_4d ? input_shape.w : param->input->dims()[1];
+    const int64_t out_h = is_4d ? output_shape.h : param->out->dims()[0];
+    const int64_t out_w = is_4d ? output_shape.w : param->out->dims()[1];
+    const bool is_channel_last = is_4d && IsChannelLastLayout(param->input->layout());
     cuda_detail::DeviceBuffer<T> input;
     cuda_detail::DeviceBuffer<T> out;
     if (cuda_detail::CopyTensorToDevice(param->input.get(), &input) != 0 ||
@@ -89,7 +99,7 @@ int RunPool(feather::operators::PoolParam* param, const char* timer_name) {
     PoolKernelCuda<T, IsMax><<<static_cast<int>(cuda_detail::DivUp(param->out->numel(), cuda_detail::kCudaThreads)),
                               cuda_detail::kCudaThreads, 0, cuda_detail::InferenceStream()>>>(
         input.get(), out.get(), batch, channels, in_h, in_w, out_h, out_w, param->kernel_h, param->kernel_w,
-        param->stride_h, param->stride_w, param->pad_h, param->pad_w, is_nchw);
+        param->stride_h, param->stride_w, param->pad_h, param->pad_w, is_channel_last);
     if (cuda_detail::CudaCheck(cudaGetLastError()) != 0) {
         return -1;
     }

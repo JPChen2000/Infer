@@ -39,7 +39,8 @@ void Yolov5Benchmark(benchmark::State& state) {
 
 void PrintUsage() {
     std::cerr << "usage: yolov5_benchmark_demo --model <model.fth> --image <image> "
-                 "[--backend host|common|x86|cuda] [--conf-thresh 0.25] [--iou-thresh 0.45] <google-benchmark-args>\n";
+                 "[--backend host|common|x86|cuda] [--layout auto|nchw|nhwc] "
+                 "[--conf-thresh 0.25] [--iou-thresh 0.45] <google-benchmark-args>\n";
 }
 
 }  // namespace
@@ -57,8 +58,9 @@ int main(int argc, char** argv) {
     context.conf_thresh = options.conf_thresh;
     context.iou_thresh = options.iou_thresh;
 
-    if (context.runner.Load(options.model_path, options.backend) != 0) {
-        std::cerr << "failed to load model: " << options.model_path << '\n';
+    if (context.runner.Load(options.model_path, options.backend, options.layout) != 0) {
+        std::cerr << "failed to load model: " << options.model_path
+                  << " with layout=" << feather::demo::Yolov5LayoutOverrideName(options.layout) << '\n';
         return 1;
     }
     if (feather::demo::LoadImage(options.image_path, &context.image) != 0) {

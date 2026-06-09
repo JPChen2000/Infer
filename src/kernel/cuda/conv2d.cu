@@ -26,7 +26,8 @@ template <typename T>
 __global__ void Conv2D4DKernelCuda(const T* input, const T* weight, const T* bias, T* out, int64_t batch,
                                    int64_t in_c, int64_t in_h, int64_t in_w, int64_t out_c, int64_t kernel_c,
                                    int64_t kernel_h, int64_t kernel_w, int64_t out_h, int64_t out_w, int stride_h,
-                                   int stride_w, int pad_h, int pad_w, int dilation_h, int dilation_w, int group) {
+                                   int stride_w, int pad_h, int pad_w, int dilation_h, int dilation_w, int group,
+                                   bool channel_last) {
     const int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     const int64_t total = batch * out_c * out_h * out_w;
     if (idx >= total) {
@@ -52,20 +53,22 @@ __global__ void Conv2D4DKernelCuda(const T* input, const T* weight, const T* bia
                 if (iw < 0 || iw >= in_w) {
                     continue;
                 }
-                const int64_t input_offset = ((n * in_c + global_ic) * in_h + ih) * in_w + iw;
+                const int64_t input_offset = channel_last ? ((n * in_h + ih) * in_w + iw) * in_c + global_ic
+                                                          : ((n * in_c + global_ic) * in_h + ih) * in_w + iw;
                 const int64_t weight_offset = ((oc * kernel_c + ic) * kernel_h + kh) * kernel_w + kw;
                 sum += cuda_detail::ReadDevice(input, input_offset) * cuda_detail::ReadDevice(weight, weight_offset);
             }
         }
     }
-    cuda_detail::WriteDevice(out, idx, sum);
+    const int64_t out_offset = channel_last ? ((n * out_h + oh) * out_w + ow) * out_c + oc : idx;
+    cuda_detail::WriteDevice(out, out_offset, sum);
 }
 
 template <typename T>
 __global__ void PointwiseConv2D4DKernelCuda(const T* input, const T* weight, const T* bias, T* out, int64_t batch,
                                             int64_t in_c, int64_t in_h, int64_t in_w, int64_t out_c,
                                             int64_t kernel_c, int64_t out_h, int64_t out_w, int stride_h,
-                                            int stride_w, int pad_h, int pad_w, int group) {
+                                            int stride_w, int pad_h, int pad_w, int group, bool channel_last) {
     const int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     const int64_t total = batch * out_c * out_h * out_w;
     if (idx >= total) {
@@ -84,12 +87,14 @@ __global__ void PointwiseConv2D4DKernelCuda(const T* input, const T* weight, con
         const int64_t g = oc / out_c_per_group;
         for (int64_t ic = 0; ic < in_c_per_group; ++ic) {
             const int64_t global_ic = g * in_c_per_group + ic;
-            const int64_t input_offset = ((n * in_c + global_ic) * in_h + ih) * in_w + iw;
+            const int64_t input_offset = channel_last ? ((n * in_h + ih) * in_w + iw) * in_c + global_ic
+                                                      : ((n * in_c + global_ic) * in_h + ih) * in_w + iw;
             const int64_t weight_offset = oc * kernel_c + ic;
             sum += cuda_detail::ReadDevice(input, input_offset) * cuda_detail::ReadDevice(weight, weight_offset);
         }
     }
-    cuda_detail::WriteDevice(out, idx, sum);
+    const int64_t out_offset = channel_last ? ((n * out_h + oh) * out_w + ow) * out_c + oc : idx;
+    cuda_detail::WriteDevice(out, out_offset, sum);
 }
 
 template <typename T>
@@ -97,7 +102,7 @@ __global__ void DepthwiseConv2D4DKernelCuda(const T* input, const T* weight, con
                                             int64_t in_c, int64_t in_h, int64_t in_w, int64_t out_c,
                                             int64_t kernel_h, int64_t kernel_w, int64_t out_h, int64_t out_w,
                                             int stride_h, int stride_w, int pad_h, int pad_w, int dilation_h,
-                                            int dilation_w) {
+                                            int dilation_w, bool channel_last) {
     const int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     const int64_t total = batch * out_c * out_h * out_w;
     if (idx >= total) {
@@ -120,12 +125,14 @@ __global__ void DepthwiseConv2D4DKernelCuda(const T* input, const T* weight, con
             if (iw < 0 || iw >= in_w) {
                 continue;
             }
-            const int64_t input_offset = ((n * in_c + ic) * in_h + ih) * in_w + iw;
+            const int64_t input_offset = channel_last ? ((n * in_h + ih) * in_w + iw) * in_c + ic
+                                                      : ((n * in_c + ic) * in_h + ih) * in_w + iw;
             const int64_t weight_offset = ((oc * 1) * kernel_h + kh) * kernel_w + kw;
             sum += cuda_detail::ReadDevice(input, input_offset) * cuda_detail::ReadDevice(weight, weight_offset);
         }
     }
-    cuda_detail::WriteDevice(out, idx, sum);
+    const int64_t out_offset = channel_last ? ((n * out_h + oh) * out_w + ow) * out_c + oc : idx;
+    cuda_detail::WriteDevice(out, out_offset, sum);
 }
 
 template <typename T>
@@ -167,68 +174,95 @@ int RunConv2D(feather::operators::Conv2dParam* param, const char* timer_name) {
     if (param == nullptr || param->input == nullptr || param->w == nullptr || param->out == nullptr) {
         return -1;
     }
-    cuda_detail::DeviceBuffer<T> input;
-    cuda_detail::DeviceBuffer<T> weight;
-    cuda_detail::DeviceBuffer<T> bias;
-    cuda_detail::DeviceBuffer<T> out;
-    T* bias_ptr = nullptr;
-    if (cuda_detail::CopyTensorToDevice(param->input.get(), &input) != 0 ||
-        cuda_detail::CopyTensorToDevice(param->w.get(), &weight) != 0 ||
-        cuda_detail::AllocateTensorOnDevice(param->out.get(), &out) != 0) {
-        return -1;
-    }
-    if (param->bias != nullptr && param->bias->IsInitialized()) {
-        if (cuda_detail::CopyTensorToDevice(param->bias.get(), &bias) != 0) {
+    if (param->input->dims().size() == 2 && param->w->dims().size() == 2) {
+        cuda_detail::DeviceBuffer<T> input;
+        cuda_detail::DeviceBuffer<T> weight;
+        cuda_detail::DeviceBuffer<T> bias;
+        cuda_detail::DeviceBuffer<T> out;
+        T* bias_ptr = nullptr;
+        if (cuda_detail::CopyTensorToDevice(param->input.get(), &input) != 0 ||
+            cuda_detail::CopyTensorToDevice(param->w.get(), &weight) != 0 ||
+            cuda_detail::AllocateTensorOnDevice(param->out.get(), &out) != 0) {
             return -1;
         }
-        bias_ptr = bias.get();
-    }
-    if (param->input->dims().size() == 2 && param->w->dims().size() == 2) {
+        if (param->bias != nullptr && param->bias->IsInitialized()) {
+            if (cuda_detail::CopyTensorToDevice(param->bias.get(), &bias) != 0) {
+                return -1;
+            }
+            bias_ptr = bias.get();
+        }
         const int64_t out_numel = param->out->numel();
         Conv2D2DKernelCuda<T><<<static_cast<int>(cuda_detail::DivUp(out_numel, cuda_detail::kCudaThreads)),
                                cuda_detail::kCudaThreads, 0, cuda_detail::InferenceStream()>>>(
             input.get(), weight.get(), bias_ptr, out.get(), param->input->dims()[0], param->input->dims()[1],
             param->w->dims()[0], param->w->dims()[1], param->out->dims()[0], param->out->dims()[1],
             param->stride_h, param->stride_w, param->pad_h, param->pad_w, param->dilation_h, param->dilation_w);
+        if (cuda_detail::CudaCheck(cudaGetLastError()) != 0) {
+            return -1;
+        }
+        return cuda_detail::CopyDeviceToTensor(&out, param->out.get());
     } else if (param->input->dims().size() == 4 && param->w->dims().size() == 4) {
+        cuda_detail::DeviceBuffer<T> input;
+        cuda_detail::DeviceBuffer<T> weight;
+        cuda_detail::DeviceBuffer<T> bias;
+        cuda_detail::DeviceBuffer<T> out;
+        T* bias_ptr = nullptr;
+        if (cuda_detail::CopyTensorToDevice(param->input.get(), &input) != 0 ||
+            cuda_detail::CopyTensorToDevice(param->w.get(), &weight) != 0 ||
+            cuda_detail::AllocateTensorOnDevice(param->out.get(), &out) != 0) {
+            return -1;
+        }
+        if (param->bias != nullptr && param->bias->IsInitialized()) {
+            if (cuda_detail::CopyTensorToDevice(param->bias.get(), &bias) != 0) {
+                return -1;
+            }
+            bias_ptr = bias.get();
+        }
         const int64_t out_numel = param->out->numel();
+        ImageShape4D input_shape;
+        ImageShape4D output_shape;
+        if (!DecodeImageShape4D(param->input->dims().data(), param->input->layout(), &input_shape) ||
+            !DecodeImageShape4D(param->out->dims().data(), param->out->layout(), &output_shape)) {
+            return -1;
+        }
+        const bool channel_last = IsChannelLastLayout(param->input->layout());
         const auto group = std::max(1, param->group);
         const bool is_pointwise = param->w->dims()[2] == 1 && param->w->dims()[3] == 1 && param->dilation_h == 1 &&
                                   param->dilation_w == 1;
-        const bool is_depthwise = group == param->input->dims()[1] && param->w->dims()[1] == 1 &&
-                                  param->w->dims()[0] % param->input->dims()[1] == 0;
+        const bool is_depthwise = group == input_shape.c && param->w->dims()[1] == 1 &&
+                                  param->w->dims()[0] % input_shape.c == 0;
         if (is_pointwise) {
             PointwiseConv2D4DKernelCuda<T>
                 <<<static_cast<int>(cuda_detail::DivUp(out_numel, cuda_detail::kCudaThreads)),
                    cuda_detail::kCudaThreads, 0, cuda_detail::InferenceStream()>>>(
-                    input.get(), weight.get(), bias_ptr, out.get(), param->input->dims()[0], param->input->dims()[1],
-                    param->input->dims()[2], param->input->dims()[3], param->w->dims()[0], param->w->dims()[1],
-                    param->out->dims()[2], param->out->dims()[3], param->stride_h, param->stride_w, param->pad_h,
-                    param->pad_w, group);
+                    input.get(), weight.get(), bias_ptr, out.get(), input_shape.n, input_shape.c,
+                    input_shape.h, input_shape.w, param->w->dims()[0], param->w->dims()[1],
+                    output_shape.h, output_shape.w, param->stride_h, param->stride_w, param->pad_h,
+                    param->pad_w, group, channel_last);
         } else if (is_depthwise) {
             DepthwiseConv2D4DKernelCuda<T>
                 <<<static_cast<int>(cuda_detail::DivUp(out_numel, cuda_detail::kCudaThreads)),
                    cuda_detail::kCudaThreads, 0, cuda_detail::InferenceStream()>>>(
-                    input.get(), weight.get(), bias_ptr, out.get(), param->input->dims()[0], param->input->dims()[1],
-                    param->input->dims()[2], param->input->dims()[3], param->w->dims()[0], param->w->dims()[2],
-                    param->w->dims()[3], param->out->dims()[2], param->out->dims()[3], param->stride_h,
-                    param->stride_w, param->pad_h, param->pad_w, param->dilation_h, param->dilation_w);
+                    input.get(), weight.get(), bias_ptr, out.get(), input_shape.n, input_shape.c,
+                    input_shape.h, input_shape.w, param->w->dims()[0], param->w->dims()[2],
+                    param->w->dims()[3], output_shape.h, output_shape.w, param->stride_h,
+                    param->stride_w, param->pad_h, param->pad_w, param->dilation_h, param->dilation_w, channel_last);
         } else {
             Conv2D4DKernelCuda<T><<<static_cast<int>(cuda_detail::DivUp(out_numel, cuda_detail::kCudaThreads)),
                                    cuda_detail::kCudaThreads, 0, cuda_detail::InferenceStream()>>>(
-                input.get(), weight.get(), bias_ptr, out.get(), param->input->dims()[0], param->input->dims()[1],
-                param->input->dims()[2], param->input->dims()[3], param->w->dims()[0], param->w->dims()[1],
-                param->w->dims()[2], param->w->dims()[3], param->out->dims()[2], param->out->dims()[3],
+                input.get(), weight.get(), bias_ptr, out.get(), input_shape.n, input_shape.c,
+                input_shape.h, input_shape.w, param->w->dims()[0], param->w->dims()[1],
+                param->w->dims()[2], param->w->dims()[3], output_shape.h, output_shape.w,
                 param->stride_h, param->stride_w, param->pad_h, param->pad_w, param->dilation_h, param->dilation_w,
-                group);
+                group, channel_last);
         }
+        if (cuda_detail::CudaCheck(cudaGetLastError()) != 0) {
+            return -1;
+        }
+        return cuda_detail::CopyDeviceToTensor(&out, param->out.get());
     } else {
         return -1;
     }
-    if (cuda_detail::CudaCheck(cudaGetLastError()) != 0) {
-        return -1;
-    }
-    return cuda_detail::CopyDeviceToTensor(&out, param->out.get());
 }
 
 }  // namespace

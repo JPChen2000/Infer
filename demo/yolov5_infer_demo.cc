@@ -13,7 +13,8 @@ namespace {
 
 void PrintUsage() {
     std::cerr << "usage: yolov5_demo --model <model.fth> --image <image> "
-                 "[--backend host|common|x86|cuda] [--conf-thresh 0.25] [--iou-thresh 0.45] [--profile]\n";
+                 "[--backend host|common|x86|cuda] [--layout auto|nchw|nhwc] "
+                 "[--conf-thresh 0.25] [--iou-thresh 0.45] [--profile]\n";
 }
 
 void PrintRuntimeProfile(const feather::demo::Yolov5Runner& runner, size_t limit) {
@@ -42,6 +43,7 @@ int main(int argc, char** argv) {
     std::string image_path;
     std::string output_path = "output.jpg";
     feather::demo::Yolov5Backend backend = feather::demo::Yolov5Backend::kHost;
+    feather::demo::Yolov5LayoutOverride layout = feather::demo::Yolov5LayoutOverride::kAuto;
     float conf_thresh = 0.25f;
     float iou_thresh = 0.45f;
     bool profile = false;
@@ -57,6 +59,12 @@ int main(int argc, char** argv) {
         } else if (arg == "--backend" && i + 1 < argc) {
             if (!feather::demo::ParseYolov5Backend(argv[++i], &backend)) {
                 std::cerr << "invalid backend: " << argv[i] << '\n';
+                PrintUsage();
+                return 1;
+            }
+        } else if (arg == "--layout" && i + 1 < argc) {
+            if (!feather::demo::ParseYolov5LayoutOverride(argv[++i], &layout)) {
+                std::cerr << "invalid layout: " << argv[i] << '\n';
                 PrintUsage();
                 return 1;
             }
@@ -78,8 +86,9 @@ int main(int argc, char** argv) {
     }
 
     feather::demo::Yolov5Runner runner;
-    if (runner.Load(model_path, backend) != 0) {
-        std::cerr << "failed to load model: " << model_path << '\n';
+    if (runner.Load(model_path, backend, layout) != 0) {
+        std::cerr << "failed to load model: " << model_path
+                  << " with layout=" << feather::demo::Yolov5LayoutOverrideName(layout) << '\n';
         return 1;
     }
     runner.SetRuntimeProfilingEnabled(profile);

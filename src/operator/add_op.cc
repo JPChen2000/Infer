@@ -106,6 +106,7 @@ int32_t AddOp::InferOutputShapes() {
     } else {
         param_.out->Resize(out_shape);
     }
+    param_.out->set_layout(param_.lhs->layout() != DataLayout::ND ? param_.lhs->layout() : param_.rhs->layout());
     SyncIO();
     return 0;
 }

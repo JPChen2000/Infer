@@ -30,7 +30,7 @@ __global__ void YoloDecodeCudaKernel(const T* input, const T* xy_scale_tensor, c
                                      const T* stride_tensor, const T* wh_scale_tensor, const T* anchor_grid,
                                      T* out, int64_t output_numel, int64_t batch, int64_t channels,
                                      int64_t height, int64_t width, int64_t anchors, int64_t attrs,
-                                     int64_t grid_batch) {
+                                     int64_t grid_batch, bool channel_last) {
     const int64_t linear = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (linear >= output_numel) {
         return;
@@ -47,7 +47,8 @@ __global__ void YoloDecodeCudaKernel(const T* input, const T* xy_scale_tensor, c
     }
 
     const int64_t channel = anchor * attrs + attr;
-    const int64_t input_offset = ((n * channels + channel) * height + y) * width + x;
+    const int64_t input_offset = channel_last ? ((n * height + y) * width + x) * channels + channel
+                                              : ((n * channels + channel) * height + y) * width + x;
     const float value = SigmoidDevice(cuda_detail::ReadDevice(input, input_offset));
     const float xy_scale = cuda_detail::ReadDevice(xy_scale_tensor, 0);
     const float stride = cuda_detail::ReadDevice(stride_tensor, 0);
@@ -81,16 +82,21 @@ int RunYoloDecode(feather::operators::YoloDecodeParam* param, const char* timer_
     if (in_dims.size() != 4 || grid_dims.size() != 5) {
         return -1;
     }
-    const int64_t batch = in_dims[0];
-    const int64_t channels = in_dims[1];
-    const int64_t height = in_dims[2];
-    const int64_t width = in_dims[3];
+    ImageShape4D input_shape;
+    if (!DecodeImageShape4D(in_dims, param->input->layout(), &input_shape)) {
+        return -1;
+    }
+    const int64_t batch = input_shape.n;
+    const int64_t channels = input_shape.c;
+    const int64_t height = input_shape.h;
+    const int64_t width = input_shape.w;
     const int64_t anchors = grid_dims[1];
     if (anchors <= 0 || channels % anchors != 0) {
         return -1;
     }
     const int64_t attrs = channels / anchors;
     const int64_t output_numel = param->out->numel();
+    const bool channel_last = IsChannelLastLayout(param->input->layout());
 
     param->out->set_data_type(dtype);
     cuda_detail::DeviceBuffer<T> input;
@@ -113,7 +119,7 @@ int RunYoloDecode(feather::operators::YoloDecodeParam* param, const char* timer_
     YoloDecodeCudaKernel<T><<<static_cast<int>(cuda_detail::DivUp(output_numel, cuda_detail::kCudaThreads)),
                               cuda_detail::kCudaThreads, 0, cuda_detail::InferenceStream()>>>(
         input.get(), xy_scale.get(), grid.get(), stride.get(), wh_scale.get(), anchor_grid.get(), out.get(),
-        output_numel, batch, channels, height, width, anchors, attrs, grid_dims[0]);
+        output_numel, batch, channels, height, width, anchors, attrs, grid_dims[0], channel_last);
     if (cuda_detail::CudaCheck(cudaGetLastError()) != 0) {
         return -1;
     }

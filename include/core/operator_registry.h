@@ -68,10 +68,21 @@ inline DataType ResolveExecutionDataType(const std::vector<std::shared_ptr<Tenso
     return fallback;
 }
 
+inline DataLayout ResolveExecutionLayout(const std::vector<std::shared_ptr<Tensor>>& tensors,
+                                         DataLayout fallback = DataLayout::ND) {
+    for (const auto& tensor : tensors) {
+        if (tensor != nullptr && tensor->layout() != DataLayout::ND) {
+            return tensor->layout();
+        }
+    }
+    return fallback;
+}
+
 inline std::unique_ptr<KernelBase> CreateKernelForTensor(DeviceType device, const std::string& op_type,
                                                          const std::vector<std::shared_ptr<Tensor>>& tensors,
                                                          DataType fallback = DataType::FP32) {
-    return KernelDispatcher::instance().create(device, ResolveExecutionDataType(tensors, fallback), op_type);
+    return KernelDispatcher::instance().create(device, ResolveExecutionDataType(tensors, fallback),
+                                               ResolveExecutionLayout(tensors), op_type);
 }
 
 inline std::unique_ptr<KernelBase> CreateHostKernelForTensor(const std::string& op_type,

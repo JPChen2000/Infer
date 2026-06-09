@@ -39,8 +39,8 @@ int RunMatMul(feather::operators::MatMulParam* param, const char* timer_name) {
         cuda_detail::AllocateTensorOnDevice(param->out.get(), &out) != 0) {
         return -1;
     }
-    cuda_detail::LaunchMatMulKernelCuda<T>(a.get(), b.get(), nullptr, out.get(), m, k, n, 0);
-    if (cuda_detail::CudaCheck(cudaGetLastError()) != 0) {
+    if (cuda_detail::LaunchCublasMatMul<dtype>(a.get(), b.get(), out.get(), m, k, n) != 0 ||
+        cuda_detail::CudaCheck(cudaGetLastError()) != 0) {
         return -1;
     }
     return cuda_detail::CopyDeviceToTensor(&out, param->out.get());

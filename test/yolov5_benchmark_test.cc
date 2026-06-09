@@ -17,15 +17,18 @@ TEST(yolov5_benchmark_test, ParseCommandLineKeepsBenchmarkArgsAndRequiredPaths) 
     char arg10[] = "0.44";
     char arg11[] = "--backend";
     char arg12[] = "cuda";
-    char* args[] = {arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12};
+    char arg13[] = "--layout";
+    char arg14[] = "nhwc";
+    char* args[] = {arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12, arg13, arg14};
     char** argv = args;
-    int argc = 13;
+    int argc = 15;
 
     feather::demo::Yolov5BenchmarkCommandLine options;
     ASSERT_TRUE(feather::demo::ParseYolov5BenchmarkCommandLine(&argc, &argv, &options));
     EXPECT_EQ(options.model_path, "model.fth");
     EXPECT_EQ(options.image_path, "image.ppm");
     EXPECT_EQ(options.backend, feather::demo::Yolov5Backend::kCuda);
+    EXPECT_EQ(options.layout, feather::demo::Yolov5LayoutOverride::kNhwc);
     EXPECT_FLOAT_EQ(options.conf_thresh, 0.33f);
     EXPECT_FLOAT_EQ(options.iou_thresh, 0.44f);
     EXPECT_EQ(argc, 3);

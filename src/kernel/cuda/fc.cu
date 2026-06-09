@@ -49,8 +49,16 @@ int RunFc(feather::operators::FcParam* param, const char* timer_name) {
         bias_ptr = bias.get();
         bias_mode = param->bias->dims().size() == 1 ? 1 : 2;
     }
-    cuda_detail::LaunchMatMulKernelCuda<T>(input.get(), weight.get(), bias_ptr, out.get(), m, in_features,
-                                           out_features, bias_mode);
+    if (cuda_detail::LaunchCublasMatMul<dtype>(input.get(), weight.get(), out.get(), m, in_features, out_features) !=
+        0) {
+        return -1;
+    }
+    if (bias_ptr != nullptr) {
+        const int64_t total = m * out_features;
+        cuda_detail::AddBiasKernelCuda<T>
+            <<<static_cast<int>(cuda_detail::DivUp(total, cuda_detail::kCudaThreads)), cuda_detail::kCudaThreads, 0,
+               cuda_detail::InferenceStream()>>>(out.get(), bias_ptr, m, out_features, bias_mode);
+    }
     if (cuda_detail::CudaCheck(cudaGetLastError()) != 0) {
         return -1;
     }

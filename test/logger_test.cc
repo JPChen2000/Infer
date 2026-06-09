@@ -141,3 +141,20 @@ TEST(logger_test, KernelSelectionSupportsDirectCommonLookup) {
 TEST(logger_test, HostDeviceSelectionIsNeverUnknown) {
     EXPECT_NE(feather::GetHostRuntimeDevice(), feather::DeviceType::UNKNOWN);
 }
+
+TEST(logger_test, KernelSelectionCarriesTensorLayoutIntoMetadata) {
+    auto input = std::make_shared<feather::Tensor>();
+    input->Resize(std::vector<int64_t>{1, 2, 2, 2});
+    input->set_data_type(feather::DataType::FP32);
+    input->set_layout(feather::DataLayout::NHWC);
+
+    auto output = std::make_shared<feather::Tensor>();
+    output->Resize(std::vector<int64_t>{1, 4, 4, 2});
+    output->set_data_type(feather::DataType::FP32);
+    output->set_layout(feather::DataLayout::NHWC);
+
+    auto kernel = feather::CreateKernelForTensor(feather::DeviceType::X86, "Resize", {input, output},
+                                                 feather::DataType::FP32);
+    ASSERT_NE(kernel, nullptr);
+    EXPECT_EQ(kernel->layout(), feather::DataLayout::NHWC);
+}

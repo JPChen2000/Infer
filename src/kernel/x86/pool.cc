@@ -38,13 +38,21 @@ int32_t ComputePoolFallback(feather::operators::PoolParam* param) {
         return -1;
     }
 
-    const bool is_nchw = param->input->dims().size() == 4;
-    const int batch = is_nchw ? static_cast<int>(param->input->dims()[0]) : 1;
-    const int channels = is_nchw ? static_cast<int>(param->input->dims()[1]) : 1;
-    const int in_h = static_cast<int>(param->input->dims()[is_nchw ? 2 : 0]);
-    const int in_w = static_cast<int>(param->input->dims()[is_nchw ? 3 : 1]);
-    const int out_h = static_cast<int>(param->out->dims()[is_nchw ? 2 : 0]);
-    const int out_w = static_cast<int>(param->out->dims()[is_nchw ? 3 : 1]);
+    const bool is_4d = param->input->dims().size() == 4;
+    const DataLayout layout = NormalizeDataLayout(param->input->layout());
+    ImageShape4D input_shape;
+    ImageShape4D output_shape;
+    if (is_4d &&
+        (!DecodeImageShape4D(param->input->dims().data(), layout, &input_shape) ||
+         !DecodeImageShape4D(param->out->dims().data(), param->out->layout(), &output_shape))) {
+        return -1;
+    }
+    const int batch = is_4d ? static_cast<int>(input_shape.n) : 1;
+    const int channels = is_4d ? static_cast<int>(input_shape.c) : 1;
+    const int in_h = is_4d ? static_cast<int>(input_shape.h) : static_cast<int>(param->input->dims()[0]);
+    const int in_w = is_4d ? static_cast<int>(input_shape.w) : static_cast<int>(param->input->dims()[1]);
+    const int out_h = is_4d ? static_cast<int>(output_shape.h) : static_cast<int>(param->out->dims()[0]);
+    const int out_w = is_4d ? static_cast<int>(output_shape.w) : static_cast<int>(param->out->dims()[1]);
 
     param->out->set_data_type(dtype);
     for (int n = 0; n < batch; ++n) {
@@ -60,8 +68,8 @@ int32_t ComputePoolFallback(feather::operators::PoolParam* param) {
                             if (ih < 0 || ih >= in_h || iw < 0 || iw >= in_w) {
                                 continue;
                             }
-                            const int64_t input_offset = is_nchw
-                                ? ((static_cast<int64_t>(n) * channels + c) * in_h + ih) * in_w + iw
+                            const int64_t input_offset = is_4d
+                                ? OffsetForImage4D(layout, n, c, ih, iw, channels, in_h, in_w)
                                 : static_cast<int64_t>(ih) * in_w + iw;
                             const float input_value = TensorIO<dtype>::Read(param->input.get(), input_offset);
                             if (is_max) {
@@ -75,8 +83,8 @@ int32_t ComputePoolFallback(feather::operators::PoolParam* param) {
                     if (!is_max) {
                         value = count == 0 ? 0.0f : value / static_cast<float>(count);
                     }
-                    const int64_t output_offset = is_nchw
-                        ? ((static_cast<int64_t>(n) * channels + c) * out_h + oh) * out_w + ow
+                    const int64_t output_offset = is_4d
+                        ? OffsetForImage4D(layout, n, c, oh, ow, channels, out_h, out_w)
                         : static_cast<int64_t>(oh) * out_w + ow;
                     TensorIO<dtype>::Write(param->out.get(), output_offset, value);
                 }
@@ -92,13 +100,21 @@ int32_t ComputePoolRaw(feather::operators::PoolParam* param, DataType dtype) {
         return -1;
     }
 
-    const bool is_nchw = param->input->dims().size() == 4;
-    const int batch = is_nchw ? static_cast<int>(param->input->dims()[0]) : 1;
-    const int channels = is_nchw ? static_cast<int>(param->input->dims()[1]) : 1;
-    const int in_h = static_cast<int>(param->input->dims()[is_nchw ? 2 : 0]);
-    const int in_w = static_cast<int>(param->input->dims()[is_nchw ? 3 : 1]);
-    const int out_h = static_cast<int>(param->out->dims()[is_nchw ? 2 : 0]);
-    const int out_w = static_cast<int>(param->out->dims()[is_nchw ? 3 : 1]);
+    const bool is_4d = param->input->dims().size() == 4;
+    const DataLayout layout = NormalizeDataLayout(param->input->layout());
+    ImageShape4D input_shape;
+    ImageShape4D output_shape;
+    if (is_4d &&
+        (!DecodeImageShape4D(param->input->dims().data(), layout, &input_shape) ||
+         !DecodeImageShape4D(param->out->dims().data(), param->out->layout(), &output_shape))) {
+        return -1;
+    }
+    const int batch = is_4d ? static_cast<int>(input_shape.n) : 1;
+    const int channels = is_4d ? static_cast<int>(input_shape.c) : 1;
+    const int in_h = is_4d ? static_cast<int>(input_shape.h) : static_cast<int>(param->input->dims()[0]);
+    const int in_w = is_4d ? static_cast<int>(input_shape.w) : static_cast<int>(param->input->dims()[1]);
+    const int out_h = is_4d ? static_cast<int>(output_shape.h) : static_cast<int>(param->out->dims()[0]);
+    const int out_w = is_4d ? static_cast<int>(output_shape.w) : static_cast<int>(param->out->dims()[1]);
 
     const T* input = param->input->data<T>();
     T* output = param->out->mutable_data<T>();
@@ -122,8 +138,8 @@ int32_t ComputePoolRaw(feather::operators::PoolParam* param, DataType dtype) {
                             if (iw < 0 || iw >= in_w) {
                                 continue;
                             }
-                            const int64_t input_offset = is_nchw
-                                ? ((static_cast<int64_t>(n) * channels + c) * in_h + ih) * in_w + iw
+                            const int64_t input_offset = is_4d
+                                ? OffsetForImage4D(layout, n, c, ih, iw, channels, in_h, in_w)
                                 : static_cast<int64_t>(ih) * in_w + iw;
                             const float current = ValueToFloat(input[input_offset]);
                             if (is_max) {
@@ -137,8 +153,8 @@ int32_t ComputePoolRaw(feather::operators::PoolParam* param, DataType dtype) {
                     if (!is_max) {
                         value = count == 0 ? 0.0f : value / static_cast<float>(count);
                     }
-                    const int64_t output_offset = is_nchw
-                        ? ((static_cast<int64_t>(n) * channels + c) * out_h + oh) * out_w + ow
+                    const int64_t output_offset = is_4d
+                        ? OffsetForImage4D(layout, n, c, oh, ow, channels, out_h, out_w)
                         : static_cast<int64_t>(oh) * out_w + ow;
                     output[output_offset] = FloatToValue<T>(value);
                 }

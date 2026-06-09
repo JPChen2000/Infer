@@ -4,8 +4,12 @@
 
 #include <array>
 #include <cmath>
+#include <future>
+#include <vector>
 
 #include "src/kernel/common/kernel_io.h"
+#include "util/thread_pool_nv.h"
+#include "util/threading.h"
 #include "util/timer.h"
 
 namespace feather {
@@ -41,6 +45,51 @@ const std::array<uint16_t, 1u << 16>& GetSiluFp16Lut() {
     return lut;
 }
 
+size_t GetSiluThreadCount(int64_t total_work_items) {
+    return ThreadCountForWorkItems(total_work_items);
+}
+
+ThreadPoolNv& GetSiluThreadPool() {
+    static ThreadPoolNv pool(DefaultThreadCount());
+    return pool;
+}
+
+template <typename Fn>
+void ParallelForSilu(int64_t total_work_items, Fn&& fn) {
+    if (total_work_items <= 1 || total_work_items < 16384) {
+        fn(0, total_work_items);
+        return;
+    }
+
+    const size_t thread_count = GetSiluThreadCount(total_work_items);
+    if (thread_count <= 1) {
+        fn(0, total_work_items);
+        return;
+    }
+
+    ThreadPoolNv& pool = GetSiluThreadPool();
+    std::vector<std::future<int>> futures;
+    futures.reserve(thread_count);
+
+    const int64_t chunk_size =
+        (total_work_items + static_cast<int64_t>(thread_count) - 1) / static_cast<int64_t>(thread_count);
+    for (size_t tid = 0; tid < thread_count; ++tid) {
+        const int64_t begin = static_cast<int64_t>(tid) * chunk_size;
+        const int64_t end = std::min(total_work_items, begin + chunk_size);
+        if (begin >= end) {
+            break;
+        }
+        futures.emplace_back(pool.enqueue([begin, end, &fn](int) {
+            fn(begin, end);
+            return 0;
+        }));
+    }
+
+    for (auto& future : futures) {
+        future.get();
+    }
+}
+
 }  // namespace
 
 template <>
@@ -59,20 +108,22 @@ int32_t SiluKernel<DeviceType::X86, DataType::FP32>::compute() {
     float* output = param->out->mutable_data<float>();
     const int64_t numel = param->input->numel();
 
-    alignas(32) float values[8];
-    int64_t i = 0;
-    for (; i + 8 <= numel; i += 8) {
-        const __m256 input_vec = _mm256_loadu_ps(input + i);
-        _mm256_store_ps(values, input_vec);
-        for (float& value : values) {
-            value = SiluScalar(value);
+    ParallelForSilu(numel, [&](int64_t begin, int64_t end) {
+        alignas(32) float values[8];
+        int64_t i = begin;
+        for (; i + 8 <= end; i += 8) {
+            const __m256 input_vec = _mm256_loadu_ps(input + i);
+            _mm256_store_ps(values, input_vec);
+            for (float& value : values) {
+                value = SiluScalar(value);
+            }
+            const __m256 output_vec = _mm256_load_ps(values);
+            _mm256_storeu_ps(output + i, output_vec);
         }
-        const __m256 output_vec = _mm256_load_ps(values);
-        _mm256_storeu_ps(output + i, output_vec);
-    }
-    for (; i < numel; ++i) {
-        output[i] = SiluScalar(input[i]);
-    }
+        for (; i < end; ++i) {
+            output[i] = SiluScalar(input[i]);
+        }
+    });
     return 0;
 }
 
@@ -93,20 +144,22 @@ int32_t SiluKernel<DeviceType::X86, DataType::FP16>::compute() {
     const int64_t numel = param->input->numel();
 
     const auto& lut = GetSiluFp16Lut();
-    int64_t i = 0;
-    for (; i + 8 <= numel; i += 8) {
-        output[i + 0] = lut[input[i + 0]];
-        output[i + 1] = lut[input[i + 1]];
-        output[i + 2] = lut[input[i + 2]];
-        output[i + 3] = lut[input[i + 3]];
-        output[i + 4] = lut[input[i + 4]];
-        output[i + 5] = lut[input[i + 5]];
-        output[i + 6] = lut[input[i + 6]];
-        output[i + 7] = lut[input[i + 7]];
-    }
-    for (; i < numel; ++i) {
-        output[i] = lut[input[i]];
-    }
+    ParallelForSilu(numel, [&](int64_t begin, int64_t end) {
+        int64_t i = begin;
+        for (; i + 8 <= end; i += 8) {
+            output[i + 0] = lut[input[i + 0]];
+            output[i + 1] = lut[input[i + 1]];
+            output[i + 2] = lut[input[i + 2]];
+            output[i + 3] = lut[input[i + 3]];
+            output[i + 4] = lut[input[i + 4]];
+            output[i + 5] = lut[input[i + 5]];
+            output[i + 6] = lut[input[i + 6]];
+            output[i + 7] = lut[input[i + 7]];
+        }
+        for (; i < end; ++i) {
+            output[i] = lut[input[i]];
+        }
+    });
     return 0;
 }
 

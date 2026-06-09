@@ -1,5 +1,9 @@
 #include "core/graph_lowering.h"
 
+#ifdef FEATHER_WITH_CUDA
+#include "src/kernel/cuda/runtime.h"
+#endif
+
 namespace feather {
 
 int32_t GraphLowering::Lower(StaticGraph& static_graph, RuntimeGraph* runtime_graph) const {
@@ -11,11 +15,24 @@ int32_t GraphLowering::Lower(StaticGraph& static_graph, RuntimeGraph* runtime_gr
     runtime_graph->Clear();
     runtime_graph->SetThreadMode(static_graph.KernelDevice() == DeviceType::CUDA ? RuntimeThreadMode::kSerialGraph
                                                                                 : requested_thread_mode);
+    runtime_graph->SetOutputNames(static_graph.model().graph.outputs);
     for (const auto& item : static_graph.tensors()) {
         if (runtime_graph->SetTensor(item.first, item.second) != 0) {
             return -1;
         }
     }
+
+#ifdef FEATHER_WITH_CUDA
+    for (const auto& value : static_graph.model().graph.values) {
+        if (!value.constant) {
+            continue;
+        }
+        auto tensor = static_graph.GetTensor(value.tensor.name);
+        if (tensor != nullptr) {
+            kernel::cuda_detail::MarkTensorDevicePersistent(tensor.get(), true);
+        }
+    }
+#endif
 
     for (const auto& static_node : static_graph.nodes()) {
         if (static_node.removed) {

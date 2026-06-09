@@ -15,6 +15,7 @@ std::shared_ptr<Tensor> CreateTensorFromValue(const model::ValueDesc& value) {
     }
     auto tensor = std::make_shared<Tensor>(value.tensor.dims);
     tensor->set_data_type(value.tensor.data_type);
+    tensor->set_layout(value.tensor.layout);
     return tensor;
 }
 
@@ -23,6 +24,9 @@ std::shared_ptr<Tensor> CreateTensorFromValue(const model::ValueDesc& value) {
 int32_t StaticGraph::SetModel(const model::ModelDesc& model) {
     model_ = model;
     ClearGraphState();
+    if (pass_manager_ == nullptr) {
+        pass_manager_ = CreateDefaultPassManager();
+    }
     return 0;
 }
 

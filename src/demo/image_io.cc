@@ -137,7 +137,8 @@ int32_t PreprocessImageToTensor(const ImageData& image, int input_size, DataType
         }
     }
 
-    tensor->Resize(std::vector<int64_t>{1, 3, input_size, input_size});
+    const DataLayout layout = NormalizeDataLayout(tensor->layout());
+    tensor->Resize(EncodeImageShape4D(ImageShape4D{1, 3, input_size, input_size}, layout));
     tensor->set_data_type(dtype);
     if (dtype == DataType::FP16) {
         (void)tensor->mutable_data<uint16_t>();
@@ -150,7 +151,7 @@ int32_t PreprocessImageToTensor(const ImageData& image, int input_size, DataType
             for (int x = 0; x < input_size; ++x) {
                 const size_t src_index = static_cast<size_t>((y * input_size + x) * 3 + c);
                 const int64_t dst_index =
-                    static_cast<int64_t>(c) * input_size * input_size + y * input_size + x;
+                    OffsetForImage4D(layout, 0, c, y, x, 3, input_size, input_size);
                 WriteTensorValue(tensor, dst_index, static_cast<float>(canvas[src_index]) / 255.0f);
             }
         }
@@ -171,6 +172,7 @@ int32_t PreprocessImageToTensor(const ImageData& image, int input_size, DataType
     }
     if (*tensor == nullptr) {
         *tensor = std::make_shared<Tensor>(std::vector<int64_t>{1, 3, input_size, input_size});
+        (*tensor)->set_layout(DataLayout::NCHW);
     }
     return PreprocessImageToTensor(image, input_size, dtype, tensor->get(), letterbox);
 }

@@ -7,6 +7,8 @@ namespace feather {
 void Tensor::ShareDataWith(const Tensor &other) {
   m_buffer = other.m_buffer;
   m_dims = other.m_dims;
+  m_data_type = other.m_data_type;
+  m_layout = other.m_layout;
   m_memory_size = other.m_memory_size;
   m_offset = other.m_offset;
 }

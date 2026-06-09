@@ -137,6 +137,7 @@ int32_t ConcatOp::InferOutputShapes() {
     } else {
         param_.out->Resize(out_shape);
     }
+    param_.out->set_layout(param_.inputs.empty() || param_.inputs[0] == nullptr ? DataLayout::ND : param_.inputs[0]->layout());
     SyncIO();
     return 0;
 }

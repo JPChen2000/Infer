@@ -144,6 +144,7 @@ int32_t SplitOp::InferOutputShapes() {
         } else {
             param_.outputs[i]->Resize(out_shape);
         }
+        param_.outputs[i]->set_layout(param_.input->layout());
     }
     SyncIO();
     return 0;

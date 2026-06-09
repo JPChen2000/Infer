@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "core/operator.h"
@@ -62,6 +63,7 @@ class RuntimeGraph {
     void SetThreadMode(RuntimeThreadMode mode) { thread_mode_ = mode; }
     size_t ThreadCount() const { return configured_thread_count_; }
     void SetThreadCount(size_t count);
+    void SetOutputNames(std::vector<std::string> output_names);
 
     void Clear();
     void AddNode(RuntimeNode node);
@@ -76,10 +78,15 @@ class RuntimeGraph {
     int32_t RunNode(size_t index);
     int32_t PrepareNodeForRun(const RuntimeNode& node);
     int32_t FinalizeNodeRun(const RuntimeNode& node, int32_t status);
+    void ResetRemainingUses();
+    void ReleaseUnusedInputs(const RuntimeNode& node);
+    bool ShouldKeepTensorDevice(const std::string& value_name, const std::shared_ptr<Tensor>& tensor) const;
 
     std::unordered_map<std::string, std::shared_ptr<Tensor>> tensors_;
     std::vector<RuntimeNode> nodes_;
     std::unordered_map<std::string, size_t> node_index_by_name_;
+    std::unordered_map<std::string, size_t> remaining_uses_;
+    std::unordered_set<std::string> output_names_;
     size_t worker_count_{1};
     std::unique_ptr<ThreadPoolNv> thread_pool_;
     bool profiling_enabled_{false};

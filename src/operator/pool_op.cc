@@ -41,8 +41,8 @@ bool CheckPoolShape(const PoolParam& param) {
         param.pad_h < 0 || param.pad_w < 0) {
         return false;
     }
-    const auto height_axis = param.input->dims().size() == 2 ? 0 : 2;
-    const auto width_axis = param.input->dims().size() == 2 ? 1 : 3;
+    const auto height_axis = param.input->dims().size() == 2 ? 0 : HeightAxisForLayout(param.input->layout());
+    const auto width_axis = param.input->dims().size() == 2 ? 1 : WidthAxisForLayout(param.input->layout());
     const int64_t out_h = (param.input->dims()[height_axis] - param.kernel_h + 2 * param.pad_h) / param.stride_h + 1;
     const int64_t out_w = (param.input->dims()[width_axis] - param.kernel_w + 2 * param.pad_w) / param.stride_w + 1;
     return out_h > 0 && out_w > 0;
@@ -55,12 +55,18 @@ std::vector<int64_t> InferPoolOutputShape(const PoolParam& param) {
             (param.input->dims()[1] - param.kernel_w + 2 * param.pad_w) / param.stride_w + 1,
         };
     }
-    return {
-        param.input->dims()[0],
-        param.input->dims()[1],
-        (param.input->dims()[2] - param.kernel_h + 2 * param.pad_h) / param.stride_h + 1,
-        (param.input->dims()[3] - param.kernel_w + 2 * param.pad_w) / param.stride_w + 1,
-    };
+    ImageShape4D input_shape;
+    if (!DecodeImageShape4D(param.input->dims().data(), param.input->layout(), &input_shape)) {
+        return {};
+    }
+    return EncodeImageShape4D(
+        ImageShape4D{
+            input_shape.n,
+            input_shape.c,
+            (input_shape.h - param.kernel_h + 2 * param.pad_h) / param.stride_h + 1,
+            (input_shape.w - param.kernel_w + 2 * param.pad_w) / param.stride_w + 1,
+        },
+        NormalizeDataLayout(param.input->layout()));
 }
 
 void AttachPoolKernel(std::unique_ptr<KernelBase>& slot, PoolParam* param, std::unique_ptr<KernelBase> kernel) {
@@ -178,6 +184,7 @@ int32_t AvgPoolOp::InferOutputShapes() {
     } else {
         param_.out->Resize(out_shape);
     }
+    param_.out->set_layout(param_.input->dims().size() == 4 ? NormalizeDataLayout(param_.input->layout()) : DataLayout::ND);
     SyncIO();
     return 0;
 }
@@ -219,6 +226,7 @@ int32_t MaxPoolOp::InferOutputShapes() {
     } else {
         param_.out->Resize(out_shape);
     }
+    param_.out->set_layout(param_.input->dims().size() == 4 ? NormalizeDataLayout(param_.input->layout()) : DataLayout::ND);
     SyncIO();
     return 0;
 }

@@ -73,7 +73,8 @@ bool CanUseFastConv2DPath(const feather::operators::Conv2dParam* param) {
         return false;
     }
     return param->input->dims().size() == 4 && param->w->dims().size() == 4 && param->group == 1 &&
-           param->dilation_h == 1 && param->dilation_w == 1;
+           param->dilation_h == 1 && param->dilation_w == 1 &&
+           NormalizeDataLayout(param->input->layout()) == DataLayout::NCHW;
 }
 
 bool IsPointwiseConv2D(const feather::operators::Conv2dParam* param) {
@@ -339,16 +340,23 @@ int32_t ComputeConv2DKernel(feather::operators::Conv2dParam* param) {
         return 0;
     }
 
-    const int batch = static_cast<int>(param->input->dims()[0]);
-    const int in_c = static_cast<int>(param->input->dims()[1]);
-    const int in_h = static_cast<int>(param->input->dims()[2]);
-    const int in_w = static_cast<int>(param->input->dims()[3]);
+    ImageShape4D input_shape;
+    ImageShape4D output_shape;
+    if (!DecodeImageShape4D(param->input->dims().data(), param->input->layout(), &input_shape) ||
+        !DecodeImageShape4D(param->out->dims().data(), param->out->layout(), &output_shape)) {
+        return -1;
+    }
+    const DataLayout layout = NormalizeDataLayout(param->input->layout());
+    const int batch = static_cast<int>(input_shape.n);
+    const int in_c = static_cast<int>(input_shape.c);
+    const int in_h = static_cast<int>(input_shape.h);
+    const int in_w = static_cast<int>(input_shape.w);
     const int out_c = static_cast<int>(param->w->dims()[0]);
     const int kernel_c = static_cast<int>(param->w->dims()[1]);
     const int kernel_h = static_cast<int>(param->w->dims()[2]);
     const int kernel_w = static_cast<int>(param->w->dims()[3]);
-    const int out_h = static_cast<int>(param->out->dims()[2]);
-    const int out_w = static_cast<int>(param->out->dims()[3]);
+    const int out_h = static_cast<int>(output_shape.h);
+    const int out_w = static_cast<int>(output_shape.w);
     const int group = std::max(1, param->group);
     const int out_c_per_group = out_c / group;
     const int in_c_per_group = in_c / group;
@@ -370,7 +378,7 @@ int32_t ComputeConv2DKernel(feather::operators::Conv2dParam* param) {
                                         continue;
                                     }
                                     const int64_t input_offset =
-                                        ((static_cast<int64_t>(n) * in_c + global_ic) * in_h + ih) * in_w + iw;
+                                        OffsetForImage4D(layout, n, global_ic, ih, iw, in_c, in_h, in_w);
                                     const int64_t kernel_offset =
                                         ((static_cast<int64_t>(global_oc) * kernel_c + ic) * kernel_h + kh) * kernel_w + kw;
                                     value += TensorIO<dtype>::Read(param->input.get(), input_offset) *
@@ -378,7 +386,8 @@ int32_t ComputeConv2DKernel(feather::operators::Conv2dParam* param) {
                                 }
                             }
                         }
-                        const int64_t out_offset = ((static_cast<int64_t>(n) * out_c + global_oc) * out_h + oh) * out_w + ow;
+                        const int64_t out_offset =
+                            OffsetForImage4D(layout, n, global_oc, oh, ow, out_c, out_h, out_w);
                         if (param->bias != nullptr && param->bias->IsInitialized()) {
                             value += TensorIO<dtype>::Read(param->bias.get(), global_oc);
                         }

@@ -22,12 +22,21 @@ enum class Yolov5Backend {
     kCuda,
 };
 
+enum class Yolov5LayoutOverride {
+    kAuto,
+    kNchw,
+    kNhwc,
+};
+
 bool ParseYolov5Backend(const std::string& value, Yolov5Backend* backend);
 const char* Yolov5BackendName(Yolov5Backend backend);
+bool ParseYolov5LayoutOverride(const std::string& value, Yolov5LayoutOverride* layout);
+const char* Yolov5LayoutOverrideName(Yolov5LayoutOverride layout);
 
 class Yolov5Runner {
    public:
-    int32_t Load(const std::string& model_path, Yolov5Backend backend = Yolov5Backend::kHost);
+    int32_t Load(const std::string& model_path, Yolov5Backend backend = Yolov5Backend::kHost,
+                 Yolov5LayoutOverride layout_override = Yolov5LayoutOverride::kAuto);
     int32_t Run(const std::string& image_path, float conf_thresh, float iou_thresh,
                 std::vector<Detection>* detections);
     int32_t RunPreparedImage(const ImageData& image, float conf_thresh, float iou_thresh,
@@ -52,6 +61,8 @@ class Yolov5Runner {
     int input_size_{};
     DataType input_dtype_{DataType::UNKNOWN};
     Yolov5Backend backend_{Yolov5Backend::kHost};
+    Yolov5LayoutOverride layout_override_{Yolov5LayoutOverride::kAuto};
+    DataLayout input_layout_{DataLayout::NCHW};
     DeviceType backend_device_{GetHostRuntimeDevice()};
     std::string model_name_;
     std::string last_build_summary_;

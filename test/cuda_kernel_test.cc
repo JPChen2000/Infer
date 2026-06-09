@@ -9,6 +9,7 @@
 #endif
 
 #include "core/kernel.h"
+#include "core/operator_registry.h"
 #include "src/kernel/add.h"
 #include "src/kernel/concat.h"
 #include "src/kernel/conv2d.h"
@@ -164,6 +165,97 @@ TEST(cuda_kernel_test, Conv2DPointwiseRunsOnCudaFP32) {
 #endif
 }
 
+TEST(cuda_kernel_test, Conv2DPointwiseBatchRunsOnCudaFP32) {
+#ifndef FEATHER_WITH_CUDA
+    GTEST_SKIP() << "CUDA kernels are not built";
+#else
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
+    auto input = std::make_shared<feather::Tensor>();
+    input->Assign<float>(
+        {1.0f, 2.0f, 3.0f, 4.0f, 10.0f, 20.0f, 30.0f, 40.0f, 5.0f, 6.0f, 7.0f, 8.0f, 50.0f, 60.0f, 70.0f, 80.0f},
+        {2, 2, 2, 2});
+    auto weight = std::make_shared<feather::Tensor>();
+    weight->Assign<float>({1.0f, 0.0f, 0.0f, 1.0f, 2.0f, 3.0f}, {3, 2, 1, 1});
+    auto bias = std::make_shared<feather::Tensor>();
+    bias->Assign<float>({0.5f, -1.0f, 0.0f}, {3});
+    auto out = std::make_shared<feather::Tensor>(std::vector<int64_t>{2, 3, 2, 2});
+
+    feather::operators::Conv2dParam param{};
+    param.input = input;
+    param.w = weight;
+    param.bias = bias;
+    param.out = out;
+    param.stride_h = 1;
+    param.stride_w = 1;
+    param.pad_h = 0;
+    param.pad_w = 0;
+    param.dilation_h = 1;
+    param.dilation_w = 1;
+    param.group = 1;
+
+    auto kernel =
+        feather::KernelDispatcher::instance().create(feather::DeviceType::CUDA, feather::DataType::FP32, "Conv2D");
+    ASSERT_NE(kernel, nullptr);
+    kernel->SetParam(&param);
+    ASSERT_EQ(kernel->compute(), 0);
+
+    const std::vector<float> expected = {1.5f, 2.5f, 3.5f, 4.5f, 9.0f, 19.0f, 29.0f, 39.0f,
+                                         32.0f, 64.0f, 96.0f, 128.0f, 5.5f,  6.5f,  7.5f,  8.5f,
+                                         49.0f, 59.0f, 69.0f, 79.0f, 160.0f, 192.0f, 224.0f, 256.0f};
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_FLOAT_EQ(out->data<float>()[i], expected[i]);
+    }
+#endif
+}
+
+TEST(cuda_kernel_test, Conv2DPointwiseRunsOnCudaFP32Nhwc) {
+#ifndef FEATHER_WITH_CUDA
+    GTEST_SKIP() << "CUDA kernels are not built";
+#else
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
+    auto input = std::make_shared<feather::Tensor>();
+    input->Assign<float>({1.0f, 10.0f, 2.0f, 20.0f, 3.0f, 30.0f, 4.0f, 40.0f}, {1, 2, 2, 2});
+    input->set_layout(feather::DataLayout::NHWC);
+    auto weight = std::make_shared<feather::Tensor>();
+    weight->Assign<float>({1.0f, 0.0f, 0.0f, 1.0f, 2.0f, 3.0f}, {3, 2, 1, 1});
+    auto bias = std::make_shared<feather::Tensor>();
+    bias->Assign<float>({0.5f, -1.0f, 0.0f}, {3});
+    auto out = std::make_shared<feather::Tensor>(std::vector<int64_t>{1, 2, 2, 3});
+    out->set_layout(feather::DataLayout::NHWC);
+
+    feather::operators::Conv2dParam param{};
+    param.input = input;
+    param.w = weight;
+    param.bias = bias;
+    param.out = out;
+    param.stride_h = 1;
+    param.stride_w = 1;
+    param.pad_h = 0;
+    param.pad_w = 0;
+    param.dilation_h = 1;
+    param.dilation_w = 1;
+    param.group = 1;
+
+    auto kernel = feather::CreateKernelForTensor(feather::DeviceType::CUDA, "Conv2D",
+                                                 {input, weight, bias, out}, feather::DataType::FP32);
+    ASSERT_NE(kernel, nullptr);
+    kernel->SetParam(&param);
+    ASSERT_EQ(kernel->compute(), 0);
+
+    const std::vector<float> expected = {1.5f, 9.0f, 32.0f, 2.5f, 19.0f, 64.0f,
+                                         3.5f, 29.0f, 96.0f, 4.5f, 39.0f, 128.0f};
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_FLOAT_EQ(out->data<float>()[i], expected[i]);
+    }
+#endif
+}
+
 TEST(cuda_kernel_test, Conv2DDepthwiseRunsOnCudaFP16) {
 #ifndef FEATHER_WITH_CUDA
     GTEST_SKIP() << "CUDA kernels are not built";
@@ -291,6 +383,43 @@ TEST(cuda_kernel_test, GemmRunsOnCudaFP16WithVectorBias) {
     const std::vector<float> expected = {38.5f, 43.0f, 52.0f, 59.0f, 83.5f, 97.0f, 115.0f, 131.0f};
     for (size_t i = 0; i < expected.size(); ++i) {
         EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[i]), expected[i], 1e-3f);
+    }
+#endif
+}
+
+TEST(cuda_kernel_test, FcRunsOnCudaFP32WithVectorBias) {
+#ifndef FEATHER_WITH_CUDA
+    GTEST_SKIP() << "CUDA kernels are not built";
+#else
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
+    auto input = std::make_shared<feather::Tensor>();
+    input->Assign<float>({1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}, {2, 3});
+    auto weight = std::make_shared<feather::Tensor>();
+    weight->Assign<float>({1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f,
+                           7.0f, 8.0f, 9.0f, 10.0f, 11.0f, 12.0f},
+                          {3, 4});
+    auto bias = std::make_shared<feather::Tensor>();
+    bias->Assign<float>({0.5f, -1.0f, 2.0f, 3.0f}, {4});
+    auto out = std::make_shared<feather::Tensor>(std::vector<int64_t>{2, 4});
+
+    feather::operators::FcParam param{};
+    param.input = input;
+    param.w = weight;
+    param.bias = bias;
+    param.out = out;
+
+    auto kernel =
+        feather::KernelDispatcher::instance().create(feather::DeviceType::CUDA, feather::DataType::FP32, "FC");
+    ASSERT_NE(kernel, nullptr);
+    kernel->SetParam(&param);
+    ASSERT_EQ(kernel->compute(), 0);
+
+    const std::vector<float> expected = {38.5f, 43.0f, 52.0f, 59.0f, 83.5f, 97.0f, 115.0f, 131.0f};
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_FLOAT_EQ(out->data<float>()[i], expected[i]);
     }
 #endif
 }
@@ -571,6 +700,83 @@ TEST(cuda_kernel_test, ResizeRunsOnCudaFP32NearestNeighborNchw) {
 #endif
 }
 
+TEST(cuda_kernel_test, ResizeRunsOnCudaFP32NearestNeighborNhwc) {
+#ifndef FEATHER_WITH_CUDA
+    GTEST_SKIP() << "CUDA kernels are not built";
+#else
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
+    auto input = std::make_shared<feather::Tensor>();
+    input->Assign<float>({1.0f, 10.0f, 2.0f, 20.0f, 3.0f, 30.0f, 4.0f, 40.0f}, {1, 2, 2, 2});
+    input->set_layout(feather::DataLayout::NHWC);
+    auto out = std::make_shared<feather::Tensor>(std::vector<int64_t>{1, 4, 4, 2});
+    out->set_layout(feather::DataLayout::NHWC);
+
+    feather::operators::ResizeParam param{};
+    param.input = input;
+    param.out = out;
+    param.scales = {1.0f, 2.0f, 2.0f, 1.0f};
+
+    auto kernel =
+        feather::CreateKernelForTensor(feather::DeviceType::CUDA, "Resize", {input, out}, feather::DataType::FP32);
+    ASSERT_NE(kernel, nullptr);
+    kernel->SetParam(&param);
+    ASSERT_EQ(kernel->compute(), 0);
+
+    const std::vector<float> expected = {
+        1, 10, 1, 10, 2, 20, 2, 20,
+        1, 10, 1, 10, 2, 20, 2, 20,
+        3, 30, 3, 30, 4, 40, 4, 40,
+        3, 30, 3, 30, 4, 40, 4, 40,
+    };
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_FLOAT_EQ(out->data<float>()[i], expected[i]);
+    }
+#endif
+}
+
+TEST(cuda_kernel_test, MaxPoolRunsOnCudaFP32Nhwc) {
+#ifndef FEATHER_WITH_CUDA
+    GTEST_SKIP() << "CUDA kernels are not built";
+#else
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
+    auto input = std::make_shared<feather::Tensor>();
+    input->Assign<float>({
+        1, 10,
+        2, 20,
+        3, 30,
+        4, 40,
+    }, {1, 2, 2, 2});
+    input->set_layout(feather::DataLayout::NHWC);
+    auto out = std::make_shared<feather::Tensor>(std::vector<int64_t>{1, 1, 1, 2});
+    out->set_layout(feather::DataLayout::NHWC);
+
+    feather::operators::PoolParam param{};
+    param.input = input;
+    param.out = out;
+    param.kernel_h = 2;
+    param.kernel_w = 2;
+    param.stride_h = 1;
+    param.stride_w = 1;
+    param.pad_h = 0;
+    param.pad_w = 0;
+
+    auto kernel =
+        feather::CreateKernelForTensor(feather::DeviceType::CUDA, "MaxPool", {input, out}, feather::DataType::FP32);
+    ASSERT_NE(kernel, nullptr);
+    kernel->SetParam(&param);
+    ASSERT_EQ(kernel->compute(), 0);
+
+    EXPECT_FLOAT_EQ(out->data<float>()[0], 4.0f);
+    EXPECT_FLOAT_EQ(out->data<float>()[1], 40.0f);
+#endif
+}
+
 TEST(cuda_kernel_test, SiluRunsOnCudaFP32) {
 #ifndef FEATHER_WITH_CUDA
     GTEST_SKIP() << "CUDA kernels are not built";
@@ -764,6 +970,54 @@ TEST(cuda_kernel_test, YoloDecodeRunsOnCudaFP16) {
     };
     for (size_t i = 0; i < expected.size(); ++i) {
         EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[i]), expected[i], 0.2f);
+    }
+#endif
+}
+
+TEST(cuda_kernel_test, YoloDecodeRunsOnCudaFP32Nhwc) {
+#ifndef FEATHER_WITH_CUDA
+    GTEST_SKIP() << "CUDA kernels are not built";
+#else
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
+    auto input = std::make_shared<feather::Tensor>();
+    input->Assign<float>({0.0f, 0.0f, 0.0f, 0.0f, 1.0f, -1.0f, 2.0f, -2.0f, 0.5f, -0.5f, 0.0f, 4.0f},
+                         {1, 1, 1, 12});
+    input->set_layout(feather::DataLayout::NHWC);
+    auto xy_scale = std::make_shared<feather::Tensor>();
+    xy_scale->Assign<float>({2.0f}, {1});
+    auto grid = std::make_shared<feather::Tensor>();
+    grid->Assign<float>({10.0f, 20.0f, 30.0f, 40.0f}, {1, 2, 1, 1, 2});
+    auto stride = std::make_shared<feather::Tensor>();
+    stride->Assign<float>({8.0f}, {1});
+    auto wh_scale = std::make_shared<feather::Tensor>();
+    wh_scale->Assign<float>({2.0f}, {1});
+    auto anchor_grid = std::make_shared<feather::Tensor>();
+    anchor_grid->Assign<float>({4.0f, 6.0f, 8.0f, 10.0f}, {1, 2, 1, 1, 2});
+    auto out = std::make_shared<feather::Tensor>(std::vector<int64_t>{1, 2, 6});
+
+    feather::operators::YoloDecodeParam param{};
+    param.input = input;
+    param.xy_scale = xy_scale;
+    param.grid = grid;
+    param.stride = stride;
+    param.wh_scale = wh_scale;
+    param.anchor_grid = anchor_grid;
+    param.out = out;
+
+    auto kernel = feather::CreateKernelForTensor(feather::DeviceType::CUDA, "YoloDecode",
+                                                 {input, xy_scale, grid, stride, wh_scale, anchor_grid, out},
+                                                 feather::DataType::FP32);
+    ASSERT_NE(kernel, nullptr);
+    kernel->SetParam(&param);
+    ASSERT_EQ(kernel->compute(), 0);
+
+    const std::vector<float> expected = {88.0f, 168.0f, 4.0f, 6.0f, 0.7310586f, 0.26894143f,
+                                         254.09276f, 321.90726f, 12.398581f, 5.701479f, 0.5f, 0.98201376f};
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_NEAR(out->data<float>()[i], expected[i], 1e-4f);
     }
 #endif
 }

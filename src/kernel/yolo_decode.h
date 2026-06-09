@@ -8,6 +8,7 @@ namespace feather {
 namespace kernel {
 
 void EnsureCommonYoloDecodeKernelsRegistered();
+void EnsureX86YoloDecodeKernelsRegistered();
 void EnsureYoloDecodeKernelsRegistered();
 
 template <DeviceType dev, DataType dtype>

@@ -1,4 +1,4 @@
-#include "core/sigmoid_mul_fusion_pass.h"
+#include "pass/sigmoid_mul_fusion_pass.h"
 
 #include <algorithm>
 #include <string>

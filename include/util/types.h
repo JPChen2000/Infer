@@ -1,8 +1,10 @@
 #ifndef FEATHER_INFER_UTIL_TYPES_H
 #define FEATHER_INFER_UTIL_TYPES_H
 #include <cstddef>
+#include <cstdint>
 #include <iostream>
 #include <unordered_map>
+#include <vector>
 #include <variant>
 namespace feather {
 
@@ -86,6 +88,64 @@ enum class DataLayout {
     NHWC = 1, 
     ND = 2 
 };
+
+struct ImageShape4D {
+    int64_t n{0};
+    int64_t c{0};
+    int64_t h{0};
+    int64_t w{0};
+};
+
+inline bool IsImageLayout(DataLayout layout) {
+    return layout == DataLayout::NCHW || layout == DataLayout::NHWC;
+}
+
+inline DataLayout NormalizeDataLayout(DataLayout layout) {
+    return IsImageLayout(layout) ? layout : DataLayout::NCHW;
+}
+
+inline bool IsChannelLastLayout(DataLayout layout) {
+    return NormalizeDataLayout(layout) == DataLayout::NHWC;
+}
+
+inline int ChannelAxisForLayout(DataLayout layout) {
+    return IsChannelLastLayout(layout) ? 3 : 1;
+}
+
+inline int HeightAxisForLayout(DataLayout layout) {
+    return IsChannelLastLayout(layout) ? 1 : 2;
+}
+
+inline int WidthAxisForLayout(DataLayout layout) {
+    return IsChannelLastLayout(layout) ? 2 : 3;
+}
+
+inline bool DecodeImageShape4D(const std::vector<int64_t>& dims, DataLayout layout, ImageShape4D* shape) {
+    if (shape == nullptr || dims.size() != 4) {
+        return false;
+    }
+    const DataLayout normalized = NormalizeDataLayout(layout);
+    shape->n = dims[0];
+    shape->c = dims[static_cast<size_t>(ChannelAxisForLayout(normalized))];
+    shape->h = dims[static_cast<size_t>(HeightAxisForLayout(normalized))];
+    shape->w = dims[static_cast<size_t>(WidthAxisForLayout(normalized))];
+    return true;
+}
+
+inline std::vector<int64_t> EncodeImageShape4D(const ImageShape4D& shape, DataLayout layout) {
+    if (IsChannelLastLayout(layout)) {
+        return {shape.n, shape.h, shape.w, shape.c};
+    }
+    return {shape.n, shape.c, shape.h, shape.w};
+}
+
+inline int64_t OffsetForImage4D(DataLayout layout, int64_t n, int64_t c, int64_t h, int64_t w,
+                                int64_t channels, int64_t height, int64_t width) {
+    if (IsChannelLastLayout(layout)) {
+        return ((n * height + h) * width + w) * channels + c;
+    }
+    return ((n * channels + c) * height + h) * width + w;
+}
 
 inline size_t DataTypeBytes(DataType dtype) {
     switch (dtype) {

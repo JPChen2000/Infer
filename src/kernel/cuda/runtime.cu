@@ -1,9 +1,9 @@
 #include "src/kernel/cuda/runtime.h"
 
-#include <cuda_runtime.h>
-
+#include <algorithm>
 #include <mutex>
 #include <unordered_map>
+#include <vector>
 
 namespace feather {
 namespace kernel {
@@ -14,9 +14,11 @@ namespace {
 struct CachedTensorDeviceState {
     void* ptr{nullptr};
     size_t bytes{0};
+    size_t capacity{0};
     const void* host_ptr{nullptr};
     bool device_valid{false};
     bool host_valid{true};
+    bool persistent{false};
 };
 
 std::mutex& CacheMutex() {
@@ -27,6 +29,11 @@ std::mutex& CacheMutex() {
 std::unordered_map<const Tensor*, CachedTensorDeviceState>& TensorCache() {
     static std::unordered_map<const Tensor*, CachedTensorDeviceState> cache;
     return cache;
+}
+
+std::unordered_map<size_t, std::vector<void*>>& FreeDeviceBlocks() {
+    static std::unordered_map<size_t, std::vector<void*>> blocks;
+    return blocks;
 }
 
 bool& DeferredSyncFlag() {
@@ -49,12 +56,77 @@ int& StreamCreateStatus() {
     return status;
 }
 
+cublasHandle_t& CublasHandleStorage() {
+    static cublasHandle_t handle = nullptr;
+    return handle;
+}
+
+std::once_flag& CublasCreateOnceFlag() {
+    static std::once_flag once;
+    return once;
+}
+
+int& CublasCreateStatus() {
+    static int status = -1;
+    return status;
+}
+
 int CudaStatus(cudaError_t status) {
     return status == cudaSuccess ? 0 : -1;
 }
 
+int CublasStatus(cublasStatus_t status) {
+    return status == CUBLAS_STATUS_SUCCESS ? 0 : -1;
+}
+
+int EnsureInferenceStreamCreated();
+
+size_t NormalizeAllocationSize(size_t bytes) {
+    if (bytes == 0) {
+        return 0;
+    }
+    constexpr size_t kMinClassSize = 256;
+    constexpr size_t kMaxChunkSize = 8 * 1024;
+    constexpr size_t kLargeAlignSize = 4 * 1024;
+
+    if (bytes <= kMinClassSize) {
+        return kMinClassSize;
+    }
+    if (bytes <= kMaxChunkSize) {
+        size_t klass = kMinClassSize;
+        while (klass < bytes) {
+            klass <<= 1;
+        }
+        return klass;
+    }
+    return ((bytes + kLargeAlignSize - 1) / kLargeAlignSize) * kLargeAlignSize;
+}
+
+void ReleaseBlockToPool(CachedTensorDeviceState* state) {
+    if (state == nullptr || state->ptr == nullptr) {
+        return;
+    }
+    FreeDeviceBlocks()[state->capacity].push_back(state->ptr);
+    state->ptr = nullptr;
+    state->bytes = 0;
+    state->capacity = 0;
+    state->device_valid = false;
+    state->host_valid = true;
+}
+
 void CreateInferenceStreamOnce() {
     StreamCreateStatus() = CudaStatus(cudaStreamCreateWithFlags(&StreamStorage(), cudaStreamNonBlocking));
+}
+
+void CreateCublasHandleOnce() {
+    if (EnsureInferenceStreamCreated() != 0) {
+        CublasCreateStatus() = -1;
+        return;
+    }
+    CublasCreateStatus() = CublasStatus(cublasCreate(&CublasHandleStorage()));
+    if (CublasCreateStatus() == 0) {
+        CublasCreateStatus() = CublasStatus(cublasSetStream(CublasHandleStorage(), StreamStorage()));
+    }
 }
 
 int EnsureInferenceStreamCreated() {
@@ -62,26 +134,41 @@ int EnsureInferenceStreamCreated() {
     return StreamCreateStatus();
 }
 
+int EnsureCublasHandleCreated() {
+    std::call_once(CublasCreateOnceFlag(), CreateCublasHandleOnce);
+    if (CublasCreateStatus() != 0) {
+        return CublasCreateStatus();
+    }
+    return CublasStatus(cublasSetStream(CublasHandleStorage(), StreamStorage()));
+}
+
 int EnsureDeviceAllocation(CachedTensorDeviceState* state, size_t bytes) {
     if (state == nullptr) {
         return -1;
     }
-    if (state->ptr != nullptr && state->bytes >= bytes) {
+    const size_t capacity = NormalizeAllocationSize(bytes);
+    if (state->ptr != nullptr && state->capacity >= capacity) {
         state->bytes = bytes;
         return 0;
     }
     if (state->ptr != nullptr) {
-        cudaFree(state->ptr);
-        state->ptr = nullptr;
+        ReleaseBlockToPool(state);
     }
     state->bytes = 0;
+    state->capacity = 0;
     if (bytes == 0) {
         return 0;
     }
-    if (CudaStatus(cudaMalloc(&state->ptr, bytes)) != 0) {
+    auto& free_blocks = FreeDeviceBlocks();
+    auto free_it = free_blocks.find(capacity);
+    if (free_it != free_blocks.end() && !free_it->second.empty()) {
+        state->ptr = free_it->second.back();
+        free_it->second.pop_back();
+    } else if (CudaStatus(cudaMalloc(&state->ptr, capacity)) != 0) {
         return -1;
     }
     state->bytes = bytes;
+    state->capacity = capacity;
     return 0;
 }
 
@@ -130,6 +217,82 @@ void InvalidateTensorDevice(const Tensor* tensor) {
     }
 }
 
+void MarkTensorDevicePersistent(const Tensor* tensor, bool persistent) {
+    if (tensor == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(CacheMutex());
+    TensorCache()[tensor].persistent = persistent;
+}
+
+bool IsTensorDevicePersistent(const Tensor* tensor) {
+    if (tensor == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(CacheMutex());
+    auto it = TensorCache().find(tensor);
+    return it != TensorCache().end() && it->second.persistent;
+}
+
+void ReleaseTensorDevice(const Tensor* tensor) {
+    if (tensor == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(CacheMutex());
+    auto it = TensorCache().find(tensor);
+    if (it == TensorCache().end() || it->second.persistent) {
+        return;
+    }
+    ReleaseBlockToPool(&it->second);
+}
+
+int AcquireTemporaryDeviceBuffer(size_t bytes, void** device_ptr) {
+    if (device_ptr == nullptr) {
+        return -1;
+    }
+    *device_ptr = nullptr;
+    if (bytes == 0) {
+        return 0;
+    }
+    std::lock_guard<std::mutex> lock(CacheMutex());
+    const size_t capacity = NormalizeAllocationSize(bytes);
+    auto& free_blocks = FreeDeviceBlocks();
+    auto free_it = free_blocks.find(capacity);
+    if (free_it != free_blocks.end() && !free_it->second.empty()) {
+        *device_ptr = free_it->second.back();
+        free_it->second.pop_back();
+        return 0;
+    }
+    return CudaStatus(cudaMalloc(device_ptr, capacity));
+}
+
+void ReleaseTemporaryDeviceBuffer(void* device_ptr, size_t bytes) {
+    if (device_ptr == nullptr || bytes == 0) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(CacheMutex());
+    FreeDeviceBlocks()[NormalizeAllocationSize(bytes)].push_back(device_ptr);
+}
+
+TensorCacheStats GetTensorCacheStats() {
+    std::lock_guard<std::mutex> lock(CacheMutex());
+    TensorCacheStats stats;
+    for (const auto& item : TensorCache()) {
+        if (item.second.persistent) {
+            ++stats.persistent_tensor_count;
+        }
+        if (item.second.ptr != nullptr) {
+            ++stats.active_tensor_count;
+            stats.active_bytes += item.second.capacity;
+        }
+    }
+    for (const auto& blocks : FreeDeviceBlocks()) {
+        stats.free_block_count += blocks.second.size();
+        stats.pooled_bytes += blocks.first * blocks.second.size();
+    }
+    return stats;
+}
+
 void ClearTensorCache() {
     (void)SynchronizeInferenceStream();
     std::lock_guard<std::mutex> lock(CacheMutex());
@@ -138,6 +301,14 @@ void ClearTensorCache() {
             cudaFree(item.second.ptr);
         }
     }
+    for (auto& blocks : FreeDeviceBlocks()) {
+        for (void* ptr : blocks.second) {
+            if (ptr != nullptr) {
+                cudaFree(ptr);
+            }
+        }
+    }
+    FreeDeviceBlocks().clear();
     TensorCache().clear();
 }
 
@@ -219,6 +390,13 @@ int SyncTensorToHostIfNeeded(Tensor* tensor, size_t bytes, void* host_data) {
     state.host_ptr = host_data;
     state.host_valid = true;
     return 0;
+}
+
+cublasHandle_t CublasHandle() {
+    if (EnsureCublasHandleCreated() != 0) {
+        return nullptr;
+    }
+    return CublasHandleStorage();
 }
 
 DeferredHostSyncScope::DeferredHostSyncScope() : previous_(DeferredHostSyncEnabled()) {

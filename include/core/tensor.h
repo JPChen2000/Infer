@@ -67,6 +67,8 @@ class Tensor {
 
     DataType data_type() const { return m_data_type; }
     void set_data_type(const DataType &data_type) { m_data_type = data_type; }
+    DataLayout layout() const { return m_layout; }
+    void set_layout(DataLayout layout) { m_layout = layout; }
 
     template <typename T>
     T *mutable_data() {
@@ -145,6 +147,7 @@ class Tensor {
    private:
     DDim m_dims;
     DataType m_data_type{DataType::UNKNOWN};
+    DataLayout m_layout{DataLayout::ND};
     std::shared_ptr<Buffer> m_buffer;
     size_t m_memory_size{};
     size_t m_offset{};

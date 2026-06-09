@@ -8,9 +8,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "core/graph_pass.h"
 #include "core/operator.h"
 #include "model/model_format.h"
+#include "pass/graph_pass.h"
 
 namespace feather {
 

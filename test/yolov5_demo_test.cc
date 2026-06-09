@@ -13,6 +13,10 @@
 #include "demo/yolov5_runner.h"
 #include "model/model_io.h"
 
+#ifdef FEATHER_WITH_CUDA
+#include <cuda_runtime.h>
+#endif
+
 namespace {
 
 std::filesystem::path WriteTestPpmImage(const std::filesystem::path& path) {
@@ -25,6 +29,13 @@ std::filesystem::path WriteTestPpmImage(const std::filesystem::path& path) {
     out.write(reinterpret_cast<const char*>(pixels.data()), static_cast<std::streamsize>(pixels.size()));
     return path;
 }
+
+#ifdef FEATHER_WITH_CUDA
+bool HasCudaDevice() {
+    int count = 0;
+    return cudaGetDeviceCount(&count) == cudaSuccess && count > 0;
+}
+#endif
 
 }  // namespace
 
@@ -133,6 +144,31 @@ TEST(yolov5_demo_test, ParseYolov5BackendRejectsUnsupportedNames) {
     EXPECT_FALSE(feather::demo::ParseYolov5Backend("common", nullptr));
 }
 
+TEST(yolov5_demo_test, ParseYolov5LayoutOverrideAcceptsSupportedNames) {
+    feather::demo::Yolov5LayoutOverride layout = feather::demo::Yolov5LayoutOverride::kAuto;
+
+    ASSERT_TRUE(feather::demo::ParseYolov5LayoutOverride("auto", &layout));
+    EXPECT_EQ(layout, feather::demo::Yolov5LayoutOverride::kAuto);
+    EXPECT_STREQ(feather::demo::Yolov5LayoutOverrideName(layout), "auto");
+
+    ASSERT_TRUE(feather::demo::ParseYolov5LayoutOverride("nchw", &layout));
+    EXPECT_EQ(layout, feather::demo::Yolov5LayoutOverride::kNchw);
+    EXPECT_STREQ(feather::demo::Yolov5LayoutOverrideName(layout), "nchw");
+
+    ASSERT_TRUE(feather::demo::ParseYolov5LayoutOverride("nhwc", &layout));
+    EXPECT_EQ(layout, feather::demo::Yolov5LayoutOverride::kNhwc);
+    EXPECT_STREQ(feather::demo::Yolov5LayoutOverrideName(layout), "nhwc");
+}
+
+TEST(yolov5_demo_test, ParseYolov5LayoutOverrideRejectsUnsupportedNames) {
+    feather::demo::Yolov5LayoutOverride layout = feather::demo::Yolov5LayoutOverride::kNchw;
+
+    EXPECT_FALSE(feather::demo::ParseYolov5LayoutOverride("", &layout));
+    EXPECT_FALSE(feather::demo::ParseYolov5LayoutOverride("ncwh", &layout));
+    EXPECT_FALSE(feather::demo::ParseYolov5LayoutOverride("nhwc,nchw", &layout));
+    EXPECT_FALSE(feather::demo::ParseYolov5LayoutOverride("nhwc", nullptr));
+}
+
 TEST(yolov5_demo_test, LoadFthAndRunImageInference) {
     const auto repo_root = std::filesystem::path(__FILE__).parent_path().parent_path();
     const auto model_path = repo_root / "yolov5n.fth";
@@ -155,6 +191,56 @@ TEST(yolov5_demo_test, LoadFthAndRunImageInference) {
     EXPECT_NE(runner.DescribeLastRun().find("lower_ms="), std::string::npos);
     EXPECT_NE(runner.DescribeLastRun().find("rungraph_ms="), std::string::npos);
     EXPECT_NE(runner.DescribeLastRun().find("postprocess_ms="), std::string::npos);
+}
+
+TEST(yolov5_demo_test, LoadFthCanReportExplicitNchwInputLayoutInSummary) {
+    const auto repo_root = std::filesystem::path(__FILE__).parent_path().parent_path();
+    const auto model_path = repo_root / "yolov5n.fth";
+
+    ASSERT_TRUE(std::filesystem::exists(model_path));
+
+    feather::demo::Yolov5Runner runner;
+    ASSERT_EQ(runner.Load(model_path.string(), feather::demo::Yolov5Backend::kX86,
+                          feather::demo::Yolov5LayoutOverride::kNchw),
+              0);
+    EXPECT_NE(runner.DescribeLastBuild().find("input_layout=nchw"), std::string::npos);
+}
+
+TEST(yolov5_demo_test, LoadFthRejectsIncompatibleNhwcOverride) {
+    const auto repo_root = std::filesystem::path(__FILE__).parent_path().parent_path();
+    const auto model_path = repo_root / "yolov5n.fth";
+
+    ASSERT_TRUE(std::filesystem::exists(model_path));
+
+    feather::demo::Yolov5Runner runner;
+    EXPECT_EQ(runner.Load(model_path.string(), feather::demo::Yolov5Backend::kX86,
+                          feather::demo::Yolov5LayoutOverride::kNhwc),
+              -1);
+}
+
+TEST(yolov5_demo_test, CudaRunSummaryReportsDeviceCacheStats) {
+#ifndef FEATHER_WITH_CUDA
+    GTEST_SKIP() << "CUDA kernels are not built";
+#else
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
+    const auto repo_root = std::filesystem::path(__FILE__).parent_path().parent_path();
+    const auto model_path = repo_root / "yolov5n_fp32.fth";
+    const auto image_path = WriteTestPpmImage(std::filesystem::temp_directory_path() / "yolov5n_demo_cuda_stats.ppm");
+
+    ASSERT_TRUE(std::filesystem::exists(model_path));
+
+    feather::demo::Yolov5Runner runner;
+    ASSERT_EQ(runner.Load(model_path.string(), feather::demo::Yolov5Backend::kCuda), 0);
+
+    std::vector<feather::demo::Detection> detections;
+    ASSERT_EQ(runner.Run(image_path.string(), 0.25f, 0.45f, &detections), 0);
+    EXPECT_NE(runner.DescribeLastRun().find("cuda_active_bytes="), std::string::npos);
+    EXPECT_NE(runner.DescribeLastRun().find("cuda_pooled_bytes="), std::string::npos);
+    EXPECT_NE(runner.DescribeLastRun().find("cuda_active_tensors="), std::string::npos);
+#endif
 }
 
 TEST(yolov5_demo_test, SaveDetectionsImageWritesAnnotatedOutput) {

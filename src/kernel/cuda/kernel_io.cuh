@@ -24,6 +24,10 @@ inline int CudaCheck(cudaError_t status) {
     return status == cudaSuccess ? 0 : -1;
 }
 
+inline int CublasCheck(cublasStatus_t status) {
+    return status == CUBLAS_STATUS_SUCCESS ? 0 : -1;
+}
+
 inline int64_t DivUp(int64_t value, int64_t divisor) {
     return (value + divisor - 1) / divisor;
 }

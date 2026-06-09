@@ -1,5 +1,5 @@
-#ifndef FEATHER_CORE_GRAPH_PASS_H
-#define FEATHER_CORE_GRAPH_PASS_H
+#ifndef FEATHER_PASS_GRAPH_PASS_H
+#define FEATHER_PASS_GRAPH_PASS_H
 
 #include <memory>
 #include <string>
@@ -26,6 +26,9 @@ class PassManager {
     std::vector<std::unique_ptr<GraphPass>> passes_;
 };
 
+std::shared_ptr<PassManager> CreateDefaultPassManager();
+std::shared_ptr<PassManager> CreateYoloPassManager();
+
 }  // namespace feather
 
-#endif  // FEATHER_CORE_GRAPH_PASS_H
+#endif  // FEATHER_PASS_GRAPH_PASS_H

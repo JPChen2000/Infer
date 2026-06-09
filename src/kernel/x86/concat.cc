@@ -3,8 +3,12 @@
 #include <immintrin.h>
 
 #include <cstring>
+#include <future>
+#include <vector>
 
 #include "src/kernel/common/kernel_io.h"
+#include "util/thread_pool_nv.h"
+#include "util/threading.h"
 #include "util/timer.h"
 
 namespace feather {
@@ -39,6 +43,51 @@ inline void CopyHalfBlock(const uint16_t* src, uint16_t* dst, int64_t count) {
     }
     if (i < count) {
         std::memcpy(dst + i, src + i, static_cast<size_t>(count - i) * sizeof(uint16_t));
+    }
+}
+
+size_t GetConcatThreadCount(int64_t total_work_items) {
+    return ThreadCountForWorkItems(total_work_items);
+}
+
+ThreadPoolNv& GetConcatThreadPool() {
+    static ThreadPoolNv pool(DefaultThreadCount());
+    return pool;
+}
+
+template <typename Fn>
+void ParallelForConcat(int64_t total_work_items, int64_t total_scalar_work_items, Fn&& fn) {
+    if (total_work_items <= 1 || total_scalar_work_items < 16384) {
+        fn(0, total_work_items);
+        return;
+    }
+
+    const size_t thread_count = GetConcatThreadCount(total_work_items);
+    if (thread_count <= 1) {
+        fn(0, total_work_items);
+        return;
+    }
+
+    ThreadPoolNv& pool = GetConcatThreadPool();
+    std::vector<std::future<int>> futures;
+    futures.reserve(thread_count);
+
+    const int64_t chunk_size =
+        (total_work_items + static_cast<int64_t>(thread_count) - 1) / static_cast<int64_t>(thread_count);
+    for (size_t tid = 0; tid < thread_count; ++tid) {
+        const int64_t begin = static_cast<int64_t>(tid) * chunk_size;
+        const int64_t end = std::min(total_work_items, begin + chunk_size);
+        if (begin >= end) {
+            break;
+        }
+        futures.emplace_back(pool.enqueue([begin, end, &fn](int) {
+            fn(begin, end);
+            return 0;
+        }));
+    }
+
+    for (auto& future : futures) {
+        future.get();
     }
 }
 
@@ -110,17 +159,19 @@ int32_t ComputeConcatRaw(feather::operators::ConcatParam* param, DataType dtype,
 
     param->out->set_data_type(dtype);
     T* output = param->out->mutable_data<T>();
-    for (int64_t outer_idx = 0; outer_idx < outer; ++outer_idx) {
-        int64_t axis_offset = 0;
-        for (const auto& input : param->inputs) {
-            const int64_t input_axis = input->dims()[axis];
-            const int64_t copy_count = input_axis * inner;
-            const int64_t input_base = outer_idx * copy_count;
-            const int64_t output_base = (outer_idx * out_axis + axis_offset) * inner;
-            copy_fn(input->data<T>() + input_base, output + output_base, copy_count);
-            axis_offset += input_axis;
+    ParallelForConcat(outer, outer * out_axis * inner, [&](int64_t begin, int64_t end) {
+        for (int64_t outer_idx = begin; outer_idx < end; ++outer_idx) {
+            int64_t axis_offset = 0;
+            for (const auto& input : param->inputs) {
+                const int64_t input_axis = input->dims()[axis];
+                const int64_t copy_count = input_axis * inner;
+                const int64_t input_base = outer_idx * copy_count;
+                const int64_t output_base = (outer_idx * out_axis + axis_offset) * inner;
+                copy_fn(input->data<T>() + input_base, output + output_base, copy_count);
+                axis_offset += input_axis;
+            }
         }
-    }
+    });
     return 0;
 }
 

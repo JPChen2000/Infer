@@ -1,4 +1,4 @@
-#include "core/yolo_decode_fusion_pass.h"
+#include "pass/yolo_decode_fusion_pass.h"
 
 #include <algorithm>
 #include <vector>
@@ -84,6 +84,22 @@ bool HasVectorAttribute(const model::NodeDesc& node, const std::string& key, con
     }
     if (auto value = std::get_if<std::vector<int64_t>>(&it->second); value != nullptr) {
         return *value == expected;
+    }
+    return false;
+}
+
+bool HasAnyVectorAttribute(const model::NodeDesc& node, const std::string& key,
+                           const std::vector<std::vector<int64_t>>& expected_options) {
+    auto it = node.attributes.find(key);
+    if (it == node.attributes.end()) {
+        return false;
+    }
+    if (auto value = std::get_if<std::vector<int64_t>>(&it->second); value != nullptr) {
+        for (const auto& expected : expected_options) {
+            if (*value == expected) {
+                return true;
+            }
+        }
     }
     return false;
 }
@@ -235,7 +251,8 @@ bool MatchYoloDecodePattern(const StaticGraph& graph, const StaticNode& final_re
         return false;
     }
     const auto* transpose_desc = ModelNode(graph, transpose->name);
-    if (transpose_desc == nullptr || !HasVectorAttribute(*transpose_desc, "perm", {0, 1, 3, 4, 2})) {
+    if (transpose_desc == nullptr ||
+        !HasAnyVectorAttribute(*transpose_desc, "perm", {{0, 1, 3, 4, 2}, {0, 3, 1, 2, 4}})) {
         return false;
     }
     const auto* raw_reshape = ProducerNode(graph, transpose->inputs[0], "Reshape");

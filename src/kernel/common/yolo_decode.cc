@@ -38,10 +38,15 @@ int32_t ComputeYoloDecodeKernel(feather::operators::YoloDecodeParam* param) {
         return -1;
     }
 
-    const int64_t batch = in_dims[0];
-    const int64_t channels = in_dims[1];
-    const int64_t height = in_dims[2];
-    const int64_t width = in_dims[3];
+    ImageShape4D input_shape;
+    if (!DecodeImageShape4D(in_dims, param->input->layout(), &input_shape)) {
+        return -1;
+    }
+    const DataLayout layout = NormalizeDataLayout(param->input->layout());
+    const int64_t batch = input_shape.n;
+    const int64_t channels = input_shape.c;
+    const int64_t height = input_shape.h;
+    const int64_t width = input_shape.w;
     const int64_t anchors = grid_dims[1];
     const int64_t attrs = channels / anchors;
     if (anchors <= 0 || attrs < 5 || channels % anchors != 0) {
@@ -63,7 +68,8 @@ int32_t ComputeYoloDecodeKernel(feather::operators::YoloDecodeParam* param) {
                     const int64_t out_base = (n * anchors * height * width + point) * attrs;
                     for (int64_t attr = 0; attr < attrs; ++attr) {
                         const int64_t channel = anchor * attrs + attr;
-                        const int64_t input_offset = ((n * channels + channel) * height + y) * width + x;
+                        const int64_t input_offset =
+                            OffsetForImage4D(layout, n, channel, y, x, channels, height, width);
                         const float value = Sigmoid(TensorIO<dtype>::Read(param->input.get(), input_offset));
                         float decoded = value;
                         if (attr < 2) {
@@ -108,7 +114,10 @@ REGISTER_KERNEL(COMMON, FP16, YoloDecode, YoloDecodeCommonFP16Kernel);
 
 void EnsureCommonYoloDecodeKernelsRegistered() { (void)g_yolo_decode_kernels_registered; }
 
-void EnsureYoloDecodeKernelsRegistered() { EnsureCommonYoloDecodeKernelsRegistered(); }
+void EnsureYoloDecodeKernelsRegistered() {
+    EnsureCommonYoloDecodeKernelsRegistered();
+    EnsureX86YoloDecodeKernelsRegistered();
+}
 
 }  // namespace kernel
 }  // namespace feather

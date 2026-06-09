@@ -76,6 +76,7 @@ int32_t SiluOp::InferOutputShapes() {
     } else {
         param_.out->Resize(out_shape);
     }
+    param_.out->set_layout(param_.input->layout());
     SyncIO();
     return 0;
 }

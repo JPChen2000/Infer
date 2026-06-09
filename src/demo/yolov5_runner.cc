@@ -6,9 +6,8 @@
 #include <cstring>
 #include <sstream>
 
-#include "core/sigmoid_mul_fusion_pass.h"
-#include "core/yolo_decode_fusion_pass.h"
 #include "demo/image_io.h"
+#include "pass/graph_pass.h"
 #ifdef FEATHER_WITH_CUDA
 #include "src/kernel/cuda/runtime.h"
 #endif
@@ -91,6 +90,32 @@ bool ParseYolov5Backend(const std::string& value, Yolov5Backend* backend) {
     return false;
 }
 
+bool ParseYolov5LayoutOverride(const std::string& value, Yolov5LayoutOverride* layout) {
+    if (layout == nullptr) {
+        return false;
+    }
+
+    std::string normalized;
+    normalized.reserve(value.size());
+    for (const auto ch : value) {
+        normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+    }
+
+    if (normalized == "auto") {
+        *layout = Yolov5LayoutOverride::kAuto;
+        return true;
+    }
+    if (normalized == "nchw") {
+        *layout = Yolov5LayoutOverride::kNchw;
+        return true;
+    }
+    if (normalized == "nhwc") {
+        *layout = Yolov5LayoutOverride::kNhwc;
+        return true;
+    }
+    return false;
+}
+
 const char* Yolov5BackendName(Yolov5Backend backend) {
     switch (backend) {
         case Yolov5Backend::kCommon:
@@ -102,6 +127,40 @@ const char* Yolov5BackendName(Yolov5Backend backend) {
         case Yolov5Backend::kHost:
         default:
             return "host";
+    }
+}
+
+const char* Yolov5LayoutOverrideName(Yolov5LayoutOverride layout) {
+    switch (layout) {
+        case Yolov5LayoutOverride::kNchw:
+            return "nchw";
+        case Yolov5LayoutOverride::kNhwc:
+            return "nhwc";
+        case Yolov5LayoutOverride::kAuto:
+        default:
+            return "auto";
+    }
+}
+
+const char* DataLayoutName(DataLayout layout) {
+    switch (NormalizeDataLayout(layout)) {
+        case DataLayout::NHWC:
+            return "nhwc";
+        case DataLayout::NCHW:
+        default:
+            return "nchw";
+    }
+}
+
+DataLayout ResolveInputLayout(DataLayout model_layout, Yolov5LayoutOverride override_layout) {
+    switch (override_layout) {
+        case Yolov5LayoutOverride::kNchw:
+            return DataLayout::NCHW;
+        case Yolov5LayoutOverride::kNhwc:
+            return DataLayout::NHWC;
+        case Yolov5LayoutOverride::kAuto:
+        default:
+            return NormalizeDataLayout(model_layout);
     }
 }
 
@@ -164,6 +223,13 @@ int32_t Yolov5Runner::RunOnImage(const std::string& image_path, const ImageData&
     *detections = DecodeYolov5Detections(*output_tensor, letterbox, image.width, image.height,
                                          conf_thresh, iou_thresh);
     const auto postprocess_end = std::chrono::steady_clock::now();
+#ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::TensorCacheStats cuda_cache_stats;
+    if (backend_device_ == DeviceType::CUDA) {
+        kernel::cuda_detail::ReleaseTensorDevice(output_tensor.get());
+        cuda_cache_stats = kernel::cuda_detail::GetTensorCacheStats();
+    }
+#endif
 
     if (record_summary) {
         std::ostringstream build_ss;
@@ -201,6 +267,15 @@ int32_t Yolov5Runner::RunOnImage(const std::string& image_path, const ImageData&
                << " rungraph_ms=" << ElapsedMilliseconds(rungraph_begin, rungraph_end)
                << " postprocess_ms=" << ElapsedMilliseconds(postprocess_begin, postprocess_end)
                << " total_ms=" << ElapsedMilliseconds(run_begin, postprocess_end);
+#ifdef FEATHER_WITH_CUDA
+        if (backend_device_ == DeviceType::CUDA) {
+            run_ss << " cuda_active_tensors=" << cuda_cache_stats.active_tensor_count
+                   << " cuda_persistent_tensors=" << cuda_cache_stats.persistent_tensor_count
+                   << " cuda_free_blocks=" << cuda_cache_stats.free_block_count
+                   << " cuda_active_bytes=" << cuda_cache_stats.active_bytes
+                   << " cuda_pooled_bytes=" << cuda_cache_stats.pooled_bytes;
+        }
+#endif
         last_run_summary_ = run_ss.str();
     }
     return 0;
@@ -228,8 +303,10 @@ int32_t Yolov5Runner::PrepareExecutableGraph() {
     return 0;
 }
 
-int32_t Yolov5Runner::Load(const std::string& model_path, Yolov5Backend backend) {
+int32_t Yolov5Runner::Load(const std::string& model_path, Yolov5Backend backend,
+                          Yolov5LayoutOverride layout_override) {
     backend_ = backend;
+    layout_override_ = layout_override;
 #ifndef FEATHER_WITH_CUDA
     if (backend_ == Yolov5Backend::kCuda) {
         return -1;
@@ -257,24 +334,26 @@ int32_t Yolov5Runner::Load(const std::string& model_path, Yolov5Backend backend)
     output_name_ = model.graph.outputs.front();
     model_name_ = model.name;
     const auto* input_value = FindValueDescByName(model, input_name_);
-    if (input_value == nullptr || input_value->tensor.dims.size() != 4 ||
-        input_value->tensor.dims[0] != 1 || input_value->tensor.dims[1] != 3) {
+    if (input_value == nullptr || input_value->tensor.dims.size() != 4) {
         return -1;
     }
+    ImageShape4D input_shape;
+    if (!DecodeImageShape4D(input_value->tensor.dims, input_value->tensor.layout, &input_shape) ||
+        input_shape.n != 1 || input_shape.c != 3 || input_shape.h != input_shape.w) {
+        return -1;
+    }
+    input_layout_ = ResolveInputLayout(input_value->tensor.layout, layout_override_);
 
-    input_size_ = static_cast<int>(input_value->tensor.dims[2]);
+    input_size_ = static_cast<int>(input_shape.h);
     input_dtype_ = input_value->tensor.data_type;
 
     static_graph_ = StaticGraph();
     static_graph_.SetKernelDevice(backend_device_);
-    auto pass_manager = std::make_shared<PassManager>();
-    pass_manager->AddPass(std::make_unique<SigmoidMulFusionPass>());
-    pass_manager->AddPass(std::make_unique<YoloDecodeFusionPass>());
-    static_graph_.SetPassManager(pass_manager);
     runtime_graph_.Clear();
     if (static_graph_.SetModel(model) != 0) {
         return -1;
     }
+    static_graph_.SetPassManager(CreateYoloPassManager());
     for (const auto& value : model.graph.values) {
         if (!value.constant) {
             continue;
@@ -285,10 +364,11 @@ int32_t Yolov5Runner::Load(const std::string& model_path, Yolov5Backend backend)
         }
     }
 
-    auto input_tensor = std::make_shared<Tensor>(input_value->tensor.dims);
+    auto input_tensor = std::make_shared<Tensor>(EncodeImageShape4D(input_shape, input_layout_));
     if (input_tensor == nullptr) {
         return -1;
     }
+    input_tensor->set_layout(input_layout_);
     switch (input_dtype_) {
         case DataType::FP16:
             (void)input_tensor->mutable_data<uint16_t>();
@@ -322,6 +402,7 @@ int32_t Yolov5Runner::Load(const std::string& model_path, Yolov5Backend backend)
         ss << input_value->tensor.dims[i];
     }
     ss << "]"
+       << " input_layout=" << DataLayoutName(input_layout_)
        << " input_dtype=" << static_cast<int>(input_dtype_)
        << " static_nodes=" << static_graph_.NodeSize()
        << " runtime_nodes=" << runtime_graph_.NodeSize()

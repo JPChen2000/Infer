@@ -94,10 +94,14 @@ int32_t YoloDecodeOp::CheckShape() const {
     if (grid_dims != anchor_dims || grid_dims[4] != 2) {
         return -1;
     }
-    const int64_t batch = in_dims[0];
-    const int64_t channels = in_dims[1];
-    const int64_t height = in_dims[2];
-    const int64_t width = in_dims[3];
+    ImageShape4D input_shape;
+    if (!DecodeImageShape4D(in_dims, param_.input->layout(), &input_shape)) {
+        return -1;
+    }
+    const int64_t batch = input_shape.n;
+    const int64_t channels = input_shape.c;
+    const int64_t height = input_shape.h;
+    const int64_t width = input_shape.w;
     const int64_t anchors = grid_dims[1];
     if (batch <= 0 || channels <= 0 || height <= 0 || width <= 0 || anchors <= 0) {
         return -1;
@@ -121,11 +125,15 @@ int32_t YoloDecodeOp::InferOutputShapes() {
     }
     const auto& in_dims = param_.input->dims().data();
     const auto& grid_dims = param_.grid->dims().data();
-    const int64_t batch = in_dims[0];
+    ImageShape4D input_shape;
+    if (!DecodeImageShape4D(in_dims, param_.input->layout(), &input_shape)) {
+        return -1;
+    }
+    const int64_t batch = input_shape.n;
     const int64_t anchors = grid_dims[1];
-    const int64_t height = in_dims[2];
-    const int64_t width = in_dims[3];
-    const int64_t attrs = in_dims[1] / anchors;
+    const int64_t height = input_shape.h;
+    const int64_t width = input_shape.w;
+    const int64_t attrs = input_shape.c / anchors;
     const std::vector<int64_t> out_shape = {batch, anchors * height * width, attrs};
     const size_t required_bytes =
         static_cast<size_t>(std::max<int64_t>(1, ComputeNumel(out_shape))) *
@@ -138,6 +146,7 @@ int32_t YoloDecodeOp::InferOutputShapes() {
     } else {
         param_.out->Resize(out_shape);
     }
+    param_.out->set_layout(DataLayout::ND);
     SyncIO();
     return 0;
 }

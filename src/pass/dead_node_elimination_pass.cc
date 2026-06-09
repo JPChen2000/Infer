@@ -1,5 +1,6 @@
-#include "core/dead_node_elimination_pass.h"
+#include "pass/dead_node_elimination_pass.h"
 
+#include <algorithm>
 #include <vector>
 
 #include "core/static_graph.h"

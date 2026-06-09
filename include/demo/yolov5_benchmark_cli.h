@@ -13,6 +13,7 @@ struct Yolov5BenchmarkCommandLine {
     std::string model_path;
     std::string image_path;
     Yolov5Backend backend{Yolov5Backend::kHost};
+    Yolov5LayoutOverride layout{Yolov5LayoutOverride::kAuto};
     float conf_thresh{0.25f};
     float iou_thresh{0.45f};
 };
@@ -39,6 +40,12 @@ inline bool ParseYolov5BenchmarkCommandLine(int* argc, char*** argv, Yolov5Bench
         }
         if (arg == "--backend" && read_index + 1 < *argc) {
             if (!ParseYolov5Backend((*argv)[++read_index], &result->backend)) {
+                return false;
+            }
+            continue;
+        }
+        if (arg == "--layout" && read_index + 1 < *argc) {
+            if (!ParseYolov5LayoutOverride((*argv)[++read_index], &result->layout)) {
                 return false;
             }
             continue;

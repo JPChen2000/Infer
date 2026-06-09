@@ -335,6 +335,100 @@ TEST(runtime_graph_test, CudaGraphSynchronizesAroundCommonFallbackNode) {
 #endif
 }
 
+TEST(runtime_graph_test, CudaGraphReleasesDeadTensorCachesIntoPool) {
+#ifndef FEATHER_WITH_CUDA
+    GTEST_SKIP() << "CUDA kernels are not built";
+#else
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
+    feather::kernel::cuda_detail::ClearTensorCache();
+
+    auto input = std::make_shared<Tensor>();
+    input->Assign<float>({1.0f, 2.0f}, {2});
+    auto bias = std::make_shared<Tensor>();
+    bias->Assign<float>({10.0f, 20.0f}, {2});
+    auto tmp0 = std::make_shared<Tensor>();
+    tmp0->Assign<float>({0.0f, 0.0f}, {2});
+    auto tmp1 = std::make_shared<Tensor>();
+    tmp1->Assign<float>({0.0f, 0.0f}, {2});
+    auto output = std::make_shared<Tensor>();
+    output->Assign<float>({0.0f, 0.0f}, {2});
+
+    feather::kernel::cuda_detail::MarkTensorDevicePersistent(bias.get(), true);
+
+    feather::operators::BinaryParam add0_param{};
+    add0_param.lhs = input;
+    add0_param.rhs = bias;
+    add0_param.out = tmp0;
+    auto add0_op = std::make_shared<feather::operators::AddOp>("cuda_add0", add0_param);
+    auto add0_kernel =
+        feather::KernelDispatcher::instance().create(feather::DeviceType::CUDA, feather::DataType::FP32, "Add");
+    ASSERT_NE(add0_kernel, nullptr);
+    add0_op->AttachKernel(std::move(add0_kernel));
+    auto add0_detached = add0_op->DetachKernel();
+
+    feather::operators::BinaryParam add1_param{};
+    add1_param.lhs = tmp0;
+    add1_param.rhs = bias;
+    add1_param.out = tmp1;
+    auto add1_op = std::make_shared<feather::operators::AddOp>("cuda_add1", add1_param);
+    auto add1_kernel =
+        feather::KernelDispatcher::instance().create(feather::DeviceType::CUDA, feather::DataType::FP32, "Add");
+    ASSERT_NE(add1_kernel, nullptr);
+    add1_op->AttachKernel(std::move(add1_kernel));
+    auto add1_detached = add1_op->DetachKernel();
+
+    feather::operators::BinaryParam add2_param{};
+    add2_param.lhs = tmp1;
+    add2_param.rhs = bias;
+    add2_param.out = output;
+    auto add2_op = std::make_shared<feather::operators::AddOp>("cuda_add2", add2_param);
+    auto add2_kernel =
+        feather::KernelDispatcher::instance().create(feather::DeviceType::CUDA, feather::DataType::FP32, "Add");
+    ASSERT_NE(add2_kernel, nullptr);
+    add2_op->AttachKernel(std::move(add2_kernel));
+    auto add2_detached = add2_op->DetachKernel();
+
+    RuntimeGraph graph;
+    graph.SetThreadMode(RuntimeThreadMode::kSerialGraph);
+    graph.SetOutputNames({"output"});
+    ASSERT_EQ(graph.SetTensor("input", input), 0);
+    ASSERT_EQ(graph.SetTensor("bias", bias), 0);
+    ASSERT_EQ(graph.SetTensor("tmp0", tmp0), 0);
+    ASSERT_EQ(graph.SetTensor("tmp1", tmp1), 0);
+    ASSERT_EQ(graph.SetTensor("output", output), 0);
+
+    graph.AddNode(MakeBinaryRuntimeNode("cuda_add0", "Add", add0_op, std::move(add0_detached), {"input", "bias"},
+                                        {"tmp0"}));
+    graph.AddNode(MakeBinaryRuntimeNode("cuda_add1", "Add", add1_op, std::move(add1_detached), {"tmp0", "bias"},
+                                        {"tmp1"}));
+    graph.AddNode(MakeBinaryRuntimeNode("cuda_add2", "Add", add2_op, std::move(add2_detached), {"tmp1", "bias"},
+                                        {"output"}));
+    ASSERT_EQ(graph.Finalize(), 0);
+
+    {
+        feather::kernel::cuda_detail::DeferredHostSyncScope deferred_sync;
+        ASSERT_EQ(graph.Run(), 0);
+        ASSERT_EQ(feather::kernel::cuda_detail::SyncTensorToHost(output.get(), output->numel() * sizeof(float),
+                                                                 output->mutable_data<float>()),
+                  0);
+    }
+
+    const auto stats = feather::kernel::cuda_detail::GetTensorCacheStats();
+    EXPECT_EQ(stats.active_tensor_count, 2U);
+    EXPECT_GE(stats.free_block_count, 1U);
+    EXPECT_EQ(stats.persistent_tensor_count, 1U);
+    EXPECT_FLOAT_EQ(output->data<float>()[0], 31.0f);
+    EXPECT_FLOAT_EQ(output->data<float>()[1], 62.0f);
+
+    feather::kernel::cuda_detail::ReleaseTensorDevice(output.get());
+    feather::kernel::cuda_detail::ReleaseTensorDevice(bias.get());
+    feather::kernel::cuda_detail::ClearTensorCache();
+#endif
+}
+
 TEST(static_graph_test, BuildFailsWhenRequiredTensorMissing) {
     ModelDesc model;
     model.name = "missing_weight";

@@ -119,9 +119,13 @@ int32_t Conv2dOp::CheckShape() const {
     if (param_.input->dims().size() != 4 || param_.w->dims().size() != 4) {
         return -1;
     }
-    const int64_t in_c = param_.input->dims()[1];
-    const int64_t in_h = param_.input->dims()[2];
-    const int64_t in_w = param_.input->dims()[3];
+    ImageShape4D input_shape;
+    if (!DecodeImageShape4D(param_.input->dims().data(), param_.input->layout(), &input_shape)) {
+        return -1;
+    }
+    const int64_t in_c = input_shape.c;
+    const int64_t in_h = input_shape.h;
+    const int64_t in_w = input_shape.w;
     const int64_t out_c = param_.w->dims()[0];
     const int64_t weight_c = param_.w->dims()[1];
     const int64_t kernel_h = param_.w->dims()[2];
@@ -155,10 +159,14 @@ int32_t Conv2dOp::InferOutputShapes() {
         out_shape = {out_h, out_w};
     } else {
         const int64_t out_h =
-            (param_.input->dims()[2] + 2 * param_.pad_h - param_.dilation_h * (param_.w->dims()[2] - 1) - 1) / param_.stride_h + 1;
+            (param_.input->dims()[HeightAxisForLayout(param_.input->layout())] + 2 * param_.pad_h -
+             param_.dilation_h * (param_.w->dims()[2] - 1) - 1) / param_.stride_h + 1;
         const int64_t out_w =
-            (param_.input->dims()[3] + 2 * param_.pad_w - param_.dilation_w * (param_.w->dims()[3] - 1) - 1) / param_.stride_w + 1;
-        out_shape = {param_.input->dims()[0], param_.w->dims()[0], out_h, out_w};
+            (param_.input->dims()[WidthAxisForLayout(param_.input->layout())] + 2 * param_.pad_w -
+             param_.dilation_w * (param_.w->dims()[3] - 1) - 1) / param_.stride_w + 1;
+        out_shape = EncodeImageShape4D(
+            ImageShape4D{param_.input->dims()[0], param_.w->dims()[0], out_h, out_w},
+            NormalizeDataLayout(param_.input->layout()));
     }
     const size_t required_bytes =
         static_cast<size_t>(std::max<int64_t>(1, ComputeNumel(out_shape))) *
@@ -168,6 +176,7 @@ int32_t Conv2dOp::InferOutputShapes() {
     } else {
         param_.out->Resize(out_shape);
     }
+    param_.out->set_layout(param_.input->dims().size() == 4 ? NormalizeDataLayout(param_.input->layout()) : DataLayout::ND);
     SyncIO();
     return 0;
 }

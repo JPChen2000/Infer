@@ -30,6 +30,8 @@ class Conv2DKernel : public KernelBase {
     std::vector<float> cached_packed_input_buffer_;
     std::vector<float> cached_direct_weight_oc8_buffer_;
     std::vector<float> cached_direct_bias_oc8_buffer_;
+    std::vector<float> cached_winograd_weight_oc8_buffer_;
+    std::vector<float> cached_winograd_weight_buffer_;
 };
 }  // namespace kernel
 }  // namespace feather
