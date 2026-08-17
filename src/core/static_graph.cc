@@ -42,7 +42,8 @@ void RestoreDeclaredTensorMetadata(const model::ModelDesc& model, const std::str
 
 bool IsBuildTimeEvaluableControlOp(const std::string& op_type) {
     return op_type == "Shape" || op_type == "Unsqueeze" || op_type == "Squeeze" || op_type == "Concat" ||
-           op_type == "Cast";
+           op_type == "Cast" || op_type == "ConstantOfShape" || op_type == "Slice" || op_type == "Mul" ||
+           op_type == "Equal" || op_type == "Where";
 }
 
 bool HasOnlyStaticInputs(const model::NodeDesc& node, const std::unordered_set<std::string>& static_values) {
@@ -55,6 +56,29 @@ bool HasOnlyStaticInputs(const model::NodeDesc& node, const std::unordered_set<s
         }
     }
     return true;
+}
+
+int32_t EvaluateBuildTimeControlOp(const std::shared_ptr<OpBase>& op) {
+    if (op == nullptr) {
+        return -1;
+    }
+
+    auto runtime_kernel = op->DetachKernel();
+    if (runtime_kernel == nullptr) {
+        return -1;
+    }
+    auto control_kernel = KernelDispatcher::instance().create(DeviceType::COMMON, runtime_kernel->data_type(),
+                                                               runtime_kernel->layout(), op->type());
+    if (control_kernel == nullptr) {
+        op->AttachKernel(std::move(runtime_kernel));
+        return -1;
+    }
+
+    op->AttachKernel(std::move(control_kernel));
+    const int32_t status = op->Run();
+    (void)op->DetachKernel();
+    op->AttachKernel(std::move(runtime_kernel));
+    return status;
 }
 
 }  // namespace
@@ -120,6 +144,7 @@ int32_t StaticGraph::Build() {
     for (const auto& node : model_.graph.nodes) {
         auto op = OperatorRegistry::instance().Create(node, tensors_);
         if (op == nullptr) {
+            std::cerr << "StaticGraph::Build failed to create node=" << node.name << " op=" << node.op_type << '\n';
             return -1;
         }
         // Evaluate static control values early so downstream shape inference can
@@ -128,7 +153,8 @@ int32_t StaticGraph::Build() {
         const bool is_shape_node = node.op_type == "Shape";
         const bool can_evaluate_at_build =
             is_shape_node || (IsBuildTimeEvaluableControlOp(node.op_type) && HasOnlyStaticInputs(node, static_values));
-        if (can_evaluate_at_build && op->Run() != 0) {
+        if (can_evaluate_at_build && EvaluateBuildTimeControlOp(op) != 0) {
+            std::cerr << "StaticGraph::Build control evaluation failed node=" << node.name << " op=" << node.op_type << '\n';
             return -1;
         }
         const auto& outputs = op->outputs();

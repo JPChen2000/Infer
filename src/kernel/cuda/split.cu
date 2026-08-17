@@ -19,6 +19,8 @@ bool g_cuda_split_kernels_registered = []() {
                               []() { return std::make_unique<SplitKernel<DeviceType::CUDA, DataType::FP32>>(); });
     dispatcher.registerKernel(DeviceType::CUDA, DataType::FP16, "Split",
                               []() { return std::make_unique<SplitKernel<DeviceType::CUDA, DataType::FP16>>(); });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::BF16, "Split",
+                              []() { return std::make_unique<SplitKernel<DeviceType::CUDA, DataType::BF16>>(); });
     return true;
 }();
 
@@ -96,6 +98,11 @@ int32_t SplitKernel<DeviceType::CUDA, DataType::FP32>::compute() {
 template <>
 int32_t SplitKernel<DeviceType::CUDA, DataType::FP16>::compute() {
     return RunSplit<DataType::FP16>(static_cast<feather::operators::SplitParam*>(param_), "CUDA::Split::FP16");
+}
+
+template <>
+int32_t SplitKernel<DeviceType::CUDA, DataType::BF16>::compute() {
+    return RunSplit<DataType::BF16>(static_cast<feather::operators::SplitParam*>(param_), "CUDA::Split::BF16");
 }
 
 void EnsureCudaSplitKernelsRegistered() { (void)g_cuda_split_kernels_registered; }

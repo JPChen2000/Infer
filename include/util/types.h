@@ -9,6 +9,8 @@
 #include <variant>
 namespace feather {
 
+struct BFloat16;
+
 enum class DataType {
     INT4 = 0,
     INT8 = 1,
@@ -20,7 +22,8 @@ enum class DataType {
     STRING = 7,
     TENSOR = 8,
     BOOL = 9,
-    UNKNOWN
+    UNKNOWN = 10,
+    BF16 = 11,
 };
 
 template<typename T>
@@ -40,6 +43,8 @@ struct DataTypeTrait {
             return DataType::BOOL;
         } else if constexpr (std::is_same<T, uint16_t>::value) {
             return DataType::FP16;
+        } else if constexpr (std::is_same<T, BFloat16>::value) {
+            return DataType::BF16;
         } else if constexpr (std::is_same<T, std::string>::value) {
             return DataType::STRING;
         } else {
@@ -158,6 +163,7 @@ inline size_t DataTypeBytes(DataType dtype) {
         case DataType::BOOL:
             return 1;
         case DataType::FP16:
+        case DataType::BF16:
             return 2;
         case DataType::FP32:
         case DataType::INT32:

@@ -3,6 +3,7 @@
 #include <memory>
 
 #include "src/kernel/common/tensor_op_utils.h"
+#include "util/bf16.h"
 #include "util/fp16.h"
 #include "util/timer.h"
 
@@ -18,6 +19,9 @@ bool g_common_cast_kernels_registered = []() {
     });
     dispatcher.registerKernel(DeviceType::COMMON, DataType::FP16, "Cast", []() {
         return std::make_unique<CastKernel<DeviceType::COMMON, DataType::FP16>>();
+    });
+    dispatcher.registerKernel(DeviceType::COMMON, DataType::BF16, "Cast", []() {
+        return std::make_unique<CastKernel<DeviceType::COMMON, DataType::BF16>>();
     });
     return true;
 }();
@@ -49,6 +53,9 @@ int32_t ComputeCast(feather::operators::CastParam* param) {
             case DataType::FP16:
                 static_cast<uint16_t*>(param->out->raw_data())[i] = FloatToHalf(value);
                 break;
+            case DataType::BF16:
+                static_cast<BFloat16*>(param->out->raw_data())[i].bits = FloatToBFloat16(value);
+                break;
             case DataType::INT32:
                 static_cast<int32_t*>(param->out->raw_data())[i] = static_cast<int32_t>(value);
                 break;
@@ -77,6 +84,12 @@ int32_t CastKernel<DeviceType::COMMON, DataType::FP32>::compute() {
 template <>
 int32_t CastKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Cast::FP16");
+    return ComputeCast(static_cast<feather::operators::CastParam*>(param_));
+}
+
+template <>
+int32_t CastKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::Cast::BF16");
     return ComputeCast(static_cast<feather::operators::CastParam*>(param_));
 }
 

@@ -21,6 +21,9 @@ bool g_common_reduce_mean_kernels_registered = []() {
     dispatcher.registerKernel(DeviceType::COMMON, DataType::FP16, "ReduceMean", []() {
         return std::make_unique<ReduceMeanKernel<DeviceType::COMMON, DataType::FP16>>();
     });
+    dispatcher.registerKernel(DeviceType::COMMON, DataType::BF16, "ReduceMean", []() {
+        return std::make_unique<ReduceMeanKernel<DeviceType::COMMON, DataType::BF16>>();
+    });
     return true;
 }();
 
@@ -96,6 +99,12 @@ template <>
 int32_t ReduceMeanKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::ReduceMean::FP16");
     return ComputeReduceMean<DataType::FP16>(static_cast<feather::operators::ReduceMeanParam*>(param_));
+}
+
+template <>
+int32_t ReduceMeanKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::ReduceMean::BF16");
+    return ComputeReduceMean<DataType::BF16>(static_cast<feather::operators::ReduceMeanParam*>(param_));
 }
 
 void EnsureCommonReduceMeanKernelsRegistered() { (void)g_common_reduce_mean_kernels_registered; }

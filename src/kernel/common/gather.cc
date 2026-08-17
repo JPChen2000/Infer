@@ -19,6 +19,9 @@ bool g_common_gather_kernels_registered = []() {
     dispatcher.registerKernel(DeviceType::COMMON, DataType::FP16, "Gather", []() {
         return std::make_unique<GatherKernel<DeviceType::COMMON, DataType::FP16>>();
     });
+    dispatcher.registerKernel(DeviceType::COMMON, DataType::BF16, "Gather", []() {
+        return std::make_unique<GatherKernel<DeviceType::COMMON, DataType::BF16>>();
+    });
     return true;
 }();
 
@@ -82,6 +85,12 @@ template <>
 int32_t GatherKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Gather::FP16");
     return ComputeGather<DataType::FP16>(static_cast<feather::operators::GatherParam*>(param_));
+}
+
+template <>
+int32_t GatherKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::Gather::BF16");
+    return ComputeGather<DataType::BF16>(static_cast<feather::operators::GatherParam*>(param_));
 }
 
 void EnsureCommonGatherKernelsRegistered() { (void)g_common_gather_kernels_registered; }

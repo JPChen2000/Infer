@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "core/tensor.h"
+#include "util/bf16.h"
 #include "util/fp16.h"
 
 namespace feather {
@@ -51,6 +52,9 @@ inline bool ReadFloatTensor(const std::shared_ptr<Tensor>& tensor, std::vector<f
         switch (tensor->data_type()) {
             case DataType::FP16:
                 values->push_back(HalfToFloat(tensor->data<uint16_t>()[index]));
+                break;
+            case DataType::BF16:
+                values->push_back(BFloat16ToFloat(tensor->data<BFloat16>()[index].bits));
                 break;
             case DataType::FP32:
                 values->push_back(tensor->data<float>()[index]);

@@ -36,6 +36,7 @@ size_t DataTypeSize(DataType dtype) {
         case DataType::BOOL:
             return 1;
         case DataType::FP16:
+        case DataType::BF16:
             return 2;
         case DataType::FP32:
         case DataType::INT32:

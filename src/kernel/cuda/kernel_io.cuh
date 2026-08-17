@@ -11,6 +11,7 @@
 
 #include "core/tensor.h"
 #include "src/kernel/cuda/runtime.h"
+#include "util/bf16.h"
 #include "util/types.h"
 
 namespace feather {
@@ -167,6 +168,21 @@ struct CudaStorage<DataType::FP16> {
     using Type = uint16_t;
 };
 
+template <>
+struct CudaStorage<DataType::BF16> {
+    using Type = BFloat16;
+};
+
+template <>
+struct CudaStorage<DataType::INT32> {
+    using Type = int32_t;
+};
+
+template <>
+struct CudaStorage<DataType::INT64> {
+    using Type = int64_t;
+};
+
 template <DataType dtype>
 using StorageT = typename CudaStorage<dtype>::Type;
 
@@ -258,12 +274,36 @@ __device__ inline float ReadDevice(const uint16_t* data, int64_t idx) {
     return __half2float(reinterpret_cast<const __half*>(data)[idx]);
 }
 
+__device__ inline float ReadDevice(const BFloat16* data, int64_t idx) {
+    return __uint_as_float(static_cast<uint32_t>(data[idx].bits) << 16);
+}
+
+__device__ inline float ReadDevice(const int32_t* data, int64_t idx) {
+    return static_cast<float>(data[idx]);
+}
+
+__device__ inline float ReadDevice(const int64_t* data, int64_t idx) {
+    return static_cast<float>(data[idx]);
+}
+
 __device__ inline void WriteDevice(float* data, int64_t idx, float value) {
     data[idx] = value;
 }
 
 __device__ inline void WriteDevice(uint16_t* data, int64_t idx, float value) {
     reinterpret_cast<__half*>(data)[idx] = __float2half(value);
+}
+
+__device__ inline void WriteDevice(BFloat16* data, int64_t idx, float value) {
+    const uint32_t float_bits = __float_as_uint(value);
+    const uint32_t exponent = float_bits & 0x7f800000u;
+    const uint32_t mantissa = float_bits & 0x007fffffu;
+    if (exponent == 0x7f800000u && mantissa != 0) {
+        data[idx].bits = static_cast<uint16_t>((float_bits >> 16) | 0x0040u);
+        return;
+    }
+    const uint32_t round_bias = 0x7fffu + ((float_bits >> 16) & 1u);
+    data[idx].bits = static_cast<uint16_t>((float_bits + round_bias) >> 16);
 }
 
 }  // namespace cuda_detail

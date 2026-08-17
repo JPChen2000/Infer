@@ -24,6 +24,8 @@ bool g_matmul_kernels_registered = []() {
                                                 []() { return std::make_unique<MatMulKernel<DeviceType::COMMON, DataType::FP32>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP16, "MatMul",
                                                 []() { return std::make_unique<MatMulKernel<DeviceType::COMMON, DataType::FP16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::BF16, "MatMul",
+                                                []() { return std::make_unique<MatMulKernel<DeviceType::COMMON, DataType::BF16>>(); });
     return true;
 }();
 
@@ -106,11 +108,20 @@ int32_t MatMulKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     return ComputeMatMulCommon<DataType::FP16>(static_cast<feather::operators::MatMulParam*>(param_));
 }
 
+template <>
+int32_t MatMulKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::MatMul::BF16");
+    return ComputeMatMulCommon<DataType::BF16>(static_cast<feather::operators::MatMulParam*>(param_));
+}
+
 typedef feather::kernel::MatMulKernel<DeviceType::COMMON, DataType::FP32> MatMulCommonFP32Kernel;
 REGISTER_KERNEL(COMMON, FP32, MatMul, MatMulCommonFP32Kernel);
 
 typedef feather::kernel::MatMulKernel<DeviceType::COMMON, DataType::FP16> MatMulCommonFP16Kernel;
 REGISTER_KERNEL(COMMON, FP16, MatMul, MatMulCommonFP16Kernel);
+
+typedef feather::kernel::MatMulKernel<DeviceType::COMMON, DataType::BF16> MatMulCommonBF16Kernel;
+REGISTER_KERNEL(COMMON, BF16, MatMul, MatMulCommonBF16Kernel);
 
 void EnsureCommonMatMulKernelsRegistered() { (void)g_matmul_kernels_registered; }
 

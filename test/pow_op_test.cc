@@ -4,6 +4,10 @@
 #include <memory>
 #include <vector>
 
+#ifdef FEATHER_WITH_CUDA
+#include <cuda_runtime.h>
+#endif
+
 #include "core/kernel.h"
 #include "core/operator.h"
 #include "core/operator_registry.h"
@@ -22,6 +26,13 @@ using feather::KernelDispatcher;
 using feather::OpBase;
 using feather::Tensor;
 using feather::operators::PowParam;
+
+#ifdef FEATHER_WITH_CUDA
+bool HasCudaDevice() {
+    int device_count = 0;
+    return cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0;
+}
+#endif
 
 TEST(pow_op_test, PowRunsOnX86FP16) {
     auto input = std::make_shared<Tensor>();
@@ -90,3 +101,52 @@ TEST(pow_op_test, UsesScalarExponentTensorAfterGraphLowering) {
         EXPECT_FLOAT_EQ(out->data<float>()[i], expected[i]);
     }
 }
+
+#ifdef FEATHER_WITH_CUDA
+TEST(pow_op_test, UsesScalarExponentTensorAfterCudaGraphLowering) {
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
+    auto input = std::make_shared<Tensor>();
+    input->Assign<float>({-2.0f, -1.5f, 0.5f, 3.0f}, {4});
+    auto exponent = std::make_shared<Tensor>();
+    exponent->Assign<float>({2.0f}, {});
+
+    feather::model::ModelDesc model;
+    model.name = "cuda_pow_with_tensor_exponent";
+    model.version = 1;
+    model.graph.name = "main";
+    model.graph.inputs = {"input"};
+    model.graph.outputs = {"out"};
+    model.graph.values = {
+        feather::model::ValueDesc{{"input", {4}, DataType::FP32, feather::DataLayout::ND}, false},
+        feather::model::ValueDesc{{"exponent", {}, DataType::FP32, feather::DataLayout::ND}, true},
+        feather::model::ValueDesc{{"out", {4}, DataType::FP32, feather::DataLayout::ND}, false},
+    };
+    model.graph.nodes = {{"cuda_pow_with_tensor_exponent", "Pow", "", {"input", "exponent"}, {"out"}, {}}};
+
+    feather::StaticGraph static_graph;
+    static_graph.SetKernelDevice(DeviceType::CUDA);
+    ASSERT_EQ(static_graph.SetModel(model), 0);
+    ASSERT_EQ(static_graph.SetTensor("input", input), 0);
+    ASSERT_EQ(static_graph.SetTensor("exponent", exponent), 0);
+    ASSERT_EQ(static_graph.Build(), 0);
+
+    feather::RuntimeGraph runtime_graph;
+    runtime_graph.SetThreadMode(feather::RuntimeThreadMode::kSerialGraph);
+    feather::GraphLowering lowering;
+    ASSERT_EQ(lowering.Lower(static_graph, &runtime_graph), 0);
+    const auto* runtime_node = runtime_graph.GetNode("cuda_pow_with_tensor_exponent");
+    ASSERT_NE(runtime_node, nullptr);
+    ASSERT_EQ(runtime_node->kernel_device, DeviceType::CUDA);
+    ASSERT_EQ(runtime_graph.Run(), 0);
+
+    const auto out = runtime_graph.GetTensor("out");
+    ASSERT_NE(out, nullptr);
+    const std::vector<float> expected = {4.0f, 2.25f, 0.25f, 9.0f};
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_FLOAT_EQ(out->data<float>()[i], expected[i]);
+    }
+}
+#endif

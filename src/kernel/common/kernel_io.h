@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "core/tensor.h"
+#include "util/bf16.h"
 #include "util/fp16.h"
 #include "util/types.h"
 
@@ -27,6 +28,16 @@ struct TensorIO<DataType::FP16> {
     }
 };
 
+template <>
+struct TensorIO<DataType::BF16> {
+    static float Read(const Tensor* tensor, int64_t index) {
+        return BFloat16ToFloat(tensor->data<BFloat16>()[index].bits);
+    }
+    static void Write(Tensor* tensor, int64_t index, float value) {
+        tensor->mutable_data<BFloat16>()[index].bits = FloatToBFloat16(value);
+    }
+};
+
 inline bool ReadScalarFloatTensor(const Tensor* tensor, float* value) {
     if (tensor == nullptr || value == nullptr || !tensor->IsInitialized() || tensor->numel() != 1) {
         return false;
@@ -34,6 +45,9 @@ inline bool ReadScalarFloatTensor(const Tensor* tensor, float* value) {
     switch (tensor->data_type()) {
         case DataType::FP16:
             *value = HalfToFloat(tensor->data<uint16_t>()[0]);
+            return true;
+        case DataType::BF16:
+            *value = BFloat16ToFloat(tensor->data<BFloat16>()[0].bits);
             return true;
         case DataType::FP32:
             *value = tensor->data<float>()[0];

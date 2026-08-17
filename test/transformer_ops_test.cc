@@ -264,6 +264,212 @@ TEST(transformer_ops_test, ResolvesZeroAndInferredDimensionsFromShapeTensor) {
     EXPECT_EQ(std::vector<float>(reshaped->data<float>(), reshaped->data<float>() + 24), values);
 }
 
+TEST(transformer_ops_test, PreservesConstantOfShapeAsAnIndependentControlOperator) {
+    feather::model::ModelDesc model;
+    model.name = "constant_of_shape_control";
+    model.version = 1;
+    model.graph.name = "main";
+    model.graph.outputs = {"filled"};
+    model.graph.values = {
+        MakeValue("shape", {2}, feather::DataType::INT64, true),
+        MakeValue("filled", {2, 3}, feather::DataType::INT64),
+    };
+    auto constant_of_shape = MakeNode("constant_of_shape", "ConstantOfShape", {"shape"}, "filled");
+    constant_of_shape.attributes["value_int"] = int64_t{7};
+    model.graph.nodes = {constant_of_shape};
+
+    auto shape = std::make_shared<feather::Tensor>();
+    shape->Assign<int64_t>({2, 3}, {2});
+
+    feather::StaticGraph static_graph;
+    ASSERT_EQ(static_graph.SetModel(model), 0);
+    static_graph.SetKernelDevice(feather::DeviceType::COMMON);
+    ASSERT_EQ(static_graph.SetTensor("shape", shape), 0);
+    ASSERT_EQ(static_graph.Build(), 0);
+
+    feather::RuntimeGraph runtime_graph;
+    feather::GraphLowering lowering;
+    ASSERT_EQ(lowering.Lower(static_graph, &runtime_graph), 0);
+    ASSERT_EQ(runtime_graph.Run(), 0);
+
+    const auto filled = runtime_graph.GetTensor("filled");
+    ASSERT_NE(filled, nullptr);
+    EXPECT_EQ(filled->dims().data(), (std::vector<int64_t>{2, 3}));
+    EXPECT_EQ(filled->data_type(), feather::DataType::INT64);
+    EXPECT_EQ(std::vector<int64_t>(filled->data<int64_t>(), filled->data<int64_t>() + 6),
+              (std::vector<int64_t>{7, 7, 7, 7, 7, 7}));
+}
+
+TEST(transformer_ops_test, EvaluatesStaticSliceControlValueBeforeReshape) {
+    feather::model::ModelDesc model;
+    model.name = "slice_control_reshape";
+    model.version = 1;
+    model.graph.name = "main";
+    model.graph.inputs = {"data"};
+    model.graph.outputs = {"reshaped"};
+    model.graph.values = {
+        MakeValue("data", {1, 3, 2, 4}, feather::DataType::FP32),
+        MakeValue("starts", {1}, feather::DataType::INT64, true),
+        MakeValue("ends", {1}, feather::DataType::INT64, true),
+        MakeValue("axes", {1}, feather::DataType::INT64, true),
+        MakeValue("steps", {1}, feather::DataType::INT64, true),
+        MakeValue("tail", {1}, feather::DataType::INT64, true),
+        MakeValue("shape_out", {4}, feather::DataType::INT64),
+        MakeValue("shape_head", {2}, feather::DataType::INT64),
+        MakeValue("target_shape", {3}, feather::DataType::INT64),
+        MakeValue("reshaped", {1, 3, 8}, feather::DataType::FP32),
+    };
+    const auto shape = MakeNode("shape", "Shape", {"data"}, "shape_out");
+    const auto slice = MakeNode("slice", "Slice", {"shape_out", "starts", "ends", "axes", "steps"},
+                                "shape_head");
+    auto concat = MakeNode("concat", "Concat", {"shape_head", "tail"}, "target_shape");
+    concat.attributes["axis"] = int64_t{0};
+    const auto reshape = MakeNode("reshape", "Reshape", {"data", "target_shape"}, "reshaped");
+    model.graph.nodes = {shape, slice, concat, reshape};
+
+    auto data = std::make_shared<feather::Tensor>();
+    data->Assign<float>(std::vector<float>(24, 1.0f), {1, 3, 2, 4});
+    auto starts = std::make_shared<feather::Tensor>();
+    starts->Assign<int64_t>({0}, {1});
+    auto ends = std::make_shared<feather::Tensor>();
+    ends->Assign<int64_t>({2}, {1});
+    auto axes = std::make_shared<feather::Tensor>();
+    axes->Assign<int64_t>({0}, {1});
+    auto steps = std::make_shared<feather::Tensor>();
+    steps->Assign<int64_t>({1}, {1});
+    auto tail = std::make_shared<feather::Tensor>();
+    tail->Assign<int64_t>({8}, {1});
+
+    feather::StaticGraph static_graph;
+    ASSERT_EQ(static_graph.SetModel(model), 0);
+    static_graph.SetKernelDevice(feather::DeviceType::COMMON);
+    ASSERT_EQ(static_graph.SetTensor("data", data), 0);
+    ASSERT_EQ(static_graph.SetTensor("starts", starts), 0);
+    ASSERT_EQ(static_graph.SetTensor("ends", ends), 0);
+    ASSERT_EQ(static_graph.SetTensor("axes", axes), 0);
+    ASSERT_EQ(static_graph.SetTensor("steps", steps), 0);
+    ASSERT_EQ(static_graph.SetTensor("tail", tail), 0);
+    ASSERT_EQ(static_graph.Build(), 0);
+
+    ASSERT_EQ(static_graph.nodes().size(), 4U);
+    EXPECT_EQ(static_graph.nodes()[1].op_type, "Slice");
+    auto target_shape = static_graph.GetTensor("target_shape");
+    ASSERT_NE(target_shape, nullptr);
+    EXPECT_EQ(std::vector<int64_t>(target_shape->data<int64_t>(), target_shape->data<int64_t>() + 3),
+              (std::vector<int64_t>{1, 3, 8}));
+}
+
+TEST(transformer_ops_test, MultipliesInt64ControlTensorsOnCommon) {
+    feather::OperatorRegistry::TensorMap tensors;
+    auto lhs = std::make_shared<feather::Tensor>();
+    lhs->Assign<int64_t>({2, 3}, {2});
+    auto rhs = std::make_shared<feather::Tensor>();
+    rhs->Assign<int64_t>({10}, {});
+    tensors["lhs"] = lhs;
+    tensors["rhs"] = rhs;
+    tensors["out"] = std::make_shared<feather::Tensor>(std::vector<int64_t>{2});
+
+    const auto node = MakeNode("mul_int64", "Mul", {"lhs", "rhs"}, "out");
+    feather::KernelDeviceScope scope(feather::DeviceType::COMMON);
+    auto op = feather::OperatorRegistry::instance().Create(node, tensors);
+    ASSERT_NE(op, nullptr);
+    ASSERT_EQ(op->Run(), 0);
+
+    const auto out = op->outputs().front();
+    ASSERT_NE(out, nullptr);
+    EXPECT_EQ(out->data_type(), feather::DataType::INT64);
+    EXPECT_EQ(out->dims().data(), (std::vector<int64_t>{2}));
+    EXPECT_EQ(std::vector<int64_t>(out->data<int64_t>(), out->data<int64_t>() + 2),
+              (std::vector<int64_t>{20, 30}));
+}
+
+TEST(transformer_ops_test, EvaluatesStaticShapeArithmeticBeforeExpand) {
+    feather::model::ModelDesc model;
+    model.name = "static_expand_shape";
+    model.version = 1;
+    model.graph.name = "main";
+    model.graph.inputs = {"data"};
+    model.graph.outputs = {"expanded"};
+    model.graph.values = {
+        MakeValue("data", {1, 1, 1}, feather::DataType::FP32),
+        MakeValue("shape", {3}, feather::DataType::INT64, true),
+        MakeValue("fill_value", {}, feather::DataType::INT64, true),
+        MakeValue("source", {3}, feather::DataType::INT64, true),
+        MakeValue("filled", {3}, feather::DataType::INT64),
+        MakeValue("scaled", {3}, feather::DataType::INT64),
+        MakeValue("matches", {3}, feather::DataType::BOOL),
+        MakeValue("target_shape", {3}, feather::DataType::INT64),
+        MakeValue("expanded", {1, 1, 3}, feather::DataType::FP32),
+    };
+    auto constant_of_shape = MakeNode("constant_of_shape", "ConstantOfShape", {"shape"}, "filled");
+    constant_of_shape.attributes["value_int"] = int64_t{1};
+    const auto mul = MakeNode("mul", "Mul", {"filled", "fill_value"}, "scaled");
+    const auto equal = MakeNode("equal", "Equal", {"source", "scaled"}, "matches");
+    const auto where = MakeNode("where", "Where", {"matches", "source", "filled"}, "target_shape");
+    const auto expand = MakeNode("expand", "Expand", {"data", "target_shape"}, "expanded");
+    model.graph.nodes = {constant_of_shape, mul, equal, where, expand};
+
+    auto data = std::make_shared<feather::Tensor>();
+    data->Assign<float>({1.0f}, {1, 1, 1});
+    auto shape = std::make_shared<feather::Tensor>();
+    shape->Assign<int64_t>({1, 1, 3}, {3});
+    auto fill_value = std::make_shared<feather::Tensor>();
+    fill_value->Assign<int64_t>({1}, {});
+    auto source = std::make_shared<feather::Tensor>();
+    source->Assign<int64_t>({1, 1, 1}, {3});
+
+    feather::StaticGraph static_graph;
+    ASSERT_EQ(static_graph.SetModel(model), 0);
+    static_graph.SetKernelDevice(feather::DeviceType::COMMON);
+    ASSERT_EQ(static_graph.SetTensor("data", data), 0);
+    ASSERT_EQ(static_graph.SetTensor("shape", shape), 0);
+    ASSERT_EQ(static_graph.SetTensor("fill_value", fill_value), 0);
+    ASSERT_EQ(static_graph.SetTensor("source", source), 0);
+    ASSERT_EQ(static_graph.Build(), 0);
+
+    const auto target_shape = static_graph.GetTensor("target_shape");
+    ASSERT_NE(target_shape, nullptr);
+    EXPECT_EQ(std::vector<int64_t>(target_shape->data<int64_t>(), target_shape->data<int64_t>() + 3),
+              (std::vector<int64_t>{1, 1, 1}));
+}
+
+TEST(transformer_ops_test, ExpandUsesBroadcastShapeWhenTargetDimensionIsOne) {
+    feather::model::ModelDesc model;
+    model.name = "expand_target_one";
+    model.version = 1;
+    model.graph.name = "main";
+    model.graph.inputs = {"data"};
+    model.graph.outputs = {"expanded"};
+    model.graph.values = {
+        MakeValue("data", {1, 1, 3}, feather::DataType::FP32),
+        MakeValue("shape", {3}, feather::DataType::INT64, true),
+        MakeValue("expanded", {1, 1, 3}, feather::DataType::FP32),
+    };
+    model.graph.nodes = {MakeNode("expand", "Expand", {"data", "shape"}, "expanded")};
+
+    auto data = std::make_shared<feather::Tensor>();
+    data->Assign<float>({1.0f, 2.0f, 3.0f}, {1, 1, 3});
+    auto shape = std::make_shared<feather::Tensor>();
+    shape->Assign<int64_t>({1, 1, 1}, {3});
+
+    feather::StaticGraph static_graph;
+    ASSERT_EQ(static_graph.SetModel(model), 0);
+    static_graph.SetKernelDevice(feather::DeviceType::COMMON);
+    ASSERT_EQ(static_graph.SetTensor("data", data), 0);
+    ASSERT_EQ(static_graph.SetTensor("shape", shape), 0);
+    ASSERT_EQ(static_graph.Build(), 0);
+
+    feather::RuntimeGraph runtime_graph;
+    feather::GraphLowering lowering;
+    ASSERT_EQ(lowering.Lower(static_graph, &runtime_graph), 0);
+    ASSERT_EQ(runtime_graph.Run(), 0);
+    const auto expanded = runtime_graph.GetTensor("expanded");
+    ASSERT_NE(expanded, nullptr);
+    EXPECT_EQ(expanded->dims().data(), (std::vector<int64_t>{1, 1, 3}));
+    EXPECT_EQ(std::vector<float>(expanded->data<float>(), expanded->data<float>() + 3),
+              (std::vector<float>{1.0f, 2.0f, 3.0f}));
+}
+
 TEST(transformer_ops_test, ReduceMeanPreservesFp16OnCpu) {
     feather::OperatorRegistry::TensorMap tensors;
     auto input = std::make_shared<feather::Tensor>();

@@ -19,6 +19,9 @@ bool g_cuda_expand_kernels_registered = []() {
     dispatcher.registerKernel(DeviceType::CUDA, DataType::FP16, "Expand", []() {
         return std::make_unique<ExpandKernel<DeviceType::CUDA, DataType::FP16>>();
     });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::BF16, "Expand", []() {
+        return std::make_unique<ExpandKernel<DeviceType::CUDA, DataType::BF16>>();
+    });
     return true;
 }();
 
@@ -96,6 +99,11 @@ int32_t ExpandKernel<DeviceType::CUDA, DataType::FP32>::compute() {
 template <>
 int32_t ExpandKernel<DeviceType::CUDA, DataType::FP16>::compute() {
     return RunExpand<DataType::FP16>(static_cast<feather::operators::ExpandParam*>(param_), "CUDA::Expand::FP16");
+}
+
+template <>
+int32_t ExpandKernel<DeviceType::CUDA, DataType::BF16>::compute() {
+    return RunExpand<DataType::BF16>(static_cast<feather::operators::ExpandParam*>(param_), "CUDA::Expand::BF16");
 }
 
 void EnsureCudaExpandKernelsRegistered() { (void)g_cuda_expand_kernels_registered; }

@@ -18,6 +18,9 @@ bool g_erf_kernels_registered = []() {
     dispatcher.registerKernel(DeviceType::COMMON, DataType::FP16, "Erf", []() {
         return std::make_unique<ErfKernel<DeviceType::COMMON, DataType::FP16>>();
     });
+    dispatcher.registerKernel(DeviceType::COMMON, DataType::BF16, "Erf", []() {
+        return std::make_unique<ErfKernel<DeviceType::COMMON, DataType::BF16>>();
+    });
     return true;
 }();
 
@@ -42,6 +45,17 @@ int32_t ErfKernel<DeviceType::COMMON, DataType::FP16>::compute() {
         return -1;
     }
     return common_detail::RunUnary<DataType::FP16>(param->out.get(), param->input.get(),
+                                                   [](float value) { return std::erf(value); });
+}
+
+template <>
+int32_t ErfKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::Erf::BF16");
+    auto* param = static_cast<feather::operators::UnaryParam*>(param_);
+    if (param == nullptr) {
+        return -1;
+    }
+    return common_detail::RunUnary<DataType::BF16>(param->out.get(), param->input.get(),
                                                    [](float value) { return std::erf(value); });
 }
 

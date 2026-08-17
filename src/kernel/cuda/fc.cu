@@ -18,6 +18,8 @@ bool g_cuda_fc_kernels_registered = []() {
                               []() { return std::make_unique<FcKernel<DeviceType::CUDA, DataType::FP32>>(); });
     dispatcher.registerKernel(DeviceType::CUDA, DataType::FP16, "FC",
                               []() { return std::make_unique<FcKernel<DeviceType::CUDA, DataType::FP16>>(); });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::BF16, "FC",
+                              []() { return std::make_unique<FcKernel<DeviceType::CUDA, DataType::BF16>>(); });
     return true;
 }();
 
@@ -75,6 +77,11 @@ int32_t FcKernel<DeviceType::CUDA, DataType::FP32>::compute() {
 template <>
 int32_t FcKernel<DeviceType::CUDA, DataType::FP16>::compute() {
     return RunFc<DataType::FP16>(static_cast<feather::operators::FcParam*>(param_), "CUDA::FC::FP16");
+}
+
+template <>
+int32_t FcKernel<DeviceType::CUDA, DataType::BF16>::compute() {
+    return RunFc<DataType::BF16>(static_cast<feather::operators::FcParam*>(param_), "CUDA::FC::BF16");
 }
 
 void EnsureCudaFcKernelsRegistered() { (void)g_cuda_fc_kernels_registered; }

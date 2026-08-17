@@ -15,6 +15,8 @@ bool g_pow_kernels_registered = []() {
                                                 []() { return std::make_unique<PowKernel<DeviceType::COMMON, DataType::FP32>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP16, "Pow",
                                                 []() { return std::make_unique<PowKernel<DeviceType::COMMON, DataType::FP16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::BF16, "Pow",
+                                                []() { return std::make_unique<PowKernel<DeviceType::COMMON, DataType::BF16>>(); });
     return true;
 }();
 
@@ -48,6 +50,12 @@ template <>
 int32_t PowKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Pow::FP16");
     return ComputePowKernel<DataType::FP16>(static_cast<feather::operators::PowParam*>(param_));
+}
+
+template <>
+int32_t PowKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::Pow::BF16");
+    return ComputePowKernel<DataType::BF16>(static_cast<feather::operators::PowParam*>(param_));
 }
 
 typedef feather::kernel::PowKernel<DeviceType::COMMON, DataType::FP32> PowCommonFP32Kernel;

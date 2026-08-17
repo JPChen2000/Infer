@@ -34,6 +34,9 @@ bool ResolveCastDataType(int64_t onnx_type, DataType* data_type) {
         case 10:
             *data_type = DataType::FP16;
             return true;
+        case 16:
+            *data_type = DataType::BF16;
+            return true;
         default:
             return false;
     }
@@ -58,8 +61,13 @@ std::shared_ptr<OpBase> BuildCastOp(const model::NodeDesc& node, OperatorRegistr
     }
     kernel::EnsureCastKernelsRegistered();
     std::unique_ptr<KernelBase> kernel;
-    if (param.input != nullptr && tensor_op_detail::IsFloatingPointDataType(param.input->data_type()) &&
-        tensor_op_detail::IsFloatingPointDataType(param.to)) {
+    const bool floating_cast = param.input != nullptr && tensor_op_detail::IsFloatingPointDataType(param.input->data_type()) &&
+                               tensor_op_detail::IsFloatingPointDataType(param.to);
+    const bool cuda_integer_to_float =
+        ActiveKernelDevice() == DeviceType::CUDA && param.input != nullptr &&
+        (param.input->data_type() == DataType::INT32 || param.input->data_type() == DataType::INT64) &&
+        tensor_op_detail::IsFloatingPointDataType(param.to);
+    if (floating_cast || cuda_integer_to_float) {
         kernel = CreateHostKernelForTensor("Cast", {param.input}, DataType::FP32);
     } else {
         kernel = CreateKernelForTensor(DeviceType::COMMON, "Cast", {}, DataType::FP32);

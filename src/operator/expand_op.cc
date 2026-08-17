@@ -8,6 +8,25 @@ namespace operators {
 
 namespace {
 
+bool InferExpandedShape(const std::vector<int64_t>& input_shape, const std::vector<int64_t>& target_shape,
+                        std::vector<int64_t>* output_shape) {
+    if (output_shape == nullptr || target_shape.size() < input_shape.size()) {
+        return false;
+    }
+    output_shape->assign(target_shape.begin(), target_shape.end());
+    const size_t rank_gap = target_shape.size() - input_shape.size();
+    for (size_t i = 0; i < target_shape.size(); ++i) {
+        const int64_t input_dim = i < rank_gap ? 1 : input_shape[i - rank_gap];
+        const int64_t target_dim = target_shape[i];
+        if (input_dim <= 0 || target_dim <= 0 ||
+            (input_dim != target_dim && input_dim != 1 && target_dim != 1)) {
+            return false;
+        }
+        (*output_shape)[i] = std::max(input_dim, target_dim);
+    }
+    return true;
+}
+
 std::shared_ptr<OpBase> BuildExpandOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
     if (node.inputs.size() != 2 || node.outputs.size() != 1) {
         return nullptr;
@@ -65,18 +84,11 @@ int32_t ExpandOp::InferOutputShapes() {
     if (!tensor_op_detail::ReadShapeValues(param_.shape, &target_shape) || target_shape.empty()) {
         return -1;
     }
-    const auto input_shape = param_.input->dims().data();
-    if (target_shape.size() < input_shape.size()) {
+    std::vector<int64_t> output_shape;
+    if (!InferExpandedShape(param_.input->dims().data(), target_shape, &output_shape)) {
         return -1;
     }
-    const size_t rank_gap = target_shape.size() - input_shape.size();
-    for (size_t i = 0; i < target_shape.size(); ++i) {
-        const int64_t input_dim = i < rank_gap ? 1 : input_shape[i - rank_gap];
-        if (target_shape[i] <= 0 || (input_dim != target_shape[i] && input_dim != 1)) {
-            return -1;
-        }
-    }
-    param_.out = tensor_op_detail::AllocateOutput(param_.out, target_shape, param_.input->data_type());
+    param_.out = tensor_op_detail::AllocateOutput(param_.out, output_shape, param_.input->data_type());
     if (param_.out == nullptr) {
         return -1;
     }

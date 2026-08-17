@@ -20,6 +20,9 @@ bool g_common_expand_kernels_registered = []() {
     dispatcher.registerKernel(DeviceType::COMMON, DataType::FP16, "Expand", []() {
         return std::make_unique<ExpandKernel<DeviceType::COMMON, DataType::FP16>>();
     });
+    dispatcher.registerKernel(DeviceType::COMMON, DataType::BF16, "Expand", []() {
+        return std::make_unique<ExpandKernel<DeviceType::COMMON, DataType::BF16>>();
+    });
     dispatcher.registerKernel(DeviceType::COMMON, DataType::INT32, "Expand", []() {
         return std::make_unique<ExpandKernel<DeviceType::COMMON, DataType::INT32>>();
     });
@@ -46,8 +49,18 @@ int32_t ComputeExpand(feather::operators::ExpandParam* param) {
     }
     const auto input_dims = param->input->dims().data();
     const auto output_dims = param->out->dims().data();
-    if (target_shape != output_dims) {
+    if (target_shape.size() < input_dims.size() || target_shape.size() != output_dims.size()) {
         return -1;
+    }
+    const size_t rank_gap = target_shape.size() - input_dims.size();
+    for (size_t axis = 0; axis < target_shape.size(); ++axis) {
+        const int64_t input_dim = axis < rank_gap ? 1 : input_dims[axis - rank_gap];
+        const int64_t target_dim = target_shape[axis];
+        if (input_dim <= 0 || target_dim <= 0 ||
+            (input_dim != target_dim && input_dim != 1 && target_dim != 1) ||
+            output_dims[axis] != std::max(input_dim, target_dim)) {
+            return -1;
+        }
     }
     const auto output_strides = common_tensor_detail::ComputeStrides(output_dims);
     const auto input_strides = common_tensor_detail::ComputeStrides(input_dims);
@@ -78,6 +91,12 @@ template <>
 int32_t ExpandKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Expand::FP16");
     return ComputeExpand<DataType::FP16>(static_cast<feather::operators::ExpandParam*>(param_));
+}
+
+template <>
+int32_t ExpandKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::Expand::BF16");
+    return ComputeExpand<DataType::BF16>(static_cast<feather::operators::ExpandParam*>(param_));
 }
 
 template <>

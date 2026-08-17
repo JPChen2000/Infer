@@ -25,6 +25,8 @@ bool g_conv2d_kernels_registered = []() {
                                                []() { return std::make_unique<Conv2DKernel<DeviceType::COMMON, DataType::FP32>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP16, "Conv2D",
                                                []() { return std::make_unique<Conv2DKernel<DeviceType::COMMON, DataType::FP16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::BF16, "Conv2D",
+                                               []() { return std::make_unique<Conv2DKernel<DeviceType::COMMON, DataType::BF16>>(); });
     return true;
 }();
 
@@ -437,11 +439,20 @@ int32_t Conv2DKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     return ComputeConv2DKernel<DataType::FP16>(param);
 }
 
+template <>
+int32_t Conv2DKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::Conv2D::BF16");
+    return ComputeConv2DKernel<DataType::BF16>(static_cast<feather::operators::Conv2dParam*>(param_));
+}
+
 typedef feather::kernel::Conv2DKernel<DeviceType::COMMON, DataType::FP32> Conv2DCommonFP32Kernel;
 REGISTER_KERNEL(COMMON, FP32, Conv2D, Conv2DCommonFP32Kernel);
 
 typedef feather::kernel::Conv2DKernel<DeviceType::COMMON, DataType::FP16> Conv2DCommonFP16Kernel;
 REGISTER_KERNEL(COMMON, FP16, Conv2D, Conv2DCommonFP16Kernel);
+
+typedef feather::kernel::Conv2DKernel<DeviceType::COMMON, DataType::BF16> Conv2DCommonBF16Kernel;
+REGISTER_KERNEL(COMMON, BF16, Conv2D, Conv2DCommonBF16Kernel);
 
 void EnsureCommonConv2DKernelsRegistered() { (void)g_conv2d_kernels_registered; }
 

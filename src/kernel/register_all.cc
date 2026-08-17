@@ -4,6 +4,11 @@
 #include "src/kernel/batch_normalization.h"
 #include "src/kernel/div.h"
 #include "src/kernel/erf.h"
+#include "src/kernel/exp.h"
+#include "src/kernel/sin.h"
+#include "src/kernel/cos.h"
+#include "src/kernel/neg.h"
+#include "src/kernel/softplus.h"
 #include "src/kernel/concat.h"
 #include "src/kernel/conv2d.h"
 #include "src/kernel/fc.h"
@@ -32,9 +37,11 @@
 #include "src/kernel/squeeze.h"
 #include "src/kernel/cast.h"
 #include "src/kernel/reduce_mean.h"
+#include "src/kernel/reduce_sum.h"
 #include "src/kernel/gather.h"
 #include "src/kernel/equal.h"
 #include "src/kernel/shape.h"
+#include "src/kernel/constant_of_shape.h"
 #include "src/kernel/expand.h"
 #include "src/kernel/where.h"
 #include "src/kernel/yolo_decode.h"
@@ -51,6 +58,11 @@ void EnsureBuiltinKernelsRegistered() {
     EnsureBatchNormalizationKernelsRegistered();
     EnsureDivKernelsRegistered();
     EnsureErfKernelsRegistered();
+    EnsureExpKernelsRegistered();
+    EnsureSinKernelsRegistered();
+    EnsureCosKernelsRegistered();
+    EnsureNegKernelsRegistered();
+    EnsureSoftplusKernelsRegistered();
     EnsureConcatKernelsRegistered();
     EnsureConv2DKernelsRegistered();
     EnsureFcKernelsRegistered();
@@ -79,9 +91,11 @@ void EnsureBuiltinKernelsRegistered() {
     EnsureSqueezeKernelsRegistered();
     EnsureCastKernelsRegistered();
     EnsureReduceMeanKernelsRegistered();
+    EnsureReduceSumKernelsRegistered();
     EnsureGatherKernelsRegistered();
     EnsureEqualKernelsRegistered();
     EnsureShapeKernelsRegistered();
+    EnsureConstantOfShapeKernelsRegistered();
     EnsureExpandKernelsRegistered();
     EnsureWhereKernelsRegistered();
     EnsureYoloDecodeKernelsRegistered();

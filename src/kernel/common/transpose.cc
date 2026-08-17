@@ -21,6 +21,8 @@ bool g_transpose_kernels_registered = []() {
                                                 []() { return std::make_unique<TransposeKernel<DeviceType::COMMON, DataType::FP32>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP16, "Transpose",
                                                 []() { return std::make_unique<TransposeKernel<DeviceType::COMMON, DataType::FP16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::BF16, "Transpose",
+                                                []() { return std::make_unique<TransposeKernel<DeviceType::COMMON, DataType::BF16>>(); });
     return true;
 }();
 
@@ -72,11 +74,20 @@ int32_t TransposeKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     return ComputeTransposeKernel<DataType::FP16>(static_cast<feather::operators::TransposeParam*>(param_));
 }
 
+template <>
+int32_t TransposeKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::Transpose::BF16");
+    return ComputeTransposeKernel<DataType::BF16>(static_cast<feather::operators::TransposeParam*>(param_));
+}
+
 typedef feather::kernel::TransposeKernel<DeviceType::COMMON, DataType::FP32> TransposeCommonFP32Kernel;
 REGISTER_KERNEL(COMMON, FP32, Transpose, TransposeCommonFP32Kernel);
 
 typedef feather::kernel::TransposeKernel<DeviceType::COMMON, DataType::FP16> TransposeCommonFP16Kernel;
 REGISTER_KERNEL(COMMON, FP16, Transpose, TransposeCommonFP16Kernel);
+
+typedef feather::kernel::TransposeKernel<DeviceType::COMMON, DataType::BF16> TransposeCommonBF16Kernel;
+REGISTER_KERNEL(COMMON, BF16, Transpose, TransposeCommonBF16Kernel);
 
 void EnsureCommonTransposeKernelsRegistered() { (void)g_transpose_kernels_registered; }
 

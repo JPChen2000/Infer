@@ -104,6 +104,22 @@ inline int LaunchCublasMatMulFp16(const uint16_t* a, const uint16_t* b, uint16_t
                                     CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 }
 
+inline int LaunchCublasMatMulBf16(const BFloat16* a, const BFloat16* b, BFloat16* out, int64_t m, int64_t k,
+                                  int64_t n, float alpha_value, bool trans_b) {
+    auto handle = CublasHandle();
+    if (handle == nullptr) {
+        return -1;
+    }
+    const float alpha = alpha_value;
+    const float beta = 0.0f;
+    const auto b_operation = trans_b ? CUBLAS_OP_T : CUBLAS_OP_N;
+    const int b_leading_dimension = trans_b ? static_cast<int>(k) : static_cast<int>(n);
+    return CublasCheck(cublasGemmEx(handle, b_operation, CUBLAS_OP_N, static_cast<int>(n), static_cast<int>(m),
+                                    static_cast<int>(k), &alpha, b, CUDA_R_16BF, b_leading_dimension, a, CUDA_R_16BF,
+                                    static_cast<int>(k), &beta, out, CUDA_R_16BF, static_cast<int>(n),
+                                    CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+}
+
 template <DataType dtype>
 int LaunchCublasMatMul(const StorageT<dtype>* a, const StorageT<dtype>* b, StorageT<dtype>* out, int64_t m, int64_t k,
                        int64_t n, float alpha_value, bool trans_b);
@@ -120,6 +136,13 @@ inline int LaunchCublasMatMul<DataType::FP16>(const StorageT<DataType::FP16>* a,
                                               StorageT<DataType::FP16>* out, int64_t m, int64_t k, int64_t n,
                                               float alpha_value, bool trans_b) {
     return LaunchCublasMatMulFp16(a, b, out, m, k, n, alpha_value, trans_b);
+}
+
+template <>
+inline int LaunchCublasMatMul<DataType::BF16>(const StorageT<DataType::BF16>* a, const StorageT<DataType::BF16>* b,
+                                              StorageT<DataType::BF16>* out, int64_t m, int64_t k, int64_t n,
+                                              float alpha_value, bool trans_b) {
+    return LaunchCublasMatMulBf16(a, b, out, m, k, n, alpha_value, trans_b);
 }
 
 }  // namespace cuda_detail

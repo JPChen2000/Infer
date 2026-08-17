@@ -50,6 +50,8 @@ bool g_add_kernels_registered = []() {
                                                 []() { return std::make_unique<AddKernel<DeviceType::COMMON, DataType::FP32>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP16, "Add",
                                                 []() { return std::make_unique<AddKernel<DeviceType::COMMON, DataType::FP16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::BF16, "Add",
+                                                []() { return std::make_unique<AddKernel<DeviceType::COMMON, DataType::BF16>>(); });
     return true;
 }();
 
@@ -98,6 +100,13 @@ int32_t AddKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Add::FP16");
     auto* param = static_cast<feather::operators::BinaryParam*>(param_);
     return ComputeAddKernel<DataType::FP16>(param);
+}
+
+template <>
+int32_t AddKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::Add::BF16");
+    auto* param = static_cast<feather::operators::BinaryParam*>(param_);
+    return ComputeAddKernel<DataType::BF16>(param);
 }
 
 typedef feather::kernel::AddKernel<DeviceType::COMMON, DataType::FP32> AddCommonFP32Kernel;

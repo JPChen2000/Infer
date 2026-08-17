@@ -18,6 +18,9 @@ bool g_cuda_gather_kernels_registered = []() {
     dispatcher.registerKernel(DeviceType::CUDA, DataType::FP16, "Gather", []() {
         return std::make_unique<GatherKernel<DeviceType::CUDA, DataType::FP16>>();
     });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::BF16, "Gather", []() {
+        return std::make_unique<GatherKernel<DeviceType::CUDA, DataType::BF16>>();
+    });
     return true;
 }();
 
@@ -129,6 +132,12 @@ template <>
 int32_t GatherKernel<DeviceType::CUDA, DataType::FP16>::compute() {
     return RunGather<DataType::FP16>(static_cast<feather::operators::GatherParam*>(param_),
                                      "CUDA::Gather::FP16");
+}
+
+template <>
+int32_t GatherKernel<DeviceType::CUDA, DataType::BF16>::compute() {
+    return RunGather<DataType::BF16>(static_cast<feather::operators::GatherParam*>(param_),
+                                     "CUDA::Gather::BF16");
 }
 
 void EnsureCudaGatherKernelsRegistered() { (void)g_cuda_gather_kernels_registered; }

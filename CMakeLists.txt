@@ -99,6 +99,11 @@ set(SRC "src/core/memory.cc"
     "src/operator/batch_normalization_op.cc"
     "src/operator/div_op.cc"
     "src/operator/erf_op.cc"
+    "src/operator/exp_op.cc"
+    "src/operator/sin_op.cc"
+    "src/operator/cos_op.cc"
+    "src/operator/neg_op.cc"
+    "src/operator/softplus_op.cc"
     "src/operator/concat_op.cc"
     "src/operator/fc_op.cc"
     "src/operator/flatten_op.cc"
@@ -123,12 +128,14 @@ set(SRC "src/core/memory.cc"
     "src/operator/squeeze_op.cc"
     "src/operator/cast_op.cc"
     "src/operator/reduce_mean_op.cc"
+    "src/operator/reduce_sum_op.cc"
     "src/operator/gather_op.cc"
     "src/operator/equal_op.cc"
     "src/operator/sqrt_op.cc"
     "src/operator/sub_op.cc"
     "src/operator/tanh_op.cc"
     "src/operator/shape_op.cc"
+    "src/operator/constant_of_shape_op.cc"
     "src/operator/expand_op.cc"
     "src/operator/where_op.cc"
     "src/operator/yolo_decode_op.cc"
@@ -136,6 +143,11 @@ set(SRC "src/core/memory.cc"
     "src/kernel/common/batch_normalization.cc"
     "src/kernel/common/div.cc"
     "src/kernel/common/erf.cc"
+    "src/kernel/common/exp.cc"
+    "src/kernel/common/sin.cc"
+    "src/kernel/common/cos.cc"
+    "src/kernel/common/neg.cc"
+    "src/kernel/common/softplus.cc"
     "src/kernel/common/concat.cc"
     "src/kernel/common/conv2d.cc"
     "src/kernel/common/fc.cc"
@@ -160,9 +172,11 @@ set(SRC "src/core/memory.cc"
     "src/kernel/common/squeeze.cc"
     "src/kernel/common/cast.cc"
     "src/kernel/common/reduce_mean.cc"
+    "src/kernel/common/reduce_sum.cc"
     "src/kernel/common/gather.cc"
     "src/kernel/common/equal.cc"
     "src/kernel/common/shape.cc"
+    "src/kernel/common/constant_of_shape.cc"
     "src/kernel/common/expand.cc"
     "src/kernel/common/where.cc"
     "src/kernel/common/sqrt.cc"
@@ -199,6 +213,10 @@ set(SRC "src/core/memory.cc"
     "src/demo/classification_demo.cc"
     "src/demo/classification_runner.cc"
     "src/demo/image_io.cc"
+    "src/demo/qwen_chat_template.cc"
+    "src/demo/qwen_demo.cc"
+    "src/demo/qwen_runner.cc"
+    "src/demo/qwen_tokenizer.cc"
     "src/demo/yolov5_postprocess.cc"
     "src/demo/yolov5_runner.cc")
 
@@ -207,6 +225,11 @@ set(CUDA_SRC
     "src/kernel/cuda/batch_normalization.cu"
     "src/kernel/cuda/div.cu"
     "src/kernel/cuda/erf.cu"
+    "src/kernel/cuda/exp.cu"
+    "src/kernel/cuda/sin.cu"
+    "src/kernel/cuda/cos.cu"
+    "src/kernel/cuda/neg.cu"
+    "src/kernel/cuda/softplus.cu"
     "src/kernel/cuda/concat.cu"
     "src/kernel/cuda/conv2d.cu"
     "src/kernel/cuda/fc.cu"
@@ -233,6 +256,7 @@ set(CUDA_SRC
     "src/kernel/cuda/squeeze.cu"
     "src/kernel/cuda/cast.cu"
     "src/kernel/cuda/reduce_mean.cu"
+    "src/kernel/cuda/reduce_sum.cu"
     "src/kernel/cuda/gather.cu"
     "src/kernel/cuda/equal.cu"
     "src/kernel/cuda/expand.cu"
@@ -271,6 +295,8 @@ add_executable(yolov5_benchmark_demo demo/yolov5_benchmark_demo.cc)
 add_executable(resnet_demo demo/resnet_infer_demo.cc)
 add_executable(resent_demo demo/resent_infer_demo.cc)
 add_executable(repvgg_demo demo/repvgg_infer_demo.cc)
+add_executable(vit_demo demo/vit_infer_demo.cc)
+add_executable(qwen_demo demo/qwen_infer_demo.cc)
 add_executable(fth_layout_convert demo/fth_layout_convert_demo.cc)
 add_executable(x86_conv_benchmark_demo demo/x86_conv_benchmark_demo.cc)
 add_executable(x86_linear_benchmark_demo demo/x86_linear_benchmark_demo.cc)
@@ -321,6 +347,12 @@ target_link_libraries(resent_demo infer)
 target_include_directories(repvgg_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(repvgg_demo infer)
+target_include_directories(vit_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(vit_demo infer)
+target_include_directories(qwen_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(qwen_demo infer)
 target_include_directories(yolov5_benchmark_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(yolov5_benchmark_demo infer CONAN_PKG::benchmark)

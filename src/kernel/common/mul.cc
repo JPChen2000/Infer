@@ -50,6 +50,10 @@ bool g_mul_kernels_registered = []() {
                                                 []() { return std::make_unique<MulKernel<DeviceType::COMMON, DataType::FP32>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP16, "Mul",
                                                 []() { return std::make_unique<MulKernel<DeviceType::COMMON, DataType::FP16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::BF16, "Mul",
+                                                []() { return std::make_unique<MulKernel<DeviceType::COMMON, DataType::BF16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::INT64, "Mul",
+                                                []() { return std::make_unique<MulKernel<DeviceType::COMMON, DataType::INT64>>(); });
     return true;
 }();
 
@@ -57,7 +61,8 @@ bool g_mul_kernels_registered = []() {
 
 template <DataType dtype>
 int32_t ComputeMulKernel(feather::operators::BinaryParam* param) {
-    if (param == nullptr || param->lhs == nullptr || param->rhs == nullptr || param->out == nullptr) {
+    if (param == nullptr || param->lhs == nullptr || param->rhs == nullptr || param->out == nullptr ||
+        param->lhs->data_type() != dtype || param->rhs->data_type() != dtype) {
         return -1;
     }
 
@@ -79,9 +84,14 @@ int32_t ComputeMulKernel(feather::operators::BinaryParam* param) {
         }
         const int64_t lhs_offset = ComputeBroadcastOffset(out_coords, param->lhs->dims().data(), lhs_strides);
         const int64_t rhs_offset = ComputeBroadcastOffset(out_coords, param->rhs->dims().data(), rhs_strides);
-        const float lhs = TensorIO<dtype>::Read(param->lhs.get(), lhs_offset);
-        const float rhs = TensorIO<dtype>::Read(param->rhs.get(), rhs_offset);
-        TensorIO<dtype>::Write(param->out.get(), linear, lhs * rhs);
+        if constexpr (dtype == DataType::INT64) {
+            param->out->mutable_data<int64_t>()[linear] =
+                param->lhs->data<int64_t>()[lhs_offset] * param->rhs->data<int64_t>()[rhs_offset];
+        } else {
+            const float lhs = TensorIO<dtype>::Read(param->lhs.get(), lhs_offset);
+            const float rhs = TensorIO<dtype>::Read(param->rhs.get(), rhs_offset);
+            TensorIO<dtype>::Write(param->out.get(), linear, lhs * rhs);
+        }
     }
     return 0;
 }
@@ -98,6 +108,20 @@ int32_t MulKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Mul::FP16");
     auto* param = static_cast<feather::operators::BinaryParam*>(param_);
     return ComputeMulKernel<DataType::FP16>(param);
+}
+
+template <>
+int32_t MulKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::Mul::BF16");
+    auto* param = static_cast<feather::operators::BinaryParam*>(param_);
+    return ComputeMulKernel<DataType::BF16>(param);
+}
+
+template <>
+int32_t MulKernel<DeviceType::COMMON, DataType::INT64>::compute() {
+    AutoTimer timer("Common::Mul::INT64");
+    auto* param = static_cast<feather::operators::BinaryParam*>(param_);
+    return ComputeMulKernel<DataType::INT64>(param);
 }
 
 typedef feather::kernel::MulKernel<DeviceType::COMMON, DataType::FP32> MulCommonFP32Kernel;

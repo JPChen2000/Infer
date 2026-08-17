@@ -46,7 +46,7 @@ inline int64_t GetIntAttribute(const std::unordered_map<std::string, model::Attr
 }
 
 inline bool IsFloatingPointDataType(DataType data_type) {
-    return data_type == DataType::FP16 || data_type == DataType::FP32;
+    return data_type == DataType::FP16 || data_type == DataType::BF16 || data_type == DataType::FP32;
 }
 
 inline std::vector<int64_t> NormalizeAxes(const std::vector<int64_t>& axes, int64_t rank, bool for_unsqueeze) {

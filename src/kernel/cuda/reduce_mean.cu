@@ -21,6 +21,9 @@ bool g_cuda_reduce_mean_kernels_registered = []() {
     dispatcher.registerKernel(DeviceType::CUDA, DataType::FP16, "ReduceMean", []() {
         return std::make_unique<ReduceMeanKernel<DeviceType::CUDA, DataType::FP16>>();
     });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::BF16, "ReduceMean", []() {
+        return std::make_unique<ReduceMeanKernel<DeviceType::CUDA, DataType::BF16>>();
+    });
     return true;
 }();
 
@@ -163,6 +166,12 @@ template <>
 int32_t ReduceMeanKernel<DeviceType::CUDA, DataType::FP16>::compute() {
     return RunReduceMean<DataType::FP16>(static_cast<feather::operators::ReduceMeanParam*>(param_),
                                          "CUDA::ReduceMean::FP16");
+}
+
+template <>
+int32_t ReduceMeanKernel<DeviceType::CUDA, DataType::BF16>::compute() {
+    return RunReduceMean<DataType::BF16>(static_cast<feather::operators::ReduceMeanParam*>(param_),
+                                         "CUDA::ReduceMean::BF16");
 }
 
 void EnsureCudaReduceMeanKernelsRegistered() { (void)g_cuda_reduce_mean_kernels_registered; }

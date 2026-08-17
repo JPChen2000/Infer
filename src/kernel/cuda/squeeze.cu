@@ -18,6 +18,9 @@ bool g_cuda_squeeze_kernels_registered = []() {
     dispatcher.registerKernel(DeviceType::CUDA, DataType::FP16, "Squeeze", []() {
         return std::make_unique<SqueezeKernel<DeviceType::CUDA, DataType::FP16>>();
     });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::BF16, "Squeeze", []() {
+        return std::make_unique<SqueezeKernel<DeviceType::CUDA, DataType::BF16>>();
+    });
     return true;
 }();
 
@@ -44,6 +47,12 @@ template <>
 int32_t SqueezeKernel<DeviceType::CUDA, DataType::FP16>::compute() {
     return RunSqueeze<DataType::FP16>(static_cast<feather::operators::AxesParam*>(param_),
                                       "CUDA::Squeeze::FP16");
+}
+
+template <>
+int32_t SqueezeKernel<DeviceType::CUDA, DataType::BF16>::compute() {
+    return RunSqueeze<DataType::BF16>(static_cast<feather::operators::AxesParam*>(param_),
+                                      "CUDA::Squeeze::BF16");
 }
 
 void EnsureCudaSqueezeKernelsRegistered() { (void)g_cuda_squeeze_kernels_registered; }

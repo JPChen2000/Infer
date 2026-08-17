@@ -20,6 +20,9 @@ bool g_common_where_kernels_registered = []() {
     dispatcher.registerKernel(DeviceType::COMMON, DataType::FP16, "Where", []() {
         return std::make_unique<WhereKernel<DeviceType::COMMON, DataType::FP16>>();
     });
+    dispatcher.registerKernel(DeviceType::COMMON, DataType::BF16, "Where", []() {
+        return std::make_unique<WhereKernel<DeviceType::COMMON, DataType::BF16>>();
+    });
     dispatcher.registerKernel(DeviceType::COMMON, DataType::INT32, "Where", []() {
         return std::make_unique<WhereKernel<DeviceType::COMMON, DataType::INT32>>();
     });
@@ -81,6 +84,12 @@ template <>
 int32_t WhereKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Where::FP16");
     return ComputeWhere<DataType::FP16>(static_cast<feather::operators::WhereParam*>(param_));
+}
+
+template <>
+int32_t WhereKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::Where::BF16");
+    return ComputeWhere<DataType::BF16>(static_cast<feather::operators::WhereParam*>(param_));
 }
 
 template <>

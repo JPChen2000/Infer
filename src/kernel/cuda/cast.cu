@@ -18,6 +18,15 @@ bool g_cuda_cast_kernels_registered = []() {
     dispatcher.registerKernel(DeviceType::CUDA, DataType::FP16, "Cast", []() {
         return std::make_unique<CastKernel<DeviceType::CUDA, DataType::FP16>>();
     });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::BF16, "Cast", []() {
+        return std::make_unique<CastKernel<DeviceType::CUDA, DataType::BF16>>();
+    });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::INT32, "Cast", []() {
+        return std::make_unique<CastKernel<DeviceType::CUDA, DataType::INT32>>();
+    });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::INT64, "Cast", []() {
+        return std::make_unique<CastKernel<DeviceType::CUDA, DataType::INT64>>();
+    });
     return true;
 }();
 
@@ -69,6 +78,9 @@ int32_t CastKernel<DeviceType::CUDA, DataType::FP32>::compute() {
     if (param->to == DataType::FP16) {
         return RunFloatingCast<DataType::FP32, DataType::FP16>(param, "CUDA::Cast::FP32ToFP16");
     }
+    if (param->to == DataType::BF16) {
+        return RunFloatingCast<DataType::FP32, DataType::BF16>(param, "CUDA::Cast::FP32ToBF16");
+    }
     return -1;
 }
 
@@ -83,6 +95,63 @@ int32_t CastKernel<DeviceType::CUDA, DataType::FP16>::compute() {
     }
     if (param->to == DataType::FP16) {
         return RunFloatingCast<DataType::FP16, DataType::FP16>(param, "CUDA::Cast::FP16ToFP16");
+    }
+    if (param->to == DataType::BF16) {
+        return RunFloatingCast<DataType::FP16, DataType::BF16>(param, "CUDA::Cast::FP16ToBF16");
+    }
+    return -1;
+}
+
+template <>
+int32_t CastKernel<DeviceType::CUDA, DataType::BF16>::compute() {
+    auto* param = static_cast<feather::operators::CastParam*>(param_);
+    if (param == nullptr) {
+        return -1;
+    }
+    if (param->to == DataType::FP32) {
+        return RunFloatingCast<DataType::BF16, DataType::FP32>(param, "CUDA::Cast::BF16ToFP32");
+    }
+    if (param->to == DataType::FP16) {
+        return RunFloatingCast<DataType::BF16, DataType::FP16>(param, "CUDA::Cast::BF16ToFP16");
+    }
+    if (param->to == DataType::BF16) {
+        return RunFloatingCast<DataType::BF16, DataType::BF16>(param, "CUDA::Cast::BF16ToBF16");
+    }
+    return -1;
+}
+
+template <>
+int32_t CastKernel<DeviceType::CUDA, DataType::INT32>::compute() {
+    auto* param = static_cast<feather::operators::CastParam*>(param_);
+    if (param == nullptr) {
+        return -1;
+    }
+    if (param->to == DataType::FP32) {
+        return RunFloatingCast<DataType::INT32, DataType::FP32>(param, "CUDA::Cast::INT32ToFP32");
+    }
+    if (param->to == DataType::FP16) {
+        return RunFloatingCast<DataType::INT32, DataType::FP16>(param, "CUDA::Cast::INT32ToFP16");
+    }
+    if (param->to == DataType::BF16) {
+        return RunFloatingCast<DataType::INT32, DataType::BF16>(param, "CUDA::Cast::INT32ToBF16");
+    }
+    return -1;
+}
+
+template <>
+int32_t CastKernel<DeviceType::CUDA, DataType::INT64>::compute() {
+    auto* param = static_cast<feather::operators::CastParam*>(param_);
+    if (param == nullptr) {
+        return -1;
+    }
+    if (param->to == DataType::FP32) {
+        return RunFloatingCast<DataType::INT64, DataType::FP32>(param, "CUDA::Cast::INT64ToFP32");
+    }
+    if (param->to == DataType::FP16) {
+        return RunFloatingCast<DataType::INT64, DataType::FP16>(param, "CUDA::Cast::INT64ToFP16");
+    }
+    if (param->to == DataType::BF16) {
+        return RunFloatingCast<DataType::INT64, DataType::BF16>(param, "CUDA::Cast::INT64ToBF16");
     }
     return -1;
 }

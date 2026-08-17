@@ -23,6 +23,8 @@ bool g_cuda_transpose_kernels_registered = []() {
                               []() { return std::make_unique<TransposeKernel<DeviceType::CUDA, DataType::FP32>>(); });
     dispatcher.registerKernel(DeviceType::CUDA, DataType::FP16, "Transpose",
                               []() { return std::make_unique<TransposeKernel<DeviceType::CUDA, DataType::FP16>>(); });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::BF16, "Transpose",
+                              []() { return std::make_unique<TransposeKernel<DeviceType::CUDA, DataType::BF16>>(); });
     return true;
 }();
 
@@ -96,6 +98,12 @@ template <>
 int32_t TransposeKernel<DeviceType::CUDA, DataType::FP16>::compute() {
     return RunTranspose<DataType::FP16>(static_cast<feather::operators::TransposeParam*>(param_),
                                        "CUDA::Transpose::FP16");
+}
+
+template <>
+int32_t TransposeKernel<DeviceType::CUDA, DataType::BF16>::compute() {
+    return RunTranspose<DataType::BF16>(static_cast<feather::operators::TransposeParam*>(param_),
+                                        "CUDA::Transpose::BF16");
 }
 
 void EnsureCudaTransposeKernelsRegistered() { (void)g_cuda_transpose_kernels_registered; }

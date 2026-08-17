@@ -17,6 +17,9 @@ bool g_cuda_div_kernels_registered = []() {
     dispatcher.registerKernel(DeviceType::CUDA, DataType::FP16, "Div", []() {
         return std::make_unique<DivKernel<DeviceType::CUDA, DataType::FP16>>();
     });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::BF16, "Div", []() {
+        return std::make_unique<DivKernel<DeviceType::CUDA, DataType::BF16>>();
+    });
     return true;
 }();
 
@@ -32,6 +35,12 @@ template <>
 int32_t DivKernel<DeviceType::CUDA, DataType::FP16>::compute() {
     return cuda_detail::RunBinary<DataType::FP16, 3>(static_cast<feather::operators::BinaryParam*>(param_),
                                                      "CUDA::Div::FP16");
+}
+
+template <>
+int32_t DivKernel<DeviceType::CUDA, DataType::BF16>::compute() {
+    return cuda_detail::RunBinary<DataType::BF16, 3>(static_cast<feather::operators::BinaryParam*>(param_),
+                                                     "CUDA::Div::BF16");
 }
 
 void EnsureCudaDivKernelsRegistered() { (void)g_cuda_div_kernels_registered; }

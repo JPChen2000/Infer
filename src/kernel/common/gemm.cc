@@ -17,6 +17,8 @@ bool g_gemm_kernels_registered = []() {
                                                 []() { return std::make_unique<GemmKernel<DeviceType::COMMON, DataType::FP32>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP16, "Gemm",
                                                 []() { return std::make_unique<GemmKernel<DeviceType::COMMON, DataType::FP16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::BF16, "Gemm",
+                                                []() { return std::make_unique<GemmKernel<DeviceType::COMMON, DataType::BF16>>(); });
     return true;
 }();
 
@@ -73,11 +75,20 @@ int32_t GemmKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     return ComputeGemmCommon<DataType::FP16>(static_cast<feather::operators::GemmParam*>(param_));
 }
 
+template <>
+int32_t GemmKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::Gemm::BF16");
+    return ComputeGemmCommon<DataType::BF16>(static_cast<feather::operators::GemmParam*>(param_));
+}
+
 typedef feather::kernel::GemmKernel<DeviceType::COMMON, DataType::FP32> GemmCommonFP32Kernel;
 REGISTER_KERNEL(COMMON, FP32, Gemm, GemmCommonFP32Kernel);
 
 typedef feather::kernel::GemmKernel<DeviceType::COMMON, DataType::FP16> GemmCommonFP16Kernel;
 REGISTER_KERNEL(COMMON, FP16, Gemm, GemmCommonFP16Kernel);
+
+typedef feather::kernel::GemmKernel<DeviceType::COMMON, DataType::BF16> GemmCommonBF16Kernel;
+REGISTER_KERNEL(COMMON, BF16, Gemm, GemmCommonBF16Kernel);
 
 void EnsureCommonGemmKernelsRegistered() { (void)g_gemm_kernels_registered; }
 

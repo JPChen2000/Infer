@@ -16,6 +16,8 @@ bool g_concat_kernels_registered = []() {
                                                 []() { return std::make_unique<ConcatKernel<DeviceType::COMMON, DataType::FP32>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP16, "Concat",
                                                 []() { return std::make_unique<ConcatKernel<DeviceType::COMMON, DataType::FP16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::BF16, "Concat",
+                                                []() { return std::make_unique<ConcatKernel<DeviceType::COMMON, DataType::BF16>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::INT64, "Concat",
                                                 []() { return std::make_unique<ConcatKernel<DeviceType::COMMON, DataType::INT64>>(); });
     return true;
@@ -79,6 +81,12 @@ int32_t ConcatKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     return ComputeConcatKernel<DataType::FP16>(static_cast<feather::operators::ConcatParam*>(param_));
 }
 
+template <>
+int32_t ConcatKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::Concat::BF16");
+    return ComputeConcatKernel<DataType::BF16>(static_cast<feather::operators::ConcatParam*>(param_));
+}
+
 int32_t ConcatKernel<DeviceType::COMMON, DataType::INT64>::compute() {
     AutoTimer timer("Common::Concat::INT64");
     auto* param = static_cast<feather::operators::ConcatParam*>(param_);
@@ -121,6 +129,9 @@ REGISTER_KERNEL(COMMON, FP32, Concat, ConcatCommonFP32Kernel);
 
 typedef feather::kernel::ConcatKernel<DeviceType::COMMON, DataType::FP16> ConcatCommonFP16Kernel;
 REGISTER_KERNEL(COMMON, FP16, Concat, ConcatCommonFP16Kernel);
+
+typedef feather::kernel::ConcatKernel<DeviceType::COMMON, DataType::BF16> ConcatCommonBF16Kernel;
+REGISTER_KERNEL(COMMON, BF16, Concat, ConcatCommonBF16Kernel);
 
 void EnsureCommonConcatKernelsRegistered() { (void)g_concat_kernels_registered; }
 

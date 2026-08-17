@@ -5,7 +5,9 @@
 
 #include "core/kernel.h"
 #include "core/operator.h"
+#include "core/operator_registry.h"
 #include "core/tensor.h"
+#include "model/model_format.h"
 #include "src/kernel/flatten.h"
 #include "src/kernel/matmul.h"
 #include "src/operator/flatten_op.h"
@@ -82,6 +84,41 @@ TEST(matmul_flatten_op_test, BatchedMatMulResizesExistingOutputForAllDimensions)
     op->AttachKernel(std::move(kernel));
     ASSERT_EQ(op->Run(), 0);
 
+    const std::vector<float> expected = {50, 60, 114, 140, 178, 220, 242, 300, 306, 380, 370, 460};
+    ASSERT_EQ(output->numel(), static_cast<int64_t>(expected.size()));
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_FLOAT_EQ(output->data<float>()[i], expected[i]);
+    }
+}
+
+TEST(matmul_flatten_op_test, X86BuilderUsesCommonKernelForBatchedMatMul) {
+    auto lhs = std::make_shared<Tensor>();
+    lhs->Assign<float>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+                        13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24},
+                       {2, 3, 4});
+
+    auto rhs = std::make_shared<Tensor>();
+    rhs->Assign<float>({1, 2, 3, 4, 5, 6, 7, 8}, {1, 4, 2});
+
+    feather::OperatorRegistry::TensorMap tensors;
+    tensors["lhs"] = lhs;
+    tensors["rhs"] = rhs;
+    tensors["out"] = std::make_shared<Tensor>(std::vector<int64_t>{2, 3, 2});
+
+    feather::model::NodeDesc node;
+    node.name = "batched_matmul";
+    node.op_type = "MatMul";
+    node.inputs = {"lhs", "rhs"};
+    node.outputs = {"out"};
+
+    feather::KernelDeviceScope scope(DeviceType::X86);
+    auto op = feather::OperatorRegistry::instance().Create(node, tensors);
+    ASSERT_NE(op, nullptr);
+    ASSERT_EQ(op->Run(), 0);
+
+    const auto output = op->outputs().front();
+    ASSERT_NE(output, nullptr);
+    EXPECT_EQ(output->dims().data(), std::vector<int64_t>({2, 3, 2}));
     const std::vector<float> expected = {50, 60, 114, 140, 178, 220, 242, 300, 306, 380, 370, 460};
     ASSERT_EQ(output->numel(), static_cast<int64_t>(expected.size()));
     for (size_t i = 0; i < expected.size(); ++i) {

@@ -18,6 +18,8 @@ bool g_cuda_softmax_kernels_registered = []() {
                               []() { return std::make_unique<SoftmaxKernel<DeviceType::CUDA, DataType::FP32>>(); });
     dispatcher.registerKernel(DeviceType::CUDA, DataType::FP16, "Softmax",
                               []() { return std::make_unique<SoftmaxKernel<DeviceType::CUDA, DataType::FP16>>(); });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::BF16, "Softmax",
+                              []() { return std::make_unique<SoftmaxKernel<DeviceType::CUDA, DataType::BF16>>(); });
     return true;
 }();
 
@@ -95,6 +97,12 @@ template <>
 int32_t SoftmaxKernel<DeviceType::CUDA, DataType::FP16>::compute() {
     return RunSoftmax<DataType::FP16>(static_cast<feather::operators::SoftmaxParam*>(param_),
                                      "CUDA::Softmax::FP16");
+}
+
+template <>
+int32_t SoftmaxKernel<DeviceType::CUDA, DataType::BF16>::compute() {
+    return RunSoftmax<DataType::BF16>(static_cast<feather::operators::SoftmaxParam*>(param_),
+                                      "CUDA::Softmax::BF16");
 }
 
 void EnsureCudaSoftmaxKernelsRegistered() { (void)g_cuda_softmax_kernels_registered; }

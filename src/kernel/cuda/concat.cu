@@ -19,6 +19,8 @@ bool g_cuda_concat_kernels_registered = []() {
                               []() { return std::make_unique<ConcatKernel<DeviceType::CUDA, DataType::FP32>>(); });
     dispatcher.registerKernel(DeviceType::CUDA, DataType::FP16, "Concat",
                               []() { return std::make_unique<ConcatKernel<DeviceType::CUDA, DataType::FP16>>(); });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::BF16, "Concat",
+                              []() { return std::make_unique<ConcatKernel<DeviceType::CUDA, DataType::BF16>>(); });
     return true;
 }();
 
@@ -93,6 +95,11 @@ int32_t ConcatKernel<DeviceType::CUDA, DataType::FP32>::compute() {
 template <>
 int32_t ConcatKernel<DeviceType::CUDA, DataType::FP16>::compute() {
     return RunConcat<DataType::FP16>(static_cast<feather::operators::ConcatParam*>(param_), "CUDA::Concat::FP16");
+}
+
+template <>
+int32_t ConcatKernel<DeviceType::CUDA, DataType::BF16>::compute() {
+    return RunConcat<DataType::BF16>(static_cast<feather::operators::ConcatParam*>(param_), "CUDA::Concat::BF16");
 }
 
 void EnsureCudaConcatKernelsRegistered() { (void)g_cuda_concat_kernels_registered; }

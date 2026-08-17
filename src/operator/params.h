@@ -95,6 +95,13 @@ struct ReduceMeanParam : ParamBase {
     bool keepdims{true};
 };
 
+struct ReduceSumParam : ParamBase {
+    std::shared_ptr<Tensor> input;
+    std::shared_ptr<Tensor> out;
+    std::vector<int64_t> axes;
+    bool keepdims{true};
+};
+
 struct GatherParam : ParamBase {
     std::shared_ptr<Tensor> data;
     std::shared_ptr<Tensor> indices;
@@ -113,6 +120,15 @@ struct ShapeParam : ParamBase {
     std::shared_ptr<Tensor> out;
     int64_t start{0};
     int64_t end{std::numeric_limits<int64_t>::max()};
+};
+
+struct ConstantOfShapeParam : ParamBase {
+    std::shared_ptr<Tensor> shape;
+    std::shared_ptr<Tensor> out;
+    DataType output_type{DataType::UNKNOWN};
+    int64_t int_value{0};
+    float float_value{0.0f};
+    bool use_float_value{false};
 };
 
 struct ExpandParam : ParamBase {

@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #ifdef FEATHER_WITH_CUDA
@@ -12,6 +13,7 @@
 #include "core/tensor.h"
 #include "src/kernel/batch_normalization.h"
 #include "src/kernel/cast.h"
+#include "src/kernel/conv2d.h"
 #include "src/kernel/div.h"
 #include "src/kernel/erf.h"
 #include "src/kernel/equal.h"
@@ -20,6 +22,7 @@
 #include "src/kernel/global_average_pool.h"
 #include "src/kernel/pow.h"
 #include "src/kernel/reduce_mean.h"
+#include "src/kernel/reduce_sum.h"
 #include "src/kernel/sqrt.h"
 #include "src/kernel/squeeze.h"
 #include "src/kernel/sub.h"
@@ -27,6 +30,7 @@
 #include "src/kernel/unsqueeze.h"
 #include "src/kernel/where.h"
 #include "src/operator/params.h"
+#include "util/bf16.h"
 #include "util/fp16.h"
 
 namespace {
@@ -44,13 +48,20 @@ std::shared_ptr<feather::Tensor> MakeFloatingTensor(const std::vector<float>& va
     auto tensor = std::make_shared<feather::Tensor>();
     if constexpr (dtype == feather::DataType::FP32) {
         tensor->Assign<float>(values, shape);
-    } else {
+    } else if constexpr (dtype == feather::DataType::FP16) {
         std::vector<uint16_t> storage;
         storage.reserve(values.size());
         for (const float value : values) {
             storage.push_back(feather::FloatToHalf(value));
         }
         tensor->Assign<uint16_t>(storage, shape);
+    } else {
+        std::vector<feather::BFloat16> storage;
+        storage.reserve(values.size());
+        for (const float value : values) {
+            storage.push_back({feather::FloatToBFloat16(value)});
+        }
+        tensor->Assign<feather::BFloat16>(storage, shape);
     }
     return tensor;
 }
@@ -60,8 +71,10 @@ std::shared_ptr<feather::Tensor> MakeFloatingOutput(const std::vector<int64_t>& 
     auto tensor = std::make_shared<feather::Tensor>(shape);
     if constexpr (dtype == feather::DataType::FP32) {
         tensor->mutable_data<float>();
-    } else {
+    } else if constexpr (dtype == feather::DataType::FP16) {
         tensor->mutable_data<uint16_t>();
+    } else {
+        tensor->mutable_data<feather::BFloat16>();
     }
     return tensor;
 }
@@ -72,6 +85,9 @@ float ReadFloatingValue(const feather::Tensor& tensor, int64_t index) {
     }
     if (tensor.data_type() == feather::DataType::FP16) {
         return feather::HalfToFloat(tensor.data<uint16_t>()[index]);
+    }
+    if (tensor.data_type() == feather::DataType::BF16) {
+        return feather::BFloat16ToFloat(tensor.data<feather::BFloat16>()[index].bits);
     }
     return 0.0f;
 }
@@ -337,6 +353,112 @@ void RunTransformerNumericOperators() {
     }
 }
 
+void RunQwenBf16NumericOperators() {
+    constexpr auto kDtype = feather::DataType::BF16;
+
+    auto matmul_a = MakeFloatingTensor<kDtype>(
+        {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, -1.0f, 2.0f, 0.0f, 3.0f, -2.0f, 1.0f}, {1, 2, 2, 3});
+    auto matmul_b = MakeFloatingTensor<kDtype>({1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f,
+                                                  2.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f},
+                                                 {1, 2, 3, 2});
+    auto matmul_out = MakeFloatingOutput<kDtype>({1, 2, 2, 2});
+    feather::operators::MatMulParam matmul_param{};
+    matmul_param.a = matmul_a;
+    matmul_param.b = matmul_b;
+    matmul_param.out = matmul_out;
+    auto matmul = CreateCudaKernel<kDtype>("MatMul");
+    if (matmul == nullptr) {
+        return;
+    }
+    matmul->SetParam(&matmul_param);
+    EXPECT_EQ(matmul->compute(), 0);
+    const std::vector<float> expected_matmul = {4.0f, 5.0f, 10.0f, 11.0f, 0.0f, -1.0f, 4.0f, 4.0f};
+    for (size_t i = 0; i < expected_matmul.size(); ++i) {
+        EXPECT_NEAR(ReadFloatingValue(*matmul_out, static_cast<int64_t>(i)), expected_matmul[i], 0.05f);
+    }
+
+    auto position_ids = std::make_shared<feather::Tensor>();
+    position_ids->Assign<int64_t>({0, 7, 127}, {3});
+    auto position_fp32 = MakeFloatingOutput<feather::DataType::FP32>({3});
+    feather::operators::CastParam cast_param{};
+    cast_param.input = position_ids;
+    cast_param.out = position_fp32;
+    cast_param.to = feather::DataType::FP32;
+    auto cast = CreateCudaKernel<feather::DataType::INT64>("Cast");
+    if (cast == nullptr) {
+        return;
+    }
+    cast->SetParam(&cast_param);
+    EXPECT_EQ(cast->compute(), 0);
+    EXPECT_FLOAT_EQ(ReadFloatingValue(*position_fp32, 0), 0.0f);
+    EXPECT_FLOAT_EQ(ReadFloatingValue(*position_fp32, 1), 7.0f);
+    EXPECT_FLOAT_EQ(ReadFloatingValue(*position_fp32, 2), 127.0f);
+
+    auto unary_input = MakeFloatingTensor<kDtype>({-1.0f, 0.0f, 0.5f}, {3});
+    feather::operators::UnaryParam unary_param{};
+    unary_param.input = unary_input;
+    for (const auto& item : std::vector<std::pair<const char*, std::vector<float>>>{
+             {"Exp", {std::exp(-1.0f), 1.0f, std::exp(0.5f)}},
+             {"Sin", {std::sin(-1.0f), 0.0f, std::sin(0.5f)}},
+             {"Cos", {std::cos(-1.0f), 1.0f, std::cos(0.5f)}},
+             {"Neg", {1.0f, 0.0f, -0.5f}},
+             {"Softplus", {std::log1p(std::exp(-1.0f)), std::log(2.0f), std::log1p(std::exp(0.5f))}},
+         }) {
+        unary_param.out = MakeFloatingOutput<kDtype>({3});
+        auto unary = CreateCudaKernel<kDtype>(item.first);
+        if (unary == nullptr) {
+            return;
+        }
+        unary->SetParam(&unary_param);
+        EXPECT_EQ(unary->compute(), 0);
+        for (size_t i = 0; i < item.second.size(); ++i) {
+            EXPECT_NEAR(ReadFloatingValue(*unary_param.out, static_cast<int64_t>(i)), item.second[i], 0.03f)
+                << item.first << " index=" << i;
+        }
+    }
+
+    auto reduce_input = MakeFloatingTensor<kDtype>({1.0f, 2.0f, 3.0f, 4.0f}, {2, 2});
+    auto reduce_out = MakeFloatingOutput<kDtype>({2, 1});
+    feather::operators::ReduceSumParam reduce_param{};
+    reduce_param.input = reduce_input;
+    reduce_param.out = reduce_out;
+    reduce_param.axes = {1};
+    reduce_param.keepdims = true;
+    auto reduce_sum = CreateCudaKernel<kDtype>("ReduceSum");
+    if (reduce_sum == nullptr) {
+        return;
+    }
+    reduce_sum->SetParam(&reduce_param);
+    EXPECT_EQ(reduce_sum->compute(), 0);
+    EXPECT_NEAR(ReadFloatingValue(*reduce_out, 0), 3.0f, 0.03f);
+    EXPECT_NEAR(ReadFloatingValue(*reduce_out, 1), 7.0f, 0.03f);
+
+    auto conv_input = MakeFloatingTensor<kDtype>({1.0f, 2.0f, 3.0f}, {1, 1, 1, 3});
+    auto conv_weight = MakeFloatingTensor<kDtype>({1.0f, 0.0f, -1.0f}, {1, 1, 1, 3});
+    auto conv_out = MakeFloatingOutput<kDtype>({1, 1, 1, 3});
+    feather::operators::Conv2dParam conv_param{};
+    conv_param.input = conv_input;
+    conv_param.w = conv_weight;
+    conv_param.out = conv_out;
+    conv_param.stride_h = 1;
+    conv_param.stride_w = 1;
+    conv_param.pad_h = 0;
+    conv_param.pad_w = 1;
+    conv_param.dilation_h = 1;
+    conv_param.dilation_w = 1;
+    conv_param.group = 1;
+    auto conv = CreateCudaKernel<kDtype>("Conv2D");
+    if (conv == nullptr) {
+        return;
+    }
+    conv->SetParam(&conv_param);
+    EXPECT_EQ(conv->compute(), 0);
+    const std::vector<float> expected_conv = {-2.0f, -2.0f, 2.0f};
+    for (size_t i = 0; i < expected_conv.size(); ++i) {
+        EXPECT_NEAR(ReadFloatingValue(*conv_out, static_cast<int64_t>(i)), expected_conv[i], 0.03f);
+    }
+}
+
 TEST(cuda_extended_ops_test, ClassificationNumericOperatorsRunOnCudaFp32AndFp16) {
     if (!HasCudaDevice()) {
         GTEST_SKIP() << "CUDA device is not available";
@@ -351,6 +473,13 @@ TEST(cuda_extended_ops_test, TransformerNumericOperatorsRunOnCudaFp32AndFp16) {
     }
     RunTransformerNumericOperators<feather::DataType::FP32>();
     RunTransformerNumericOperators<feather::DataType::FP16>();
+}
+
+TEST(cuda_extended_ops_test, QwenBf16OperatorsRunNativelyOnCuda) {
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+    RunQwenBf16NumericOperators();
 }
 
 #endif

@@ -18,6 +18,9 @@ bool g_common_squeeze_kernels_registered = []() {
     dispatcher.registerKernel(DeviceType::COMMON, DataType::FP16, "Squeeze", []() {
         return std::make_unique<SqueezeKernel<DeviceType::COMMON, DataType::FP16>>();
     });
+    dispatcher.registerKernel(DeviceType::COMMON, DataType::BF16, "Squeeze", []() {
+        return std::make_unique<SqueezeKernel<DeviceType::COMMON, DataType::BF16>>();
+    });
     dispatcher.registerKernel(DeviceType::COMMON, DataType::INT64, "Squeeze", []() {
         return std::make_unique<SqueezeKernel<DeviceType::COMMON, DataType::INT64>>();
     });
@@ -38,6 +41,12 @@ int32_t SqueezeKernel<DeviceType::COMMON, DataType::FP32>::compute() {
 template <>
 int32_t SqueezeKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Squeeze::FP16");
+    return common_tensor_detail::CopyTensor(static_cast<feather::operators::AxesParam*>(param_));
+}
+
+template <>
+int32_t SqueezeKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::Squeeze::BF16");
     return common_tensor_detail::CopyTensor(static_cast<feather::operators::AxesParam*>(param_));
 }
 

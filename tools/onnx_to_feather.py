@@ -26,6 +26,7 @@ DTYPE_MAP = {
     onnx.TensorProto.FLOAT: 4,
     onnx.TensorProto.INT32: 5,
     onnx.TensorProto.INT64: 6,
+    onnx.TensorProto.BFLOAT16: 11,
 }
 
 LAYOUT_NCHW = 0
@@ -190,6 +191,8 @@ def sanitize_node_name(node: onnx.NodeProto, index: int) -> str:
 
 
 def dtype_from_numpy(array: np.ndarray) -> int:
+    if is_bfloat16_dtype(array.dtype):
+        return 11
     if array.dtype == np.bool_:
         return 9
     if array.dtype == np.float16:
@@ -207,11 +210,20 @@ def dtype_from_numpy(array: np.ndarray) -> int:
     raise TypeError(f"unsupported numpy dtype: {array.dtype}")
 
 
+def is_bfloat16_dtype(dtype: np.dtype) -> bool:
+    if str(dtype) == "bfloat16":
+        return True
+    fields = dtype.fields
+    return fields is not None and set(fields) == {"bfloat16"} and fields["bfloat16"][0].itemsize == 2
+
+
 def bytes_for_tensor(array: np.ndarray) -> bytes:
     if array.dtype == np.bool_:
         return array.astype(np.bool_, copy=False).tobytes()
     if array.dtype == np.float16:
         return array.astype(np.float16, copy=False).tobytes()
+    if is_bfloat16_dtype(array.dtype):
+        return array.tobytes()
     if array.dtype == np.float32:
         return array.astype(np.float32, copy=False).tobytes()
     if array.dtype == np.int64:
@@ -422,9 +434,26 @@ def convert_model(input_path: str, output_path: str, layout: str = "nchw") -> No
                 attrs["start"] = int(get_attr(node, "start", 0))
             if get_attr(node, "end", None) is not None:
                 attrs["end"] = int(get_attr(node, "end", 9223372036854775807))
+        elif op_type == "ConstantOfShape":
+            value = get_attr(node, "value", None)
+            if value is None:
+                attrs["value_int"] = 0
+            else:
+                array = np.asarray(numpy_helper.to_array(value)).reshape(-1)
+                if array.size != 1:
+                    raise NotImplementedError("ConstantOfShape only supports scalar values")
+                if np.issubdtype(array.dtype, np.floating):
+                    attrs["value_float"] = float(array[0])
+                elif np.issubdtype(array.dtype, np.integer) or array.dtype == np.bool_:
+                    attrs["value_int"] = int(array[0])
+                else:
+                    raise NotImplementedError(f"unsupported ConstantOfShape value dtype: {array.dtype}")
         elif op_type == "Expand":
             pass
         elif op_type == "ReduceMean":
+            attrs["axes"] = [int(v) for v in list(get_attr(node, "axes", []))]
+            attrs["keepdims"] = int(get_attr(node, "keepdims", 1))
+        elif op_type == "ReduceSum":
             attrs["axes"] = [int(v) for v in list(get_attr(node, "axes", []))]
             attrs["keepdims"] = int(get_attr(node, "keepdims", 1))
         elif op_type == "Gather":
@@ -435,10 +464,13 @@ def convert_model(input_path: str, output_path: str, layout: str = "nchw") -> No
             pass
         elif op_type == "Split":
             attrs["axis"] = int(get_attr(node, "axis", 0))
+            split = get_attr(node, "split", None)
+            if split is not None:
+                attrs["split_sizes"] = [int(v) for v in list(split)]
         elif op_type == "Pow":
             pass
         elif op_type in {"Add", "Mul", "Sigmoid", "Relu", "Identity", "Sub", "Div", "Sqrt", "Tanh", "Erf", "MatMul",
-                         "Equal", "Where"}:
+                         "Equal", "Where", "Exp", "Sin", "Cos", "Neg", "Softplus"}:
             pass
         else:
             raise NotImplementedError(f"unsupported ONNX op: {op_type}")

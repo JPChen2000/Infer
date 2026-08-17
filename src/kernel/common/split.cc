@@ -15,6 +15,8 @@ bool g_split_kernels_registered = []() {
                                                 []() { return std::make_unique<SplitKernel<DeviceType::COMMON, DataType::FP32>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP16, "Split",
                                                 []() { return std::make_unique<SplitKernel<DeviceType::COMMON, DataType::FP16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::BF16, "Split",
+                                                []() { return std::make_unique<SplitKernel<DeviceType::COMMON, DataType::BF16>>(); });
     return true;
 }();
 
@@ -80,11 +82,20 @@ int32_t SplitKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     return ComputeSplitKernel<DataType::FP16>(static_cast<feather::operators::SplitParam*>(param_));
 }
 
+template <>
+int32_t SplitKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::Split::BF16");
+    return ComputeSplitKernel<DataType::BF16>(static_cast<feather::operators::SplitParam*>(param_));
+}
+
 typedef feather::kernel::SplitKernel<DeviceType::COMMON, DataType::FP32> SplitCommonFP32Kernel;
 REGISTER_KERNEL(COMMON, FP32, Split, SplitCommonFP32Kernel);
 
 typedef feather::kernel::SplitKernel<DeviceType::COMMON, DataType::FP16> SplitCommonFP16Kernel;
 REGISTER_KERNEL(COMMON, FP16, Split, SplitCommonFP16Kernel);
+
+typedef feather::kernel::SplitKernel<DeviceType::COMMON, DataType::BF16> SplitCommonBF16Kernel;
+REGISTER_KERNEL(COMMON, BF16, Split, SplitCommonBF16Kernel);
 
 void EnsureCommonSplitKernelsRegistered() { (void)g_split_kernels_registered; }
 

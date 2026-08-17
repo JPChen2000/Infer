@@ -18,6 +18,8 @@ bool g_cuda_reshape_kernels_registered = []() {
                               []() { return std::make_unique<ReshapeKernel<DeviceType::CUDA, DataType::FP32>>(); });
     dispatcher.registerKernel(DeviceType::CUDA, DataType::FP16, "Reshape",
                               []() { return std::make_unique<ReshapeKernel<DeviceType::CUDA, DataType::FP16>>(); });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::BF16, "Reshape",
+                              []() { return std::make_unique<ReshapeKernel<DeviceType::CUDA, DataType::BF16>>(); });
     return true;
 }();
 
@@ -43,6 +45,12 @@ template <>
 int32_t ReshapeKernel<DeviceType::CUDA, DataType::FP16>::compute() {
     return RunReshape<DataType::FP16>(static_cast<feather::operators::ReshapeParam*>(param_),
                                      "CUDA::Reshape::FP16");
+}
+
+template <>
+int32_t ReshapeKernel<DeviceType::CUDA, DataType::BF16>::compute() {
+    return RunReshape<DataType::BF16>(static_cast<feather::operators::ReshapeParam*>(param_),
+                                      "CUDA::Reshape::BF16");
 }
 
 void EnsureCudaReshapeKernelsRegistered() { (void)g_cuda_reshape_kernels_registered; }

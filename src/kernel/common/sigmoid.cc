@@ -15,6 +15,8 @@ bool g_sigmoid_kernels_registered = []() {
                                                 []() { return std::make_unique<SigmoidKernel<DeviceType::COMMON, DataType::FP32>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP16, "Sigmoid",
                                                 []() { return std::make_unique<SigmoidKernel<DeviceType::COMMON, DataType::FP16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::BF16, "Sigmoid",
+                                                []() { return std::make_unique<SigmoidKernel<DeviceType::COMMON, DataType::BF16>>(); });
     return true;
 }();
 
@@ -44,6 +46,12 @@ template <>
 int32_t SigmoidKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Sigmoid::FP16");
     return ComputeSigmoidKernel<DataType::FP16>(static_cast<feather::operators::UnaryParam*>(param_));
+}
+
+template <>
+int32_t SigmoidKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::Sigmoid::BF16");
+    return ComputeSigmoidKernel<DataType::BF16>(static_cast<feather::operators::UnaryParam*>(param_));
 }
 
 typedef feather::kernel::SigmoidKernel<DeviceType::COMMON, DataType::FP32> SigmoidCommonFP32Kernel;

@@ -8,6 +8,7 @@
 
 #include "src/kernel/common/kernel_io.h"
 #include "src/operator/params.h"
+#include "util/bf16.h"
 
 namespace feather {
 namespace kernel {
@@ -63,6 +64,8 @@ inline bool ReadBool(const Tensor* tensor, int64_t offset) {
             return tensor->data<int64_t>()[offset] != 0;
         case DataType::FP16:
             return HalfToFloat(tensor->data<uint16_t>()[offset]) != 0.0f;
+        case DataType::BF16:
+            return BFloat16ToFloat(tensor->data<BFloat16>()[offset].bits) != 0.0f;
         case DataType::FP32:
             return tensor->data<float>()[offset] != 0.0f;
         default:
@@ -79,6 +82,8 @@ inline float ReadFloat(const Tensor* tensor, int64_t offset) {
             return static_cast<float>(tensor->data<int8_t>()[offset]);
         case DataType::FP16:
             return HalfToFloat(tensor->data<uint16_t>()[offset]);
+        case DataType::BF16:
+            return BFloat16ToFloat(tensor->data<BFloat16>()[offset].bits);
         case DataType::FP32:
             return tensor->data<float>()[offset];
         case DataType::INT32:
@@ -110,7 +115,8 @@ inline bool SameValue(const Tensor* lhs, int64_t lhs_offset, const Tensor* rhs, 
     if (lhs == nullptr || rhs == nullptr || lhs->data_type() != rhs->data_type()) {
         return false;
     }
-    if (lhs->data_type() == DataType::FP16 || lhs->data_type() == DataType::FP32) {
+    if (lhs->data_type() == DataType::FP16 || lhs->data_type() == DataType::BF16 ||
+        lhs->data_type() == DataType::FP32) {
         return ReadFloat(lhs, lhs_offset) == ReadFloat(rhs, rhs_offset);
     }
     return ReadInteger(lhs, lhs_offset) == ReadInteger(rhs, rhs_offset);

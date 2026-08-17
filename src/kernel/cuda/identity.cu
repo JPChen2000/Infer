@@ -18,6 +18,8 @@ bool g_cuda_identity_kernels_registered = []() {
                               []() { return std::make_unique<IdentityKernel<DeviceType::CUDA, DataType::FP32>>(); });
     dispatcher.registerKernel(DeviceType::CUDA, DataType::FP16, "Identity",
                               []() { return std::make_unique<IdentityKernel<DeviceType::CUDA, DataType::FP16>>(); });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::BF16, "Identity",
+                              []() { return std::make_unique<IdentityKernel<DeviceType::CUDA, DataType::BF16>>(); });
     return true;
 }();
 
@@ -43,6 +45,12 @@ template <>
 int32_t IdentityKernel<DeviceType::CUDA, DataType::FP16>::compute() {
     return RunIdentity<DataType::FP16>(static_cast<feather::operators::UnaryParam*>(param_),
                                       "CUDA::Identity::FP16");
+}
+
+template <>
+int32_t IdentityKernel<DeviceType::CUDA, DataType::BF16>::compute() {
+    return RunIdentity<DataType::BF16>(static_cast<feather::operators::UnaryParam*>(param_),
+                                       "CUDA::Identity::BF16");
 }
 
 void EnsureCudaIdentityKernelsRegistered() { (void)g_cuda_identity_kernels_registered; }

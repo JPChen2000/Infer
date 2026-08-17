@@ -11,11 +11,6 @@ namespace operators {
 
 namespace {
 
-std::unique_ptr<KernelBase> CreateMatMulKernel() {
-    kernel::EnsureMatMulKernelsRegistered();
-    return CreateHostKernelForTensor("MatMul", {}, DataType::FP32);
-}
-
 std::shared_ptr<OpBase> BuildMatMulOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
     if (node.inputs.size() != 2 || node.outputs.size() != 1) {
         return nullptr;
@@ -30,12 +25,12 @@ std::shared_ptr<OpBase> BuildMatMulOp(const model::NodeDesc& node, OperatorRegis
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) {
         return nullptr;
     }
-    std::unique_ptr<KernelBase> kernel;
-    if (param.a->dims().size() == 2 && param.b->dims().size() == 2) {
-        kernel = CreateHostKernelForTensor("MatMul", {param.a, param.b, param.out}, DataType::FP32);
-    } else {
-        kernel = CreateKernelForTensor(DeviceType::COMMON, "MatMul", {param.a, param.b, param.out}, DataType::FP32);
-    }
+    kernel::EnsureMatMulKernelsRegistered();
+    const bool is_batched_matmul = param.a->dims().size() != 2 || param.b->dims().size() != 2;
+    auto kernel = is_batched_matmul && ActiveKernelDevice() != DeviceType::CUDA
+                      ? CreateKernelForTensor(DeviceType::COMMON, "MatMul", {param.a, param.b, param.out},
+                                              DataType::FP32)
+                      : CreateHostKernelForTensor("MatMul", {param.a, param.b, param.out}, DataType::FP32);
     if (kernel == nullptr) {
         return nullptr;
     }

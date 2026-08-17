@@ -15,6 +15,8 @@ bool g_softmax_kernels_registered = []() {
                                                 []() { return std::make_unique<SoftmaxKernel<DeviceType::COMMON, DataType::FP32>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP16, "Softmax",
                                                 []() { return std::make_unique<SoftmaxKernel<DeviceType::COMMON, DataType::FP16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::BF16, "Softmax",
+                                                []() { return std::make_unique<SoftmaxKernel<DeviceType::COMMON, DataType::BF16>>(); });
     return true;
 }();
 
@@ -83,6 +85,12 @@ template <>
 int32_t SoftmaxKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Softmax::FP16");
     return ComputeSoftmaxCommon<DataType::FP16>(static_cast<feather::operators::SoftmaxParam*>(param_));
+}
+
+template <>
+int32_t SoftmaxKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::Softmax::BF16");
+    return ComputeSoftmaxCommon<DataType::BF16>(static_cast<feather::operators::SoftmaxParam*>(param_));
 }
 
 typedef feather::kernel::SoftmaxKernel<DeviceType::COMMON, DataType::FP32> SoftmaxCommonFP32Kernel;

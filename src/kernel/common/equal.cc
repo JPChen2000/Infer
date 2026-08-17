@@ -19,6 +19,9 @@ bool g_common_equal_kernels_registered = []() {
     dispatcher.registerKernel(DeviceType::COMMON, DataType::FP16, "Equal", []() {
         return std::make_unique<EqualKernel<DeviceType::COMMON, DataType::FP16>>();
     });
+    dispatcher.registerKernel(DeviceType::COMMON, DataType::BF16, "Equal", []() {
+        return std::make_unique<EqualKernel<DeviceType::COMMON, DataType::BF16>>();
+    });
     dispatcher.registerKernel(DeviceType::COMMON, DataType::INT32, "Equal", []() {
         return std::make_unique<EqualKernel<DeviceType::COMMON, DataType::INT32>>();
     });
@@ -67,6 +70,12 @@ int32_t EqualKernel<DeviceType::COMMON, DataType::FP32>::compute() {
 template <>
 int32_t EqualKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Equal::FP16");
+    return ComputeEqual(static_cast<feather::operators::EqualParam*>(param_));
+}
+
+template <>
+int32_t EqualKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::Equal::BF16");
     return ComputeEqual(static_cast<feather::operators::EqualParam*>(param_));
 }
 

@@ -16,6 +16,9 @@ bool g_div_kernels_registered = []() {
     dispatcher.registerKernel(DeviceType::COMMON, DataType::FP16, "Div", []() {
         return std::make_unique<DivKernel<DeviceType::COMMON, DataType::FP16>>();
     });
+    dispatcher.registerKernel(DeviceType::COMMON, DataType::BF16, "Div", []() {
+        return std::make_unique<DivKernel<DeviceType::COMMON, DataType::BF16>>();
+    });
     return true;
 }();
 
@@ -40,6 +43,17 @@ int32_t DivKernel<DeviceType::COMMON, DataType::FP16>::compute() {
         return -1;
     }
     return common_detail::RunBinary<DataType::FP16>(param->out.get(), param->lhs.get(), param->rhs.get(),
+                                                    [](float lhs, float rhs) { return lhs / rhs; });
+}
+
+template <>
+int32_t DivKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::Div::BF16");
+    auto* param = static_cast<feather::operators::BinaryParam*>(param_);
+    if (param == nullptr) {
+        return -1;
+    }
+    return common_detail::RunBinary<DataType::BF16>(param->out.get(), param->lhs.get(), param->rhs.get(),
                                                     [](float lhs, float rhs) { return lhs / rhs; });
 }
 

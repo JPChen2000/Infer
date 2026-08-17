@@ -14,6 +14,8 @@ bool g_relu_kernels_registered = []() {
                                                []() { return std::make_unique<ReluKernel<DeviceType::COMMON, DataType::FP32>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP16, "ReLU",
                                                []() { return std::make_unique<ReluKernel<DeviceType::COMMON, DataType::FP16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::BF16, "ReLU",
+                                               []() { return std::make_unique<ReluKernel<DeviceType::COMMON, DataType::BF16>>(); });
     return true;
 }();
 }  // namespace
@@ -43,11 +45,20 @@ int32_t ReluKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     return ComputeReluKernel<DataType::FP16>(static_cast<feather::operators::UnaryParam*>(param_));
 }
 
+template <>
+int32_t ReluKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::ReLU::BF16");
+    return ComputeReluKernel<DataType::BF16>(static_cast<feather::operators::UnaryParam*>(param_));
+}
+
 typedef feather::kernel::ReluKernel<DeviceType::COMMON, DataType::FP32> ReluCommonFP32Kernel;
 REGISTER_KERNEL(COMMON, FP32, ReLU, ReluCommonFP32Kernel);
 
 typedef feather::kernel::ReluKernel<DeviceType::COMMON, DataType::FP16> ReluCommonFP16Kernel;
 REGISTER_KERNEL(COMMON, FP16, ReLU, ReluCommonFP16Kernel);
+
+typedef feather::kernel::ReluKernel<DeviceType::COMMON, DataType::BF16> ReluCommonBF16Kernel;
+REGISTER_KERNEL(COMMON, BF16, ReLU, ReluCommonBF16Kernel);
 
 void EnsureCommonReluKernelsRegistered() { (void)g_relu_kernels_registered; }
 

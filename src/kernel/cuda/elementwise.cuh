@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "src/kernel/cuda/kernel_io.cuh"
+#include "src/operator/control_tensor.h"
 #include "src/operator/params.h"
 #include "util/timer.h"
 
@@ -35,6 +36,16 @@ __global__ void UnaryKernelCuda(const T* input, T* output, int64_t numel, float 
         y = tanhf(x);
     } else if constexpr (Op == 6) {
         y = erff(x);
+    } else if constexpr (Op == 7) {
+        y = expf(x);
+    } else if constexpr (Op == 8) {
+        y = sinf(x);
+    } else if constexpr (Op == 9) {
+        y = cosf(x);
+    } else if constexpr (Op == 10) {
+        y = -x;
+    } else if constexpr (Op == 11) {
+        y = fmaxf(x, 0.0f) + log1pf(expf(-fabsf(x)));
     }
     WriteDevice(output, idx, y);
 }
@@ -106,6 +117,19 @@ int RunPow(feather::operators::PowParam* param, const char* timer_name) {
     if (param == nullptr || param->input == nullptr || param->out == nullptr) {
         return -1;
     }
+    if (param->input->data_type() != dtype || param->out->data_type() != dtype) {
+        return -1;
+    }
+    float exponent = param->exponent;
+    if (param->exponent_tensor != nullptr) {
+        const size_t exponent_bytes = static_cast<size_t>(param->exponent_tensor->numel()) *
+                                      DataTypeBytes(param->exponent_tensor->data_type());
+        if (SyncTensorToHostIfNeeded(param->exponent_tensor.get(), exponent_bytes,
+                                     param->exponent_tensor->raw_data()) != 0 ||
+            !feather::operators::ReadScalarFloatTensor(param->exponent_tensor, &exponent)) {
+            return -1;
+        }
+    }
     DeviceBuffer<T> input;
     DeviceBuffer<T> output;
     const int64_t numel = param->input->numel();
@@ -113,7 +137,7 @@ int RunPow(feather::operators::PowParam* param, const char* timer_name) {
         return -1;
     }
     UnaryKernelCuda<T, 2><<<static_cast<int>(DivUp(numel, kCudaThreads)), kCudaThreads, 0, InferenceStream()>>>(
-        input.get(), output.get(), numel, param->exponent);
+        input.get(), output.get(), numel, exponent);
     if (CudaCheck(cudaGetLastError()) != 0) {
         return -1;
     }

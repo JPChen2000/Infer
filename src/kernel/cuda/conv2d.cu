@@ -22,6 +22,8 @@ bool g_cuda_conv2d_kernels_registered = []() {
                               []() { return std::make_unique<Conv2DKernel<DeviceType::CUDA, DataType::FP32>>(); });
     dispatcher.registerKernel(DeviceType::CUDA, DataType::FP16, "Conv2D",
                               []() { return std::make_unique<Conv2DKernel<DeviceType::CUDA, DataType::FP16>>(); });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::BF16, "Conv2D",
+                              []() { return std::make_unique<Conv2DKernel<DeviceType::CUDA, DataType::BF16>>(); });
     return true;
 }();
 
@@ -556,18 +558,20 @@ int RunConv2D(const void* kernel_identity, feather::operators::Conv2dParam* para
     }
 
 #ifdef FEATHER_WITH_CUDNN
-    if (param->input->dims().size() == 4 && param->w->dims().size() == 4 && param->out->dims().size() == 4) {
-        cuda_detail::DeviceBuffer<T> input;
-        cuda_detail::DeviceBuffer<T> weight;
-        cuda_detail::DeviceBuffer<T> bias;
-        cuda_detail::DeviceBuffer<T> out;
-        const bool has_bias = param->bias != nullptr && param->bias->IsInitialized();
-        if (cuda_detail::CopyTensorToDevice(param->input.get(), &input) == 0 &&
-            cuda_detail::CopyTensorToDevice(param->w.get(), &weight) == 0 &&
-            cuda_detail::AllocateTensorOnDevice(param->out.get(), &out) == 0 &&
-            (!has_bias || cuda_detail::CopyTensorToDevice(param->bias.get(), &bias) == 0) &&
-            RunConv2DWithCudnn<dtype>(kernel_identity, param, &input, &weight, &bias, &out, has_bias)) {
-            return cuda_detail::CopyDeviceToTensor(&out, param->out.get());
+    if constexpr (dtype != DataType::BF16) {
+        if (param->input->dims().size() == 4 && param->w->dims().size() == 4 && param->out->dims().size() == 4) {
+            cuda_detail::DeviceBuffer<T> input;
+            cuda_detail::DeviceBuffer<T> weight;
+            cuda_detail::DeviceBuffer<T> bias;
+            cuda_detail::DeviceBuffer<T> out;
+            const bool has_bias = param->bias != nullptr && param->bias->IsInitialized();
+            if (cuda_detail::CopyTensorToDevice(param->input.get(), &input) == 0 &&
+                cuda_detail::CopyTensorToDevice(param->w.get(), &weight) == 0 &&
+                cuda_detail::AllocateTensorOnDevice(param->out.get(), &out) == 0 &&
+                (!has_bias || cuda_detail::CopyTensorToDevice(param->bias.get(), &bias) == 0) &&
+                RunConv2DWithCudnn<dtype>(kernel_identity, param, &input, &weight, &bias, &out, has_bias)) {
+                return cuda_detail::CopyDeviceToTensor(&out, param->out.get());
+            }
         }
     }
 #else
@@ -586,6 +590,11 @@ int32_t Conv2DKernel<DeviceType::CUDA, DataType::FP32>::compute() {
 template <>
 int32_t Conv2DKernel<DeviceType::CUDA, DataType::FP16>::compute() {
     return RunConv2D<DataType::FP16>(this, static_cast<feather::operators::Conv2dParam*>(param_), "CUDA::Conv2D::FP16");
+}
+
+template <>
+int32_t Conv2DKernel<DeviceType::CUDA, DataType::BF16>::compute() {
+    return RunConv2D<DataType::BF16>(this, static_cast<feather::operators::Conv2dParam*>(param_), "CUDA::Conv2D::BF16");
 }
 
 void EnsureCudaConv2DKernelsRegistered() { (void)g_cuda_conv2d_kernels_registered; }

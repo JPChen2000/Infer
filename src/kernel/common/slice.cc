@@ -23,6 +23,8 @@ bool g_slice_kernels_registered = []() {
                                                 []() { return std::make_unique<SliceKernel<DeviceType::COMMON, DataType::FP32>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP16, "Slice",
                                                 []() { return std::make_unique<SliceKernel<DeviceType::COMMON, DataType::FP16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::BF16, "Slice",
+                                                []() { return std::make_unique<SliceKernel<DeviceType::COMMON, DataType::BF16>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::INT64, "Slice",
                                                 []() { return std::make_unique<SliceKernel<DeviceType::COMMON, DataType::INT64>>(); });
     return true;
@@ -90,6 +92,12 @@ int32_t SliceKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     return ComputeSliceCommon<DataType::FP16>(param);
 }
 
+template <>
+int32_t SliceKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::Slice::BF16");
+    return ComputeSliceCommon<DataType::BF16>(static_cast<feather::operators::SliceParam*>(param_));
+}
+
 int32_t SliceKernel<DeviceType::COMMON, DataType::INT64>::compute() {
     AutoTimer timer("Common::Slice::INT64");
     auto* param = static_cast<feather::operators::SliceParam*>(param_);
@@ -129,6 +137,9 @@ REGISTER_KERNEL(COMMON, FP32, Slice, SliceCommonFP32Kernel);
 
 typedef feather::kernel::SliceKernel<DeviceType::COMMON, DataType::FP16> SliceCommonFP16Kernel;
 REGISTER_KERNEL(COMMON, FP16, Slice, SliceCommonFP16Kernel);
+
+typedef feather::kernel::SliceKernel<DeviceType::COMMON, DataType::BF16> SliceCommonBF16Kernel;
+REGISTER_KERNEL(COMMON, BF16, Slice, SliceCommonBF16Kernel);
 
 void EnsureSliceKernelsRegistered() {
     (void)g_slice_kernels_registered;

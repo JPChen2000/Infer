@@ -15,6 +15,8 @@ bool g_silu_kernels_registered = []() {
                                                 []() { return std::make_unique<SiluKernel<DeviceType::COMMON, DataType::FP32>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP16, "SiLU",
                                                 []() { return std::make_unique<SiluKernel<DeviceType::COMMON, DataType::FP16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::BF16, "SiLU",
+                                                []() { return std::make_unique<SiluKernel<DeviceType::COMMON, DataType::BF16>>(); });
     return true;
 }();
 
@@ -47,6 +49,12 @@ template <>
 int32_t SiluKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::SiLU::FP16");
     return ComputeSiluKernel<DataType::FP16>(static_cast<feather::operators::UnaryParam*>(param_));
+}
+
+template <>
+int32_t SiluKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::SiLU::BF16");
+    return ComputeSiluKernel<DataType::BF16>(static_cast<feather::operators::UnaryParam*>(param_));
 }
 
 typedef feather::kernel::SiluKernel<DeviceType::COMMON, DataType::FP32> SiluCommonFP32Kernel;

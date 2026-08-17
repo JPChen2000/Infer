@@ -16,6 +16,8 @@ bool g_identity_kernels_registered = []() {
                                                 []() { return std::make_unique<IdentityKernel<DeviceType::COMMON, DataType::FP32>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP16, "Identity",
                                                 []() { return std::make_unique<IdentityKernel<DeviceType::COMMON, DataType::FP16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::BF16, "Identity",
+                                                []() { return std::make_unique<IdentityKernel<DeviceType::COMMON, DataType::BF16>>(); });
     return true;
 }();
 
@@ -45,11 +47,20 @@ int32_t IdentityKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     return ComputeIdentityKernel<DataType::FP16>(static_cast<feather::operators::UnaryParam*>(param_));
 }
 
+template <>
+int32_t IdentityKernel<DeviceType::COMMON, DataType::BF16>::compute() {
+    AutoTimer timer("Common::Identity::BF16");
+    return ComputeIdentityKernel<DataType::BF16>(static_cast<feather::operators::UnaryParam*>(param_));
+}
+
 typedef feather::kernel::IdentityKernel<DeviceType::COMMON, DataType::FP32> IdentityCommonFP32Kernel;
 REGISTER_KERNEL(COMMON, FP32, Identity, IdentityCommonFP32Kernel);
 
 typedef feather::kernel::IdentityKernel<DeviceType::COMMON, DataType::FP16> IdentityCommonFP16Kernel;
 REGISTER_KERNEL(COMMON, FP16, Identity, IdentityCommonFP16Kernel);
+
+typedef feather::kernel::IdentityKernel<DeviceType::COMMON, DataType::BF16> IdentityCommonBF16Kernel;
+REGISTER_KERNEL(COMMON, BF16, Identity, IdentityCommonBF16Kernel);
 
 void EnsureIdentityKernelsRegistered() {
     (void)g_identity_kernels_registered;
