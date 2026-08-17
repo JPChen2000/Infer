@@ -19,6 +19,7 @@ FORMAT_VERSION = 1
 WEIGHT_ALIGNMENT = 64
 
 DTYPE_MAP = {
+    onnx.TensorProto.BOOL: 9,
     onnx.TensorProto.INT8: 1,
     onnx.TensorProto.UINT8: 2,
     onnx.TensorProto.FLOAT16: 3,
@@ -160,21 +161,24 @@ def node_constant_to_array(node: onnx.NodeProto) -> np.ndarray:
     raise ValueError(f"Constant node {node.name or node.output[0]} is missing value")
 
 
-def normalize_dims(shape_proto) -> List[int]:
+def normalize_dims(shape_proto, allow_unknown: bool = False) -> List[int]:
     dims: List[int] = []
     for dim in shape_proto.dim:
         if dim.dim_value > 0:
             dims.append(int(dim.dim_value))
         elif dim.dim_param:
+            if allow_unknown:
+                dims.append(0)
+                continue
             raise ValueError(f"dynamic dimension {dim.dim_param!r} is not supported yet")
         else:
             dims.append(0)
     return dims
 
 
-def tensor_type_info(value_info) -> Tuple[List[int], int]:
+def tensor_type_info(value_info, allow_unknown_dims: bool = False) -> Tuple[List[int], int]:
     tensor_type = value_info.type.tensor_type
-    return normalize_dims(tensor_type.shape), DTYPE_MAP.get(tensor_type.elem_type, 0)
+    return normalize_dims(tensor_type.shape, allow_unknown=allow_unknown_dims), DTYPE_MAP.get(tensor_type.elem_type, 0)
 
 
 def sanitize_node_name(node: onnx.NodeProto, index: int) -> str:
@@ -186,6 +190,8 @@ def sanitize_node_name(node: onnx.NodeProto, index: int) -> str:
 
 
 def dtype_from_numpy(array: np.ndarray) -> int:
+    if array.dtype == np.bool_:
+        return 9
     if array.dtype == np.float16:
         return 3
     if array.dtype == np.float32:
@@ -202,6 +208,8 @@ def dtype_from_numpy(array: np.ndarray) -> int:
 
 
 def bytes_for_tensor(array: np.ndarray) -> bytes:
+    if array.dtype == np.bool_:
+        return array.astype(np.bool_, copy=False).tobytes()
     if array.dtype == np.float16:
         return array.astype(np.float16, copy=False).tobytes()
     if array.dtype == np.float32:
@@ -270,8 +278,11 @@ def convert_model(input_path: str, output_path: str, layout: str = "nchw") -> No
     emit_nhwc = layout.lower() == "nhwc"
 
     value_infos: Dict[str, Tuple[List[int], int]] = {}
-    for value in list(inferred.graph.input) + list(inferred.graph.output) + list(inferred.graph.value_info):
+    for value in list(inferred.graph.input) + list(inferred.graph.output):
         dims, dtype = tensor_type_info(value)
+        value_infos[value.name] = (dims, dtype)
+    for value in inferred.graph.value_info:
+        dims, dtype = tensor_type_info(value, allow_unknown_dims=True)
         value_infos[value.name] = (dims, dtype)
 
     constants: Dict[str, np.ndarray] = {}
@@ -285,7 +296,7 @@ def convert_model(input_path: str, output_path: str, layout: str = "nchw") -> No
             const_name = node.output[0]
             const_value = node_constant_to_array(node)
             constants[const_name] = const_value
-            value_infos[const_name] = (list(const_value.shape if const_value.shape else [1]), dtype_from_numpy(np.asarray(const_value).reshape(-1)[:1] if np.asarray(const_value).shape == () else np.asarray(const_value)))
+            value_infos[const_name] = (list(const_value.shape), dtype_from_numpy(np.asarray(const_value).reshape(-1)[:1] if np.asarray(const_value).shape == () else np.asarray(const_value)))
 
     op_type_by_output: Dict[str, str] = {}
     for node in inferred.graph.node:
@@ -304,7 +315,6 @@ def convert_model(input_path: str, output_path: str, layout: str = "nchw") -> No
         if name not in value_infos:
             raise KeyError(f"missing shape/type info for value {name}")
         dims, dtype = value_infos[name]
-        dims = [1] if len(dims) == 0 else dims
         if dtype == 0:
             array = constants.get(name)
             if array is None:
@@ -322,7 +332,8 @@ def convert_model(input_path: str, output_path: str, layout: str = "nchw") -> No
         array = np.asarray(const_array)
         if array.shape == ():
             array = array.reshape(1)
-            values[const_name].tensor.dims = [1]
+            if values[const_name].tensor.dims:
+                values[const_name].tensor.dims = [1]
         else:
             values[const_name].tensor.dims = list(array.shape)
         values[const_name].tensor.data_type = dtype_from_numpy(array)
@@ -352,7 +363,6 @@ def convert_model(input_path: str, output_path: str, layout: str = "nchw") -> No
         outputs = list(node.output)
 
         if op_type == "Conv":
-            op_type = "Conv2D"
             strides = list(get_attr(node, "strides", [1, 1]))
             pads = list(get_attr(node, "pads", [0, 0, 0, 0]))
             dilations = list(get_attr(node, "dilations", [1, 1]))
@@ -375,33 +385,60 @@ def convert_model(input_path: str, output_path: str, layout: str = "nchw") -> No
             attrs["stride_w"] = int(strides[1])
             attrs["pad_h"] = int(pads[0])
             attrs["pad_w"] = int(pads[1])
+        elif op_type == "AveragePool":
+            kernel_shape = list(get_attr(node, "kernel_shape", [1, 1]))
+            strides = list(get_attr(node, "strides", [1, 1]))
+            pads = list(get_attr(node, "pads", [0, 0, 0, 0]))
+            attrs["kernel_h"] = int(kernel_shape[0])
+            attrs["kernel_w"] = int(kernel_shape[1])
+            attrs["stride_h"] = int(strides[0])
+            attrs["stride_w"] = int(strides[1])
+            attrs["pad_h"] = int(pads[0])
+            attrs["pad_w"] = int(pads[1])
+        elif op_type == "BatchNormalization":
+            attrs["epsilon"] = float(get_attr(node, "epsilon", 1e-5))
+        elif op_type == "GlobalAveragePool":
+            pass
+        elif op_type == "Flatten":
+            attrs["axis"] = int(get_attr(node, "axis", 1))
+        elif op_type == "Gemm":
+            attrs["alpha"] = float(get_attr(node, "alpha", 1.0))
+            attrs["beta"] = float(get_attr(node, "beta", 1.0))
+            attrs["transA"] = int(get_attr(node, "transA", 0))
+            attrs["transB"] = int(get_attr(node, "transB", 0))
         elif op_type == "Resize":
-            if len(inputs) < 3 or not inputs[2]:
-                raise ValueError(f"Resize node {name} is missing scales input")
-            attrs["scales"] = tensor_as_floats(inputs[2])
-            inputs = [inputs[0]]
+            pass
         elif op_type == "Reshape":
-            if len(inputs) < 2 or inputs[1] not in constants:
-                raise ValueError(f"Reshape node {name} is missing constant shape input")
-            attrs["shape"] = tensor_as_ints(inputs[1])
-            inputs = [inputs[0]]
+            pass
         elif op_type == "Transpose":
             attrs["perm"] = [int(v) for v in list(get_attr(node, "perm", []))]
-        elif op_type == "Split":
-            if len(inputs) < 2 or inputs[1] not in constants:
-                raise ValueError(f"Split node {name} is missing constant split sizes")
+        elif op_type in {"Unsqueeze", "Squeeze"}:
+            if len(inputs) == 1:
+                attrs["axes"] = [int(v) for v in list(get_attr(node, "axes", []))]
+        elif op_type == "Cast":
+            attrs["to"] = int(get_attr(node, "to", 1))
+        elif op_type == "Shape":
+            if get_attr(node, "start", None) is not None:
+                attrs["start"] = int(get_attr(node, "start", 0))
+            if get_attr(node, "end", None) is not None:
+                attrs["end"] = int(get_attr(node, "end", 9223372036854775807))
+        elif op_type == "Expand":
+            pass
+        elif op_type == "ReduceMean":
+            attrs["axes"] = [int(v) for v in list(get_attr(node, "axes", []))]
+            attrs["keepdims"] = int(get_attr(node, "keepdims", 1))
+        elif op_type == "Gather":
             attrs["axis"] = int(get_attr(node, "axis", 0))
-            attrs["split_sizes"] = tensor_as_ints(inputs[1])
-            inputs = [inputs[0]]
+        elif op_type == "Softmax":
+            attrs["axis"] = int(get_attr(node, "axis", -1))
+        elif op_type == "Slice":
+            pass
+        elif op_type == "Split":
+            attrs["axis"] = int(get_attr(node, "axis", 0))
         elif op_type == "Pow":
-            if len(inputs) < 2 or inputs[1] not in constants:
-                raise ValueError(f"Pow node {name} is missing constant exponent input")
-            exponent_values = tensor_as_floats(inputs[1])
-            if len(exponent_values) != 1:
-                raise ValueError(f"Pow node {name} expects scalar exponent")
-            attrs["exponent"] = float(exponent_values[0])
-            inputs = [inputs[0]]
-        elif op_type in {"Add", "Mul", "Sigmoid"}:
+            pass
+        elif op_type in {"Add", "Mul", "Sigmoid", "Relu", "Identity", "Sub", "Div", "Sqrt", "Tanh", "Erf", "MatMul",
+                         "Equal", "Where"}:
             pass
         else:
             raise NotImplementedError(f"unsupported ONNX op: {op_type}")
@@ -412,7 +449,7 @@ def convert_model(input_path: str, output_path: str, layout: str = "nchw") -> No
         for output_name in outputs:
             ensure_value(output_name, constant=False)
 
-        nodes.append(NodeDesc(name=name, op_type=op_type, inputs=[v for v in inputs if v], outputs=outputs, attributes=attrs))
+        nodes.append(NodeDesc(name=name, op_type=op_type, inputs=inputs, outputs=outputs, attributes=attrs))
 
     graph_inputs = [value.name for value in inferred.graph.input if value.name not in constants]
     graph_outputs = [value.name for value in inferred.graph.output]

@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 #include <variant>
@@ -18,6 +19,7 @@ enum class DataType {
     INT64 = 6,
     STRING = 7,
     TENSOR = 8,
+    BOOL = 9,
     UNKNOWN
 };
 
@@ -34,6 +36,8 @@ struct DataTypeTrait {
             return DataType::INT8;
         } else if constexpr (std::is_same<T, uint8_t>::value) {
             return DataType::UINT8;
+        } else if constexpr (std::is_same<T, bool>::value) {
+            return DataType::BOOL;
         } else if constexpr (std::is_same<T, uint16_t>::value) {
             return DataType::FP16;
         } else if constexpr (std::is_same<T, std::string>::value) {
@@ -151,6 +155,7 @@ inline size_t DataTypeBytes(DataType dtype) {
     switch (dtype) {
         case DataType::INT8:
         case DataType::UINT8:
+        case DataType::BOOL:
             return 1;
         case DataType::FP16:
             return 2;

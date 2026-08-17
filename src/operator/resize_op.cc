@@ -1,9 +1,12 @@
 #include "src/operator/resize_op.h"
 
 #include <cmath>
+#include <functional>
+#include <numeric>
 #include <utility>
 
 #include "core/operator_registry.h"
+#include "src/operator/control_tensor.h"
 #include "util/types.h"
 
 namespace feather {
@@ -24,15 +27,29 @@ std::vector<float> GetFloatVectorAttribute(const std::unordered_map<std::string,
 }
 
 std::shared_ptr<OpBase> BuildResizeOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
-    if (node.inputs.size() != 1 || node.outputs.size() != 1) {
+    if (node.inputs.empty() || node.inputs.size() > 4 || node.outputs.size() != 1) {
         return nullptr;
     }
 
     ResizeParam param{};
     param.input = tensors[node.inputs[0]];
+    if (node.inputs.size() == 2) {
+        param.scales_tensor = tensors[node.inputs[1]];
+    } else {
+        if (node.inputs.size() > 1 && !node.inputs[1].empty()) {
+            param.roi = tensors[node.inputs[1]];
+        }
+        if (node.inputs.size() > 2 && !node.inputs[2].empty()) {
+            param.scales_tensor = tensors[node.inputs[2]];
+        }
+    }
+    if (node.inputs.size() > 3 && !node.inputs[3].empty()) {
+        param.sizes = tensors[node.inputs[3]];
+    }
     param.out = tensors[node.outputs[0]];
     param.scales = GetFloatVectorAttribute(node.attributes, "scales");
-    if (param.input == nullptr || param.out == nullptr || param.scales.empty()) {
+    if (param.input == nullptr || param.out == nullptr ||
+        (param.scales.empty() && param.scales_tensor == nullptr && param.sizes == nullptr)) {
         return nullptr;
     }
 
@@ -66,18 +83,44 @@ ResizeOp::ResizeOp(std::string name, const ResizeParam& param) : OpBase(std::mov
 }
 
 void ResizeOp::SyncIO() {
-    SetInputs({param_.input});
+    std::vector<std::shared_ptr<Tensor>> inputs = {param_.input};
+    if (param_.roi != nullptr || param_.scales_tensor != nullptr || param_.sizes != nullptr) {
+        inputs.push_back(param_.roi == nullptr ? std::shared_ptr<Tensor>() : param_.roi);
+    }
+    if (param_.scales_tensor != nullptr || param_.sizes != nullptr) {
+        inputs.push_back(param_.scales_tensor == nullptr ? std::shared_ptr<Tensor>() : param_.scales_tensor);
+    }
+    if (param_.sizes != nullptr) {
+        inputs.push_back(param_.sizes);
+    }
+    SetInputs(std::move(inputs));
     SetOutputs({param_.out});
 }
 
 int32_t ResizeOp::CheckShape() const {
-    if (param_.input == nullptr || param_.out == nullptr || param_.scales.empty()) {
+    if (param_.input == nullptr || param_.out == nullptr) {
         return -1;
     }
-    if (param_.input->dims().size() != param_.scales.size()) {
+    if (param_.sizes != nullptr) {
+        std::vector<int64_t> sizes;
+        if (!ReadIntegerTensor(param_.sizes, &sizes) || sizes.size() != param_.input->dims().size()) {
+            return -1;
+        }
+        for (const auto size : sizes) {
+            if (size <= 0) {
+                return -1;
+            }
+        }
+        return 0;
+    }
+    std::vector<float> scales = param_.scales;
+    if (param_.scales_tensor != nullptr && !ReadFloatTensor(param_.scales_tensor, &scales)) {
         return -1;
     }
-    for (float scale : param_.scales) {
+    if (scales.empty() || param_.input->dims().size() != scales.size()) {
+        return -1;
+    }
+    for (const float scale : scales) {
         if (scale <= 0.0f) {
             return -1;
         }
@@ -91,23 +134,41 @@ int32_t ResizeOp::InferOutputShapes() {
     }
 
     std::vector<int64_t> out_shape;
-    out_shape.reserve(param_.scales.size());
-    for (size_t i = 0; i < param_.scales.size(); ++i) {
-        const auto dim = static_cast<int64_t>(std::llround(static_cast<double>(param_.input->dims()[i]) * param_.scales[i]));
-        if (dim <= 0) {
+    if (param_.sizes != nullptr) {
+        if (!ReadIntegerTensor(param_.sizes, &out_shape)) {
             return -1;
         }
-        out_shape.push_back(dim);
+        param_.scales.resize(out_shape.size());
+        for (size_t i = 0; i < out_shape.size(); ++i) {
+            param_.scales[i] = static_cast<float>(out_shape[i]) / static_cast<float>(param_.input->dims()[i]);
+        }
+    } else {
+        std::vector<float> scales = param_.scales;
+        if (param_.scales_tensor != nullptr && !ReadFloatTensor(param_.scales_tensor, &scales)) {
+            return -1;
+        }
+        param_.scales = std::move(scales);
+        out_shape.reserve(param_.scales.size());
+        for (size_t i = 0; i < param_.scales.size(); ++i) {
+            const auto dim = static_cast<int64_t>(
+                std::llround(static_cast<double>(param_.input->dims()[i]) * param_.scales[i]));
+            if (dim <= 0) {
+                return -1;
+            }
+            out_shape.push_back(dim);
+        }
     }
 
     const size_t required_bytes =
-        static_cast<size_t>(std::max<int64_t>(1, param_.input->numel())) *
+        static_cast<size_t>(std::max<int64_t>(1, std::accumulate(out_shape.begin(), out_shape.end(), int64_t{1},
+                                                                 std::multiplies<int64_t>()))) *
         DataTypeBytes(ResolveExecutionDataType({param_.input, param_.out}, DataType::FP32));
     if (param_.out == nullptr || !param_.out->IsInitialized() || param_.out->memory_size() < required_bytes) {
         param_.out = std::make_shared<Tensor>(out_shape);
     } else {
         param_.out->Resize(out_shape);
     }
+    param_.out->set_data_type(param_.input->data_type());
     param_.out->set_layout(param_.input->layout());
     SyncIO();
     return 0;

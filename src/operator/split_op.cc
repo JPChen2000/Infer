@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "core/operator_registry.h"
+#include "src/operator/control_tensor.h"
 #include "util/types.h"
 
 namespace feather {
@@ -46,7 +47,11 @@ bool CheckSplitShape(const SplitParam& param) {
     if (param.input == nullptr || param.outputs.empty()) {
         return false;
     }
-    if (param.input->dims().empty() || param.outputs.size() != param.split_sizes.size()) {
+    std::vector<int64_t> split_sizes = param.split_sizes;
+    if (param.split != nullptr && !ReadIntegerTensor(param.split, &split_sizes)) {
+        return false;
+    }
+    if (param.input->dims().empty() || param.outputs.size() != split_sizes.size()) {
         return false;
     }
     int32_t axis = param.axis < 0 ? param.axis + static_cast<int32_t>(param.input->dims().size()) : param.axis;
@@ -58,19 +63,23 @@ bool CheckSplitShape(const SplitParam& param) {
             return false;
         }
     }
-    for (const auto split_size : param.split_sizes) {
+    for (const auto split_size : split_sizes) {
         if (split_size <= 0) {
             return false;
         }
     }
-    const int64_t total = std::accumulate(param.split_sizes.begin(), param.split_sizes.end(), static_cast<int64_t>(0));
+    const int64_t total = std::accumulate(split_sizes.begin(), split_sizes.end(), static_cast<int64_t>(0));
     return total == param.input->dims()[axis];
 }
 
 std::vector<int64_t> InferSplitOutputShape(const SplitParam& param, size_t output_index) {
     std::vector<int64_t> out_shape = param.input->dims().data();
     int32_t axis = param.axis < 0 ? param.axis + static_cast<int32_t>(out_shape.size()) : param.axis;
-    out_shape[axis] = param.split_sizes[output_index];
+    std::vector<int64_t> split_sizes = param.split_sizes;
+    if (param.split != nullptr && !ReadIntegerTensor(param.split, &split_sizes)) {
+        return {};
+    }
+    out_shape[axis] = split_sizes[output_index];
     return out_shape;
 }
 
@@ -80,12 +89,15 @@ std::unique_ptr<KernelBase> CreateSplitKernel() {
 }
 
 std::shared_ptr<OpBase> BuildSplitOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
-    if (node.inputs.size() != 1 || node.outputs.size() < 2) {
+    if ((node.inputs.size() != 1 && node.inputs.size() != 2) || node.outputs.size() < 2) {
         return nullptr;
     }
 
     SplitParam param{};
     param.input = tensors[node.inputs[0]];
+    if (node.inputs.size() == 2) {
+        param.split = tensors[node.inputs[1]];
+    }
     param.axis = GetIntAttribute(node.attributes, "axis", 1);
     param.split_sizes = GetShapeAttribute(node.attributes, "split_sizes");
     for (const auto& output_name : node.outputs) {
@@ -122,7 +134,11 @@ SplitOp::SplitOp(std::string name, const SplitParam& param) : OpBase(std::move(n
 }
 
 void SplitOp::SyncIO() {
-    SetInputs({param_.input});
+    std::vector<std::shared_ptr<Tensor>> inputs = {param_.input};
+    if (param_.split != nullptr) {
+        inputs.push_back(param_.split);
+    }
+    SetInputs(std::move(inputs));
     SetOutputs(param_.outputs);
 }
 
@@ -133,8 +149,14 @@ int32_t SplitOp::InferOutputShapes() {
         return -1;
     }
 
+    if (param_.split != nullptr && !ReadIntegerTensor(param_.split, &param_.split_sizes)) {
+        return -1;
+    }
     for (size_t i = 0; i < param_.outputs.size(); ++i) {
         const auto out_shape = InferSplitOutputShape(param_, i);
+        if (out_shape.empty()) {
+            return -1;
+        }
         const size_t required_bytes =
             static_cast<size_t>(ComputeNumel(out_shape)) *
             DataTypeBytes(ResolveExecutionDataType({param_.input, param_.outputs[i]}, DataType::FP32));

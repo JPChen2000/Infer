@@ -1,9 +1,13 @@
 #include "core/kernel.h"
 
 #include "src/kernel/add.h"
+#include "src/kernel/batch_normalization.h"
+#include "src/kernel/div.h"
+#include "src/kernel/erf.h"
 #include "src/kernel/concat.h"
 #include "src/kernel/conv2d.h"
 #include "src/kernel/fc.h"
+#include "src/kernel/global_average_pool.h"
 #include "src/kernel/flatten.h"
 #include "src/kernel/gemm.h"
 #include "src/kernel/identity.h"
@@ -20,7 +24,19 @@
 #include "src/kernel/slice.h"
 #include "src/kernel/softmax.h"
 #include "src/kernel/split.h"
+#include "src/kernel/sqrt.h"
+#include "src/kernel/sub.h"
+#include "src/kernel/tanh.h"
 #include "src/kernel/transpose.h"
+#include "src/kernel/unsqueeze.h"
+#include "src/kernel/squeeze.h"
+#include "src/kernel/cast.h"
+#include "src/kernel/reduce_mean.h"
+#include "src/kernel/gather.h"
+#include "src/kernel/equal.h"
+#include "src/kernel/shape.h"
+#include "src/kernel/expand.h"
+#include "src/kernel/where.h"
 #include "src/kernel/yolo_decode.h"
 
 namespace feather {
@@ -32,9 +48,13 @@ void EnsureCudaKernelsRegistered();
 
 void EnsureBuiltinKernelsRegistered() {
     EnsureAddKernelsRegistered();
+    EnsureBatchNormalizationKernelsRegistered();
+    EnsureDivKernelsRegistered();
+    EnsureErfKernelsRegistered();
     EnsureConcatKernelsRegistered();
     EnsureConv2DKernelsRegistered();
     EnsureFcKernelsRegistered();
+    EnsureGlobalAveragePoolKernelsRegistered();
     EnsureFlattenKernelsRegistered();
     EnsureGemmKernelsRegistered();
     EnsureIdentityKernelsRegistered();
@@ -51,7 +71,19 @@ void EnsureBuiltinKernelsRegistered() {
     EnsureSliceKernelsRegistered();
     EnsureSoftmaxKernelsRegistered();
     EnsureSplitKernelsRegistered();
+    EnsureSqrtKernelsRegistered();
+    EnsureSubKernelsRegistered();
+    EnsureTanhKernelsRegistered();
     EnsureTransposeKernelsRegistered();
+    EnsureUnsqueezeKernelsRegistered();
+    EnsureSqueezeKernelsRegistered();
+    EnsureCastKernelsRegistered();
+    EnsureReduceMeanKernelsRegistered();
+    EnsureGatherKernelsRegistered();
+    EnsureEqualKernelsRegistered();
+    EnsureShapeKernelsRegistered();
+    EnsureExpandKernelsRegistered();
+    EnsureWhereKernelsRegistered();
     EnsureYoloDecodeKernelsRegistered();
 #ifdef FEATHER_WITH_CUDA
     EnsureCudaKernelsRegistered();

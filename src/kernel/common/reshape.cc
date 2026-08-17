@@ -15,6 +15,8 @@ bool g_reshape_kernels_registered = []() {
                                                 []() { return std::make_unique<ReshapeKernel<DeviceType::COMMON, DataType::FP32>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP16, "Reshape",
                                                 []() { return std::make_unique<ReshapeKernel<DeviceType::COMMON, DataType::FP16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::BOOL, "Reshape",
+                                                []() { return std::make_unique<ReshapeKernel<DeviceType::COMMON, DataType::BOOL>>(); });
     return true;
 }();
 
@@ -44,11 +46,20 @@ int32_t ReshapeKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     return ComputeReshapeKernel<DataType::FP16>(static_cast<feather::operators::ReshapeParam*>(param_));
 }
 
+template <>
+int32_t ReshapeKernel<DeviceType::COMMON, DataType::BOOL>::compute() {
+    AutoTimer timer("Common::Reshape::BOOL");
+    return ComputeReshapeKernel<DataType::BOOL>(static_cast<feather::operators::ReshapeParam*>(param_));
+}
+
 typedef feather::kernel::ReshapeKernel<DeviceType::COMMON, DataType::FP32> ReshapeCommonFP32Kernel;
 REGISTER_KERNEL(COMMON, FP32, Reshape, ReshapeCommonFP32Kernel);
 
 typedef feather::kernel::ReshapeKernel<DeviceType::COMMON, DataType::FP16> ReshapeCommonFP16Kernel;
 REGISTER_KERNEL(COMMON, FP16, Reshape, ReshapeCommonFP16Kernel);
+
+typedef feather::kernel::ReshapeKernel<DeviceType::COMMON, DataType::BOOL> ReshapeCommonBoolKernel;
+REGISTER_KERNEL(COMMON, BOOL, Reshape, ReshapeCommonBoolKernel);
 
 void EnsureCommonReshapeKernelsRegistered() { (void)g_reshape_kernels_registered; }
 

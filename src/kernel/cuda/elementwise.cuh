@@ -29,6 +29,12 @@ __global__ void UnaryKernelCuda(const T* input, T* output, int64_t numel, float 
         y = powf(x, exponent);
     } else if constexpr (Op == 3) {
         y = x / (1.0f + expf(-x));
+    } else if constexpr (Op == 4) {
+        y = sqrtf(x);
+    } else if constexpr (Op == 5) {
+        y = tanhf(x);
+    } else if constexpr (Op == 6) {
+        y = erff(x);
     }
     WriteDevice(output, idx, y);
 }
@@ -59,7 +65,17 @@ __global__ void BinaryBroadcastKernelCuda(const T* lhs, const T* rhs, T* out, in
     }
     const float a = ReadDevice(lhs, lhs_offset);
     const float b = ReadDevice(rhs, rhs_offset);
-    WriteDevice(out, linear, Op == 0 ? a + b : a * b);
+    float result = a;
+    if constexpr (Op == 0) {
+        result = a + b;
+    } else if constexpr (Op == 1) {
+        result = a * b;
+    } else if constexpr (Op == 2) {
+        result = a - b;
+    } else if constexpr (Op == 3) {
+        result = a / b;
+    }
+    WriteDevice(out, linear, result);
 }
 
 template <DataType dtype, int Op>
@@ -98,6 +114,27 @@ int RunPow(feather::operators::PowParam* param, const char* timer_name) {
     }
     UnaryKernelCuda<T, 2><<<static_cast<int>(DivUp(numel, kCudaThreads)), kCudaThreads, 0, InferenceStream()>>>(
         input.get(), output.get(), numel, param->exponent);
+    if (CudaCheck(cudaGetLastError()) != 0) {
+        return -1;
+    }
+    return CopyDeviceToTensor(&output, param->out.get());
+}
+
+template <DataType dtype, int Op>
+int RunUnaryElementwise(feather::operators::UnaryParam* param, const char* timer_name) {
+    AutoTimer timer(timer_name);
+    using T = StorageT<dtype>;
+    if (param == nullptr || param->input == nullptr || param->out == nullptr) {
+        return -1;
+    }
+    DeviceBuffer<T> input;
+    DeviceBuffer<T> output;
+    const int64_t numel = param->input->numel();
+    if (CopyTensorToDevice(param->input.get(), &input) != 0 || AllocateTensorOnDevice(param->out.get(), &output) != 0) {
+        return -1;
+    }
+    UnaryKernelCuda<T, Op><<<static_cast<int>(DivUp(numel, kCudaThreads)), kCudaThreads, 0, InferenceStream()>>>(
+        input.get(), output.get(), numel, 1.0f);
     if (CudaCheck(cudaGetLastError()) != 0) {
         return -1;
     }

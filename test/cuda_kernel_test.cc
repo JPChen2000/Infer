@@ -10,6 +10,7 @@
 
 #include "core/kernel.h"
 #include "core/operator_registry.h"
+#include "model/model_format.h"
 #include "src/kernel/add.h"
 #include "src/kernel/concat.h"
 #include "src/kernel/conv2d.h"
@@ -35,6 +36,75 @@ bool HasCudaDevice() {
 #endif
 
 }  // namespace
+
+#ifdef FEATHER_WITH_CUDA
+TEST(cuda_kernel_registration_test, RegistersMissingFp32AndFp16NumericOperators) {
+    const std::vector<const char*> operators = {
+        "Add",              "BatchNormalization", "Sub",               "Div",      "Concat",
+        "Conv2D",           "FC",                 "Flatten",           "GlobalAveragePool",
+        "Gemm",             "Identity",           "MatMul",            "Mul",
+        "AvgPool",          "MaxPool",            "Pow",               "ReLU",
+        "Reshape",          "Resize",             "ResizeConcat",      "SiLU",
+        "Sigmoid",          "Slice",              "Softmax",           "Split",
+        "Transpose",        "Sqrt",               "Tanh",              "Erf",
+        "Unsqueeze",        "Squeeze",            "Cast",              "ReduceMean",
+        "Gather",           "Equal",              "Expand",            "Where",
+        "YoloDecode",
+    };
+    for (const auto* op : operators) {
+        auto fp32_kernel =
+            feather::KernelDispatcher::instance().create(feather::DeviceType::CUDA, feather::DataType::FP32, op);
+        ASSERT_NE(fp32_kernel, nullptr) << "missing CUDA FP32 kernel for " << op;
+        EXPECT_EQ(fp32_kernel->device(), feather::DeviceType::CUDA) << "CUDA FP32 request fell back for " << op;
+
+        auto fp16_kernel =
+            feather::KernelDispatcher::instance().create(feather::DeviceType::CUDA, feather::DataType::FP16, op);
+        ASSERT_NE(fp16_kernel, nullptr) << "missing CUDA FP16 kernel for " << op;
+        EXPECT_EQ(fp16_kernel->device(), feather::DeviceType::CUDA) << "CUDA FP16 request fell back for " << op;
+    }
+}
+
+TEST(cuda_kernel_registration_test, SelectsCudaByFloatingCastInputTypeAndFallsBackForControlCast) {
+    feather::OperatorRegistry::TensorMap tensors;
+    auto fp16_input = std::make_shared<feather::Tensor>();
+    fp16_input->Assign<uint16_t>({feather::FloatToHalf(1.0f), feather::FloatToHalf(2.0f)}, {2});
+    tensors["fp16_input"] = fp16_input;
+    tensors["fp32_output"] = std::make_shared<feather::Tensor>(std::vector<int64_t>{2});
+
+    feather::model::NodeDesc fp16_to_fp32;
+    fp16_to_fp32.name = "fp16_to_fp32";
+    fp16_to_fp32.op_type = "Cast";
+    fp16_to_fp32.inputs = {"fp16_input"};
+    fp16_to_fp32.outputs = {"fp32_output"};
+    fp16_to_fp32.attributes["to"] = int64_t{1};
+
+    feather::KernelDeviceScope cuda_scope(feather::DeviceType::CUDA);
+    auto fp16_cast = feather::OperatorRegistry::instance().Create(fp16_to_fp32, tensors);
+    ASSERT_NE(fp16_cast, nullptr);
+    auto fp16_kernel = fp16_cast->DetachKernel();
+    ASSERT_NE(fp16_kernel, nullptr);
+    EXPECT_EQ(fp16_kernel->device(), feather::DeviceType::CUDA);
+    EXPECT_EQ(fp16_kernel->data_type(), feather::DataType::FP16);
+
+    auto fp32_input = std::make_shared<feather::Tensor>();
+    fp32_input->Assign<float>({1.0f, 2.0f}, {2});
+    tensors["fp32_input"] = fp32_input;
+    tensors["int64_output"] = std::make_shared<feather::Tensor>(std::vector<int64_t>{2});
+
+    feather::model::NodeDesc fp32_to_int64;
+    fp32_to_int64.name = "fp32_to_int64";
+    fp32_to_int64.op_type = "Cast";
+    fp32_to_int64.inputs = {"fp32_input"};
+    fp32_to_int64.outputs = {"int64_output"};
+    fp32_to_int64.attributes["to"] = int64_t{7};
+
+    auto control_cast = feather::OperatorRegistry::instance().Create(fp32_to_int64, tensors);
+    ASSERT_NE(control_cast, nullptr);
+    auto control_kernel = control_cast->DetachKernel();
+    ASSERT_NE(control_kernel, nullptr);
+    EXPECT_EQ(control_kernel->device(), feather::DeviceType::COMMON);
+}
+#endif
 
 #ifdef FEATHER_WITH_CUDNN
 TEST(cuda_kernel_test, CudnnPerfSelectionPrefersTensorImplicitGemmForPointwise) {
@@ -491,6 +561,45 @@ TEST(cuda_kernel_test, GemmRunsOnCudaFP16WithVectorBias) {
     const std::vector<float> expected = {38.5f, 43.0f, 52.0f, 59.0f, 83.5f, 97.0f, 115.0f, 131.0f};
     for (size_t i = 0; i < expected.size(); ++i) {
         EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[i]), expected[i], 1e-3f);
+    }
+#endif
+}
+
+TEST(cuda_kernel_test, GemmRunsOnCudaFP32WithTransposedBAndScaling) {
+#ifndef FEATHER_WITH_CUDA
+    GTEST_SKIP() << "CUDA kernels are not built";
+#else
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
+    auto a = std::make_shared<feather::Tensor>();
+    a->Assign<float>({1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}, {2, 3});
+    auto b = std::make_shared<feather::Tensor>();
+    b->Assign<float>({1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}, {2, 3});
+    auto bias = std::make_shared<feather::Tensor>();
+    bias->Assign<float>({2.0f, 4.0f}, {2});
+    auto out = std::make_shared<feather::Tensor>(std::vector<int64_t>{2, 2});
+    out->mutable_data<float>();
+
+    feather::operators::GemmParam param{};
+    param.a = a;
+    param.b = b;
+    param.bias = bias;
+    param.out = out;
+    param.alpha = 2.0f;
+    param.beta = 0.5f;
+    param.trans_b = true;
+
+    auto kernel =
+        feather::KernelDispatcher::instance().create(feather::DeviceType::CUDA, feather::DataType::FP32, "Gemm");
+    ASSERT_NE(kernel, nullptr);
+    kernel->SetParam(&param);
+    ASSERT_EQ(kernel->compute(), 0);
+
+    const std::vector<float> expected = {29.0f, 66.0f, 65.0f, 156.0f};
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_FLOAT_EQ(out->data<float>()[i], expected[i]);
     }
 #endif
 }

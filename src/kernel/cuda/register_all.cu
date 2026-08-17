@@ -4,11 +4,15 @@ namespace feather {
 namespace kernel {
 
 void EnsureCudaAddKernelsRegistered();
+void EnsureCudaBatchNormalizationKernelsRegistered();
+void EnsureCudaDivKernelsRegistered();
+void EnsureCudaErfKernelsRegistered();
 void EnsureCudaConcatKernelsRegistered();
 void EnsureCudaConv2DKernelsRegistered();
 void EnsureCudaFcKernelsRegistered();
 void EnsureCudaFlattenKernelsRegistered();
 void EnsureCudaGemmKernelsRegistered();
+void EnsureCudaGlobalAveragePoolKernelsRegistered();
 void EnsureCudaIdentityKernelsRegistered();
 void EnsureCudaMatMulKernelsRegistered();
 void EnsureCudaMulKernelsRegistered();
@@ -23,16 +27,31 @@ void EnsureCudaSigmoidKernelsRegistered();
 void EnsureCudaSliceKernelsRegistered();
 void EnsureCudaSoftmaxKernelsRegistered();
 void EnsureCudaSplitKernelsRegistered();
+void EnsureCudaSqrtKernelsRegistered();
+void EnsureCudaSubKernelsRegistered();
+void EnsureCudaTanhKernelsRegistered();
+void EnsureCudaUnsqueezeKernelsRegistered();
+void EnsureCudaSqueezeKernelsRegistered();
+void EnsureCudaCastKernelsRegistered();
+void EnsureCudaReduceMeanKernelsRegistered();
+void EnsureCudaGatherKernelsRegistered();
+void EnsureCudaEqualKernelsRegistered();
+void EnsureCudaExpandKernelsRegistered();
+void EnsureCudaWhereKernelsRegistered();
 void EnsureCudaTransposeKernelsRegistered();
 void EnsureCudaYoloDecodeKernelsRegistered();
 
 void EnsureCudaKernelsRegistered() {
     EnsureCudaAddKernelsRegistered();
+    EnsureCudaBatchNormalizationKernelsRegistered();
+    EnsureCudaDivKernelsRegistered();
+    EnsureCudaErfKernelsRegistered();
     EnsureCudaConcatKernelsRegistered();
     EnsureCudaConv2DKernelsRegistered();
     EnsureCudaFcKernelsRegistered();
     EnsureCudaFlattenKernelsRegistered();
     EnsureCudaGemmKernelsRegistered();
+    EnsureCudaGlobalAveragePoolKernelsRegistered();
     EnsureCudaIdentityKernelsRegistered();
     EnsureCudaMatMulKernelsRegistered();
     EnsureCudaMulKernelsRegistered();
@@ -47,6 +66,17 @@ void EnsureCudaKernelsRegistered() {
     EnsureCudaSliceKernelsRegistered();
     EnsureCudaSoftmaxKernelsRegistered();
     EnsureCudaSplitKernelsRegistered();
+    EnsureCudaSqrtKernelsRegistered();
+    EnsureCudaSubKernelsRegistered();
+    EnsureCudaTanhKernelsRegistered();
+    EnsureCudaUnsqueezeKernelsRegistered();
+    EnsureCudaSqueezeKernelsRegistered();
+    EnsureCudaCastKernelsRegistered();
+    EnsureCudaReduceMeanKernelsRegistered();
+    EnsureCudaGatherKernelsRegistered();
+    EnsureCudaEqualKernelsRegistered();
+    EnsureCudaExpandKernelsRegistered();
+    EnsureCudaWhereKernelsRegistered();
     EnsureCudaTransposeKernelsRegistered();
     EnsureCudaYoloDecodeKernelsRegistered();
 }

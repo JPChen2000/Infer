@@ -62,46 +62,64 @@ __global__ void AddBiasKernelCuda(T* out, const T* bias, int64_t m, int64_t n, i
     WriteDevice(out, idx, ReadDevice(out, idx) + bias_value);
 }
 
-inline int LaunchCublasMatMulFp32(const float* a, const float* b, float* out, int64_t m, int64_t k, int64_t n) {
+template <typename T>
+__global__ void AddScaledBiasKernelCuda(T* out, const T* bias, int64_t m, int64_t n, int bias_mode, float beta) {
+    const int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const int64_t total = m * n;
+    if (idx >= total) {
+        return;
+    }
+    const float bias_value = beta * ReadDevice(bias, bias_mode == 1 ? (idx % n) : idx);
+    WriteDevice(out, idx, ReadDevice(out, idx) + bias_value);
+}
+
+inline int LaunchCublasMatMulFp32(const float* a, const float* b, float* out, int64_t m, int64_t k, int64_t n,
+                                  float alpha_value, bool trans_b) {
     auto handle = CublasHandle();
     if (handle == nullptr) {
         return -1;
     }
-    const float alpha = 1.0f;
+    const float alpha = alpha_value;
     const float beta = 0.0f;
-    return CublasCheck(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, static_cast<int>(n), static_cast<int>(m),
-                                   static_cast<int>(k), &alpha, b, static_cast<int>(n), a, static_cast<int>(k),
-                                   &beta, out, static_cast<int>(n)));
+    const auto b_operation = trans_b ? CUBLAS_OP_T : CUBLAS_OP_N;
+    const int b_leading_dimension = trans_b ? static_cast<int>(k) : static_cast<int>(n);
+    return CublasCheck(cublasSgemm(handle, b_operation, CUBLAS_OP_N, static_cast<int>(n), static_cast<int>(m),
+                                   static_cast<int>(k), &alpha, b, b_leading_dimension, a, static_cast<int>(k), &beta,
+                                   out, static_cast<int>(n)));
 }
 
 inline int LaunchCublasMatMulFp16(const uint16_t* a, const uint16_t* b, uint16_t* out, int64_t m, int64_t k,
-                                  int64_t n) {
+                                  int64_t n, float alpha_value, bool trans_b) {
     auto handle = CublasHandle();
     if (handle == nullptr) {
         return -1;
     }
-    const float alpha = 1.0f;
+    const float alpha = alpha_value;
     const float beta = 0.0f;
-    return CublasCheck(cublasGemmEx(handle, CUBLAS_OP_N, CUBLAS_OP_N, static_cast<int>(n), static_cast<int>(m),
-                                    static_cast<int>(k), &alpha, b, CUDA_R_16F, static_cast<int>(n), a, CUDA_R_16F,
+    const auto b_operation = trans_b ? CUBLAS_OP_T : CUBLAS_OP_N;
+    const int b_leading_dimension = trans_b ? static_cast<int>(k) : static_cast<int>(n);
+    return CublasCheck(cublasGemmEx(handle, b_operation, CUBLAS_OP_N, static_cast<int>(n), static_cast<int>(m),
+                                    static_cast<int>(k), &alpha, b, CUDA_R_16F, b_leading_dimension, a, CUDA_R_16F,
                                     static_cast<int>(k), &beta, out, CUDA_R_16F, static_cast<int>(n),
                                     CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 }
 
 template <DataType dtype>
 int LaunchCublasMatMul(const StorageT<dtype>* a, const StorageT<dtype>* b, StorageT<dtype>* out, int64_t m, int64_t k,
-                       int64_t n);
+                       int64_t n, float alpha_value, bool trans_b);
 
 template <>
 inline int LaunchCublasMatMul<DataType::FP32>(const StorageT<DataType::FP32>* a, const StorageT<DataType::FP32>* b,
-                                              StorageT<DataType::FP32>* out, int64_t m, int64_t k, int64_t n) {
-    return LaunchCublasMatMulFp32(a, b, out, m, k, n);
+                                              StorageT<DataType::FP32>* out, int64_t m, int64_t k, int64_t n,
+                                              float alpha_value, bool trans_b) {
+    return LaunchCublasMatMulFp32(a, b, out, m, k, n, alpha_value, trans_b);
 }
 
 template <>
 inline int LaunchCublasMatMul<DataType::FP16>(const StorageT<DataType::FP16>* a, const StorageT<DataType::FP16>* b,
-                                              StorageT<DataType::FP16>* out, int64_t m, int64_t k, int64_t n) {
-    return LaunchCublasMatMulFp16(a, b, out, m, k, n);
+                                              StorageT<DataType::FP16>* out, int64_t m, int64_t k, int64_t n,
+                                              float alpha_value, bool trans_b) {
+    return LaunchCublasMatMulFp16(a, b, out, m, k, n, alpha_value, trans_b);
 }
 
 }  // namespace cuda_detail

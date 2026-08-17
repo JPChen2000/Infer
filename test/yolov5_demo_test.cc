@@ -189,7 +189,7 @@ TEST(yolov5_demo_test, ParseYolov5LayoutOverrideRejectsUnsupportedNames) {
 
 TEST(yolov5_demo_test, LoadFthAndRunImageInference) {
     const auto repo_root = std::filesystem::path(__FILE__).parent_path().parent_path();
-    const auto model_path = repo_root / "yolov5n.fth";
+    const auto model_path = repo_root / "models" / "yolov5n.fth";
     const auto image_path = WriteTestPpmImage(std::filesystem::temp_directory_path() / "yolov5n_demo_test.ppm");
 
     ASSERT_TRUE(std::filesystem::exists(model_path));
@@ -213,7 +213,7 @@ TEST(yolov5_demo_test, LoadFthAndRunImageInference) {
 
 TEST(yolov5_demo_test, LoadFthCanReportExplicitNchwInputLayoutInSummary) {
     const auto repo_root = std::filesystem::path(__FILE__).parent_path().parent_path();
-    const auto model_path = repo_root / "yolov5n.fth";
+    const auto model_path = repo_root / "models" / "yolov5n.fth";
 
     ASSERT_TRUE(std::filesystem::exists(model_path));
 
@@ -226,7 +226,7 @@ TEST(yolov5_demo_test, LoadFthCanReportExplicitNchwInputLayoutInSummary) {
 
 TEST(yolov5_demo_test, LoadFthRejectsIncompatibleNhwcOverride) {
     const auto repo_root = std::filesystem::path(__FILE__).parent_path().parent_path();
-    const auto model_path = repo_root / "yolov5n.fth";
+    const auto model_path = repo_root / "models" / "yolov5n.fth";
 
     ASSERT_TRUE(std::filesystem::exists(model_path));
 
@@ -245,7 +245,7 @@ TEST(yolov5_demo_test, CudaRunSummaryReportsDeviceCacheStats) {
     }
 
     const auto repo_root = std::filesystem::path(__FILE__).parent_path().parent_path();
-    const auto model_path = repo_root / "yolov5n_fp32.fth";
+    const auto model_path = repo_root / "models" / "yolov5n_fp32.fth";
     const auto image_path = WriteTestPpmImage(std::filesystem::temp_directory_path() / "yolov5n_demo_cuda_stats.ppm");
 
     ASSERT_TRUE(std::filesystem::exists(model_path));
@@ -270,7 +270,7 @@ TEST(yolov5_demo_test, CudaLoadPrimesPersistentTensorDevices) {
     }
 
     const auto repo_root = std::filesystem::path(__FILE__).parent_path().parent_path();
-    const auto model_path = repo_root / "yolov5n_fp32.fth";
+    const auto model_path = repo_root / "models" / "yolov5n_fp32.fth";
 
     ASSERT_TRUE(std::filesystem::exists(model_path));
 
@@ -297,7 +297,7 @@ TEST(yolov5_demo_test, CudaRunSummaryReportsMeasuredInputCopyTime) {
     }
 
     const auto repo_root = std::filesystem::path(__FILE__).parent_path().parent_path();
-    const auto model_path = repo_root / "yolov5n_fp32.fth";
+    const auto model_path = repo_root / "models" / "yolov5n_fp32.fth";
     const auto image_path = WriteTestPpmImage(std::filesystem::temp_directory_path() / "yolov5n_demo_cuda_input_copy.ppm");
 
     ASSERT_TRUE(std::filesystem::exists(model_path));

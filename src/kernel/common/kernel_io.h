@@ -27,6 +27,28 @@ struct TensorIO<DataType::FP16> {
     }
 };
 
+inline bool ReadScalarFloatTensor(const Tensor* tensor, float* value) {
+    if (tensor == nullptr || value == nullptr || !tensor->IsInitialized() || tensor->numel() != 1) {
+        return false;
+    }
+    switch (tensor->data_type()) {
+        case DataType::FP16:
+            *value = HalfToFloat(tensor->data<uint16_t>()[0]);
+            return true;
+        case DataType::FP32:
+            *value = tensor->data<float>()[0];
+            return true;
+        case DataType::INT32:
+            *value = static_cast<float>(tensor->data<int32_t>()[0]);
+            return true;
+        case DataType::INT64:
+            *value = static_cast<float>(tensor->data<int64_t>()[0]);
+            return true;
+        default:
+            return false;
+    }
+}
+
 }  // namespace kernel
 }  // namespace feather
 

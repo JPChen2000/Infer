@@ -133,10 +133,12 @@ int32_t ConcatOp::InferOutputShapes() {
         static_cast<size_t>(ComputeNumel(out_shape)) *
         DataTypeBytes(ResolveExecutionDataType(param_.inputs, DataType::FP32));
     if (param_.out == nullptr || !param_.out->IsInitialized() || param_.out->memory_size() < required_bytes) {
-        param_.out = std::make_shared<Tensor>(out_shape);
+        param_.out = std::make_shared<Tensor>(required_bytes);
+        param_.out->Resize(out_shape);
     } else {
         param_.out->Resize(out_shape);
     }
+    param_.out->set_data_type(ResolveExecutionDataType(param_.inputs, DataType::FP32));
     param_.out->set_layout(param_.inputs.empty() || param_.inputs[0] == nullptr ? DataLayout::ND : param_.inputs[0]->layout());
     SyncIO();
     return 0;

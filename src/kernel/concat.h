@@ -31,6 +31,12 @@ class ConcatKernel : public KernelBase {
     int32_t compute() override;
 };
 
+template <>
+class ConcatKernel<DeviceType::COMMON, DataType::INT64> : public KernelBase {
+   public:
+    int32_t compute() override;
+};
+
 }  // namespace kernel
 }  // namespace feather
 

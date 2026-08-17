@@ -6,7 +6,12 @@
 
 #include "core/kernel.h"
 #include "core/operator.h"
+#include "core/operator_registry.h"
+#include "core/graph.h"
+#include "core/graph_lowering.h"
+#include "core/static_graph.h"
 #include "core/tensor.h"
+#include "model/model_format.h"
 #include "src/operator/params.h"
 #include "src/operator/pow_op.h"
 #include "util/fp16.h"
@@ -44,5 +49,44 @@ TEST(pow_op_test, PowRunsOnX86FP16) {
     const std::vector<float> expected = {1.0f, 4.0f, 9.0f, 16.0f};
     for (size_t i = 0; i < expected.size(); ++i) {
         EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[i]), expected[i], 1e-3f);
+    }
+}
+
+TEST(pow_op_test, UsesScalarExponentTensorAfterGraphLowering) {
+    auto input = std::make_shared<Tensor>();
+    input->Assign<float>({-2.0f, -1.5f, 0.5f, 3.0f}, {4});
+    auto exponent = std::make_shared<Tensor>();
+    exponent->Assign<float>({2.0f}, {});
+
+    feather::model::ModelDesc model;
+    model.name = "pow_with_tensor_exponent";
+    model.version = 1;
+    model.graph.name = "main";
+    model.graph.inputs = {"input"};
+    model.graph.outputs = {"out"};
+    model.graph.values = {
+        feather::model::ValueDesc{{"input", {4}, DataType::FP32, feather::DataLayout::ND}, false},
+        feather::model::ValueDesc{{"exponent", {}, DataType::FP32, feather::DataLayout::ND}, true},
+        feather::model::ValueDesc{{"out", {4}, DataType::FP32, feather::DataLayout::ND}, false},
+    };
+    model.graph.nodes = {{"pow_with_tensor_exponent", "Pow", "", {"input", "exponent"}, {"out"}, {}}};
+
+    feather::StaticGraph static_graph;
+    ASSERT_EQ(static_graph.SetModel(model), 0);
+    ASSERT_EQ(static_graph.SetTensor("input", input), 0);
+    ASSERT_EQ(static_graph.SetTensor("exponent", exponent), 0);
+    ASSERT_EQ(static_graph.Build(), 0);
+
+    feather::RuntimeGraph runtime_graph;
+    runtime_graph.SetThreadMode(feather::RuntimeThreadMode::kSerialGraph);
+    feather::GraphLowering lowering;
+    ASSERT_EQ(lowering.Lower(static_graph, &runtime_graph), 0);
+    ASSERT_EQ(runtime_graph.Run(), 0);
+
+    const auto out = runtime_graph.GetTensor("out");
+    ASSERT_NE(out, nullptr);
+    const std::vector<float> expected = {4.0f, 2.25f, 0.25f, 9.0f};
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_FLOAT_EQ(out->data<float>()[i], expected[i]);
     }
 }

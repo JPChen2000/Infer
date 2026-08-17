@@ -41,6 +41,7 @@ std::shared_ptr<OpBase> BuildReluOp(const model::NodeDesc& node, OperatorRegistr
 
 bool g_relu_op_registered = []() {
     OperatorRegistry::instance().Register("ReLU", BuildReluOp);
+    OperatorRegistry::instance().Register("Relu", BuildReluOp);
     return true;
 }();
 

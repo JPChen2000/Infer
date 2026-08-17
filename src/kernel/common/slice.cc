@@ -23,6 +23,8 @@ bool g_slice_kernels_registered = []() {
                                                 []() { return std::make_unique<SliceKernel<DeviceType::COMMON, DataType::FP32>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP16, "Slice",
                                                 []() { return std::make_unique<SliceKernel<DeviceType::COMMON, DataType::FP16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::INT64, "Slice",
+                                                []() { return std::make_unique<SliceKernel<DeviceType::COMMON, DataType::INT64>>(); });
     return true;
 }();
 
@@ -86,6 +88,40 @@ int32_t SliceKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Slice::FP16");
     auto* param = static_cast<feather::operators::SliceParam*>(param_);
     return ComputeSliceCommon<DataType::FP16>(param);
+}
+
+int32_t SliceKernel<DeviceType::COMMON, DataType::INT64>::compute() {
+    AutoTimer timer("Common::Slice::INT64");
+    auto* param = static_cast<feather::operators::SliceParam*>(param_);
+    if (param == nullptr || param->input == nullptr || param->out == nullptr) {
+        return -1;
+    }
+    const auto& in_dims = param->input->dims().data();
+    const auto& out_dims = param->out->dims().data();
+    const int32_t rank = static_cast<int32_t>(in_dims.size());
+    const int32_t axis = param->axis < 0 ? param->axis + rank : param->axis;
+    const int64_t dim = in_dims[axis];
+    int64_t start = param->start < 0 ? param->start + dim : param->start;
+    start = std::max<int64_t>(0, start);
+    param->out->set_data_type(DataType::INT64);
+    auto* out = param->out->mutable_data<int64_t>();
+    const auto out_strides = ComputeStrides(out_dims);
+    const auto in_strides = ComputeStrides(in_dims);
+    std::vector<int64_t> out_coords(out_dims.size(), 0);
+    for (int64_t linear = 0; linear < param->out->numel(); ++linear) {
+        int64_t remaining = linear;
+        for (size_t i = 0; i < out_dims.size(); ++i) {
+            out_coords[i] = remaining / out_strides[i];
+            remaining %= out_strides[i];
+        }
+        int64_t input_offset = 0;
+        for (size_t i = 0; i < in_dims.size(); ++i) {
+            const int64_t coord = static_cast<int32_t>(i) == axis ? out_coords[i] + start : out_coords[i];
+            input_offset += coord * in_strides[i];
+        }
+        out[linear] = param->input->data<int64_t>()[input_offset];
+    }
+    return 0;
 }
 
 typedef feather::kernel::SliceKernel<DeviceType::COMMON, DataType::FP32> SliceCommonFP32Kernel;

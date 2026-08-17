@@ -150,7 +150,6 @@ int32_t ResizeConcatKernel<DeviceType::CUDA, DataType::FP16>::compute() {
 }
 
 void EnsureCudaResizeConcatKernelsRegistered() { (void)g_cuda_resize_concat_kernels_registered; }
-void EnsureResizeConcatKernelsRegistered() { EnsureCudaResizeConcatKernelsRegistered(); }
 
 }  // namespace kernel
 }  // namespace feather

@@ -3,6 +3,7 @@
 #include <utility>
 
 #include "core/operator_registry.h"
+#include "src/operator/control_tensor.h"
 #include "util/types.h"
 
 namespace feather {
@@ -31,15 +32,19 @@ std::unique_ptr<KernelBase> CreatePowKernel() {
 }
 
 std::shared_ptr<OpBase> BuildPowOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
-    if (node.inputs.size() != 1 || node.outputs.size() != 1) {
+    if ((node.inputs.size() != 1 && node.inputs.size() != 2) || node.outputs.size() != 1) {
         return nullptr;
     }
 
     PowParam param{};
     param.input = tensors[node.inputs[0]];
+    if (node.inputs.size() == 2) {
+        param.exponent_tensor = tensors[node.inputs[1]];
+    }
     param.out = tensors[node.outputs[0]];
     param.exponent = GetFloatAttribute(node.attributes, "exponent", 1.0f);
-    if (param.input == nullptr || param.out == nullptr) {
+    if (param.input == nullptr || param.out == nullptr ||
+        (param.exponent_tensor == nullptr && node.inputs.size() == 2)) {
         return nullptr;
     }
 
@@ -71,13 +76,23 @@ PowOp::PowOp(const PowParam& param) : PowOp("pow", param) {}
 PowOp::PowOp(std::string name, const PowParam& param) : OpBase(std::move(name), "Pow"), param_(param) { SyncIO(); }
 
 void PowOp::SyncIO() {
-    SetInputs({param_.input});
+    std::vector<std::shared_ptr<Tensor>> inputs = {param_.input};
+    if (param_.exponent_tensor != nullptr) {
+        inputs.push_back(param_.exponent_tensor);
+    }
+    SetInputs(std::move(inputs));
     SetOutputs({param_.out});
 }
 
 int32_t PowOp::CheckShape() const {
     if (param_.input == nullptr || param_.out == nullptr) {
         return -1;
+    }
+    if (param_.exponent_tensor != nullptr) {
+        float exponent = 0.0f;
+        if (!ReadScalarFloatTensor(param_.exponent_tensor, &exponent)) {
+            return -1;
+        }
     }
     return 0;
 }
@@ -108,6 +123,9 @@ void PowOp::AttachKernel(std::unique_ptr<KernelBase> kernel) {
 
 int32_t PowOp::Run() {
     if (InferOutputShapes() != 0 || kernel_ == nullptr) {
+        return -1;
+    }
+    if (param_.exponent_tensor != nullptr && !ReadScalarFloatTensor(param_.exponent_tensor, &param_.exponent)) {
         return -1;
     }
     return kernel_->compute();

@@ -1,5 +1,8 @@
 #include "src/kernel/gemm.h"
 
+#include <functional>
+#include <numeric>
+
 #include "src/kernel/common/kernel_io.h"
 #include "src/operator/params.h"
 #include "util/timer.h"
@@ -25,23 +28,30 @@ int32_t ComputeGemmCommon(feather::operators::GemmParam* param) {
         return -1;
     }
 
-    const int64_t m = param->a->dims()[0];
-    const int64_t k = param->a->dims()[1];
-    const int64_t n = param->b->dims()[1];
+    if (param->trans_a) {
+        return -1;
+    }
+    const auto a_dims = param->a->dims().data();
+    const int64_t k = a_dims.back();
+    const int64_t m = param->a->numel() / k;
+    const int64_t n = param->trans_b ? param->b->dims()[0] : param->b->dims()[1];
     param->out->set_data_type(dtype);
 
     for (int64_t i = 0; i < m; ++i) {
         for (int64_t j = 0; j < n; ++j) {
             float sum = 0.0f;
             for (int64_t t = 0; t < k; ++t) {
-                sum += TensorIO<dtype>::Read(param->a.get(), i * k + t) *
-                       TensorIO<dtype>::Read(param->b.get(), t * n + j);
+                const int64_t a_offset = param->trans_a ? t * m + i : i * k + t;
+                const int64_t b_offset = param->trans_b ? j * k + t : t * n + j;
+                sum += TensorIO<dtype>::Read(param->a.get(), a_offset) *
+                       TensorIO<dtype>::Read(param->b.get(), b_offset);
             }
+            sum *= param->alpha;
             if (param->bias != nullptr && param->bias->IsInitialized()) {
                 if (param->bias->dims().size() == 1) {
-                    sum += TensorIO<dtype>::Read(param->bias.get(), j);
+                    sum += param->beta * TensorIO<dtype>::Read(param->bias.get(), j);
                 } else {
-                    sum += TensorIO<dtype>::Read(param->bias.get(), i * n + j);
+                    sum += param->beta * TensorIO<dtype>::Read(param->bias.get(), i * n + j);
                 }
             }
             TensorIO<dtype>::Write(param->out.get(), i * n + j, sum);

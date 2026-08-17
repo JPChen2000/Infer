@@ -49,8 +49,8 @@ int RunFc(feather::operators::FcParam* param, const char* timer_name) {
         bias_ptr = bias.get();
         bias_mode = param->bias->dims().size() == 1 ? 1 : 2;
     }
-    if (cuda_detail::LaunchCublasMatMul<dtype>(input.get(), weight.get(), out.get(), m, in_features, out_features) !=
-        0) {
+    if (cuda_detail::LaunchCublasMatMul<dtype>(input.get(), weight.get(), out.get(), m, in_features, out_features, 1.0f,
+                                               false) != 0) {
         return -1;
     }
     if (bias_ptr != nullptr) {

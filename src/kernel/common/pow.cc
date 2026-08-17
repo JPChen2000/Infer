@@ -26,9 +26,14 @@ int32_t ComputePowKernel(feather::operators::PowParam* param) {
         return -1;
     }
 
+    float exponent = param->exponent;
+    if (param->exponent_tensor != nullptr && !ReadScalarFloatTensor(param->exponent_tensor.get(), &exponent)) {
+        return -1;
+    }
+
     param->out->set_data_type(dtype);
     for (int64_t i = 0; i < param->input->numel(); ++i) {
-        TensorIO<dtype>::Write(param->out.get(), i, std::pow(TensorIO<dtype>::Read(param->input.get(), i), param->exponent));
+        TensorIO<dtype>::Write(param->out.get(), i, std::pow(TensorIO<dtype>::Read(param->input.get(), i), exponent));
     }
     return 0;
 }

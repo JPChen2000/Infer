@@ -50,6 +50,45 @@ TEST(matmul_flatten_op_test, MatMulRunsOnX86) {
     }
 }
 
+TEST(matmul_flatten_op_test, BatchedMatMulResizesExistingOutputForAllDimensions) {
+    auto lhs = std::make_shared<Tensor>();
+    lhs->Assign<float>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+                        13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24},
+                       {2, 3, 4});
+
+    auto rhs = std::make_shared<Tensor>();
+    rhs->Assign<float>({1, 2, 3, 4, 5, 6, 7, 8}, {1, 4, 2});
+
+    // Keep the output tensor initialized but deliberately under-sized. This
+    // exercises the reuse path in InferOutputShapes().
+    auto out = std::make_shared<Tensor>(static_cast<size_t>(6 * sizeof(float)));
+    out->Resize({2, 3, 2});
+
+    MatMulParam param{};
+    param.a = lhs;
+    param.b = rhs;
+    param.out = out;
+
+    std::shared_ptr<OpBase> op = std::make_shared<feather::operators::MatMulOp>("batched_matmul", param);
+    ASSERT_EQ(op->CheckShape(), 0);
+    ASSERT_EQ(op->InferOutputShapes(), 0);
+    auto output = op->outputs().front();
+    ASSERT_NE(output, nullptr);
+    EXPECT_EQ(output->dims().data(), std::vector<int64_t>({2, 3, 2}));
+    ASSERT_GE(output->memory_size(), static_cast<size_t>(12 * sizeof(float)));
+
+    auto kernel = KernelDispatcher::instance().create(DeviceType::COMMON, DataType::FP32, "MatMul");
+    ASSERT_NE(kernel, nullptr);
+    op->AttachKernel(std::move(kernel));
+    ASSERT_EQ(op->Run(), 0);
+
+    const std::vector<float> expected = {50, 60, 114, 140, 178, 220, 242, 300, 306, 380, 370, 460};
+    ASSERT_EQ(output->numel(), static_cast<int64_t>(expected.size()));
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_FLOAT_EQ(output->data<float>()[i], expected[i]);
+    }
+}
+
 TEST(matmul_flatten_op_test, FlattenRunsOnX86) {
     auto input = std::make_shared<Tensor>();
     input->Assign<float>({1, 2, 3, 4, 5, 6}, {2, 3});

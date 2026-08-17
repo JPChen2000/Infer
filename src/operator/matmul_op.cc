@@ -1,5 +1,6 @@
 #include "src/operator/matmul_op.h"
 
+#include <limits>
 #include <utility>
 
 #include "core/operator_registry.h"
@@ -29,7 +30,12 @@ std::shared_ptr<OpBase> BuildMatMulOp(const model::NodeDesc& node, OperatorRegis
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) {
         return nullptr;
     }
-    auto kernel = CreateHostKernelForTensor("MatMul", {param.a, param.b, param.out}, DataType::FP32);
+    std::unique_ptr<KernelBase> kernel;
+    if (param.a->dims().size() == 2 && param.b->dims().size() == 2) {
+        kernel = CreateHostKernelForTensor("MatMul", {param.a, param.b, param.out}, DataType::FP32);
+    } else {
+        kernel = CreateKernelForTensor(DeviceType::COMMON, "MatMul", {param.a, param.b, param.out}, DataType::FP32);
+    }
     if (kernel == nullptr) {
         return nullptr;
     }
@@ -63,10 +69,10 @@ int32_t MatMulOp::CheckShape() const {
     if (param_.a == nullptr || param_.b == nullptr || param_.out == nullptr) {
         return -1;
     }
-    if (param_.a->dims().size() != 2 || param_.b->dims().size() != 2) {
+    if (param_.a->dims().size() < 2 || param_.b->dims().size() < 2) {
         return -1;
     }
-    return param_.a->dims()[1] == param_.b->dims()[0] ? 0 : -1;
+    return param_.a->dims()[param_.a->dims().size() - 1] == param_.b->dims()[param_.b->dims().size() - 2] ? 0 : -1;
 }
 
 int32_t MatMulOp::InferOutputShapes() {
@@ -74,9 +80,31 @@ int32_t MatMulOp::InferOutputShapes() {
         return -1;
     }
 
-    const std::vector<int64_t> out_shape = {param_.a->dims()[0], param_.b->dims()[1]};
+    const auto& a_dims = param_.a->dims().data();
+    const auto& b_dims = param_.b->dims().data();
+    const size_t a_rank = a_dims.size();
+    const size_t b_rank = b_dims.size();
+    const size_t batch_rank = std::max(a_rank, b_rank) - 2;
+    std::vector<int64_t> out_shape(batch_rank, 1);
+    for (size_t i = 0; i < batch_rank; ++i) {
+        const int64_t a_dim = i < batch_rank - (a_rank - 2) ? 1 : a_dims[i - (batch_rank - (a_rank - 2))];
+        const int64_t b_dim = i < batch_rank - (b_rank - 2) ? 1 : b_dims[i - (batch_rank - (b_rank - 2))];
+        if (a_dim != b_dim && a_dim != 1 && b_dim != 1) {
+            return -1;
+        }
+        out_shape[i] = std::max(a_dim, b_dim);
+    }
+    out_shape.push_back(a_dims[a_rank - 2]);
+    out_shape.push_back(b_dims[b_rank - 1]);
+    int64_t output_numel = 1;
+    for (const auto dim : out_shape) {
+        if (dim <= 0 || output_numel > std::numeric_limits<int64_t>::max() / dim) {
+            return -1;
+        }
+        output_numel *= dim;
+    }
     const size_t required_bytes =
-        static_cast<size_t>(out_shape[0] * out_shape[1]) *
+        static_cast<size_t>(output_numel) *
         DataTypeBytes(ResolveExecutionDataType({param_.a, param_.b, param_.out}, DataType::FP32));
     if (param_.out == nullptr || !param_.out->IsInitialized() || param_.out->memory_size() < required_bytes) {
         param_.out = std::make_shared<Tensor>(out_shape);

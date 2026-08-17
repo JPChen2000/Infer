@@ -129,3 +129,40 @@ TEST(gemm_op_test, X86Fp16KernelIsRegisteredAndRuns) {
         EXPECT_NEAR(feather::HalfToFloat(out->data<uint16_t>()[i]), expected[i], 2e-2f);
     }
 }
+
+TEST(gemm_op_test, X86SupportsTransposedBAndScalingAttributes) {
+    auto lhs = std::make_shared<Tensor>();
+    lhs->Assign<float>({1, 2, 3, 4, 5, 6}, {2, 3});
+
+    auto rhs = std::make_shared<Tensor>();
+    rhs->Assign<float>({1, 2, 3, 4, 5, 6}, {2, 3});
+
+    auto bias = std::make_shared<Tensor>();
+    bias->Assign<float>({2, 4}, {2});
+
+    auto out = std::make_shared<Tensor>(std::vector<int64_t>{2, 2});
+    out->mutable_data<float>();
+
+    GemmParam param{};
+    param.a = lhs;
+    param.b = rhs;
+    param.bias = bias;
+    param.out = out;
+    param.alpha = 2.0f;
+    param.beta = 0.5f;
+    param.trans_b = true;
+
+    feather::operators::GemmOp op("gemm_transposed_b", param);
+    ASSERT_EQ(op.CheckShape(), 0);
+    ASSERT_EQ(op.InferOutputShapes(), 0);
+
+    auto kernel = KernelDispatcher::instance().create(DeviceType::X86, DataType::FP32, "Gemm");
+    ASSERT_NE(kernel, nullptr);
+    op.AttachKernel(std::move(kernel));
+    ASSERT_EQ(op.Run(), 0);
+
+    const std::vector<float> expected = {29.0f, 66.0f, 65.0f, 156.0f};
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_FLOAT_EQ(out->data<float>()[i], expected[i]);
+    }
+}

@@ -70,6 +70,7 @@ std::shared_ptr<OpBase> BuildConv2DOp(const model::NodeDesc& node, OperatorRegis
 
 bool g_conv2d_op_registered = []() {
     OperatorRegistry::instance().Register("Conv2D", BuildConv2DOp);
+    OperatorRegistry::instance().Register("Conv", BuildConv2DOp);
     return true;
 }();
 

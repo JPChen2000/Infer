@@ -141,6 +141,7 @@ std::shared_ptr<OpBase> BuildMaxPoolOp(const model::NodeDesc& node, OperatorRegi
 
 bool g_avg_pool_registered = []() {
     OperatorRegistry::instance().Register("AvgPool", BuildAvgPoolOp);
+    OperatorRegistry::instance().Register("AveragePool", BuildAvgPoolOp);
     return true;
 }();
 

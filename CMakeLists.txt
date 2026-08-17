@@ -96,9 +96,13 @@ set(SRC "src/core/memory.cc"
     "src/operator/register_all.cc"
     "src/operator/conv2d_op.cc"
     "src/operator/add_op.cc"
+    "src/operator/batch_normalization_op.cc"
+    "src/operator/div_op.cc"
+    "src/operator/erf_op.cc"
     "src/operator/concat_op.cc"
     "src/operator/fc_op.cc"
     "src/operator/flatten_op.cc"
+    "src/operator/global_average_pool_op.cc"
     "src/operator/gemm_op.cc"
     "src/operator/identity_op.cc"
     "src/operator/matmul_op.cc"
@@ -115,11 +119,27 @@ set(SRC "src/core/memory.cc"
     "src/operator/sigmoid_op.cc"
     "src/operator/split_op.cc"
     "src/operator/transpose_op.cc"
+    "src/operator/unsqueeze_op.cc"
+    "src/operator/squeeze_op.cc"
+    "src/operator/cast_op.cc"
+    "src/operator/reduce_mean_op.cc"
+    "src/operator/gather_op.cc"
+    "src/operator/equal_op.cc"
+    "src/operator/sqrt_op.cc"
+    "src/operator/sub_op.cc"
+    "src/operator/tanh_op.cc"
+    "src/operator/shape_op.cc"
+    "src/operator/expand_op.cc"
+    "src/operator/where_op.cc"
     "src/operator/yolo_decode_op.cc"
     "src/kernel/common/add.cc"
+    "src/kernel/common/batch_normalization.cc"
+    "src/kernel/common/div.cc"
+    "src/kernel/common/erf.cc"
     "src/kernel/common/concat.cc"
     "src/kernel/common/conv2d.cc"
     "src/kernel/common/fc.cc"
+    "src/kernel/common/global_average_pool.cc"
     "src/kernel/common/flatten.cc"
     "src/kernel/common/gemm.cc"
     "src/kernel/common/identity.cc"
@@ -136,7 +156,20 @@ set(SRC "src/core/memory.cc"
     "src/kernel/common/sigmoid.cc"
     "src/kernel/common/split.cc"
     "src/kernel/common/transpose.cc"
+    "src/kernel/common/unsqueeze.cc"
+    "src/kernel/common/squeeze.cc"
+    "src/kernel/common/cast.cc"
+    "src/kernel/common/reduce_mean.cc"
+    "src/kernel/common/gather.cc"
+    "src/kernel/common/equal.cc"
+    "src/kernel/common/shape.cc"
+    "src/kernel/common/expand.cc"
+    "src/kernel/common/where.cc"
+    "src/kernel/common/sqrt.cc"
+    "src/kernel/common/sub.cc"
+    "src/kernel/common/tanh.cc"
     "src/kernel/common/resize.cc"
+    "src/kernel/common/resize_concat.cc"
     "src/kernel/common/yolo_decode.cc"
     "src/kernel/x86/add.cc"
     "src/kernel/x86/concat.cc"
@@ -163,17 +196,23 @@ set(SRC "src/core/memory.cc"
     "src/kernel/x86/softmax.cc"
     "src/kernel/x86/transpose.cc"
     "src/kernel/x86/yolo_decode.cc"
+    "src/demo/classification_demo.cc"
+    "src/demo/classification_runner.cc"
     "src/demo/image_io.cc"
     "src/demo/yolov5_postprocess.cc"
     "src/demo/yolov5_runner.cc")
 
 set(CUDA_SRC
     "src/kernel/cuda/add.cu"
+    "src/kernel/cuda/batch_normalization.cu"
+    "src/kernel/cuda/div.cu"
+    "src/kernel/cuda/erf.cu"
     "src/kernel/cuda/concat.cu"
     "src/kernel/cuda/conv2d.cu"
     "src/kernel/cuda/fc.cu"
     "src/kernel/cuda/flatten.cu"
     "src/kernel/cuda/gemm.cu"
+    "src/kernel/cuda/global_average_pool.cu"
     "src/kernel/cuda/identity.cu"
     "src/kernel/cuda/matmul.cu"
     "src/kernel/cuda/mul.cu"
@@ -190,7 +229,18 @@ set(CUDA_SRC
     "src/kernel/cuda/slice.cu"
     "src/kernel/cuda/softmax.cu"
     "src/kernel/cuda/split.cu"
+    "src/kernel/cuda/unsqueeze.cu"
+    "src/kernel/cuda/squeeze.cu"
+    "src/kernel/cuda/cast.cu"
+    "src/kernel/cuda/reduce_mean.cu"
+    "src/kernel/cuda/gather.cu"
+    "src/kernel/cuda/equal.cu"
+    "src/kernel/cuda/expand.cu"
+    "src/kernel/cuda/where.cu"
     "src/kernel/cuda/transpose.cu"
+    "src/kernel/cuda/sqrt.cu"
+    "src/kernel/cuda/sub.cu"
+    "src/kernel/cuda/tanh.cu"
     "src/kernel/cuda/yolo_decode.cu")
 
 if (FEATHER_WITH_CUDA)
@@ -218,6 +268,9 @@ endif()
 
 add_executable(yolov5_demo demo/yolov5_infer_demo.cc)
 add_executable(yolov5_benchmark_demo demo/yolov5_benchmark_demo.cc)
+add_executable(resnet_demo demo/resnet_infer_demo.cc)
+add_executable(resent_demo demo/resent_infer_demo.cc)
+add_executable(repvgg_demo demo/repvgg_infer_demo.cc)
 add_executable(fth_layout_convert demo/fth_layout_convert_demo.cc)
 add_executable(x86_conv_benchmark_demo demo/x86_conv_benchmark_demo.cc)
 add_executable(x86_linear_benchmark_demo demo/x86_linear_benchmark_demo.cc)
@@ -259,6 +312,15 @@ set_source_files_properties(
 target_include_directories(yolov5_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(yolov5_demo infer)
+target_include_directories(resnet_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(resnet_demo infer)
+target_include_directories(resent_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(resent_demo infer)
+target_include_directories(repvgg_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(repvgg_demo infer)
 target_include_directories(yolov5_benchmark_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(yolov5_benchmark_demo infer CONAN_PKG::benchmark)

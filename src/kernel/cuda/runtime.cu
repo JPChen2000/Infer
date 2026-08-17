@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -235,6 +236,14 @@ int WarmupCudaRuntime() {
         return -1;
     }
     return EnsureInferenceStreamCreated();
+}
+
+std::string CudaLastErrorMessage() {
+    const auto status = cudaGetLastError();
+    if (status == cudaSuccess) {
+        return "no CUDA error";
+    }
+    return cudaGetErrorString(status);
 }
 
 cudaStream_t InferenceStream() {

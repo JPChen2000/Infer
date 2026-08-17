@@ -28,9 +28,16 @@ int RunGemm(feather::operators::GemmParam* param, const char* timer_name) {
     if (param == nullptr || param->a == nullptr || param->b == nullptr || param->out == nullptr) {
         return -1;
     }
+    if (param->a->dims().size() != 2 || param->b->dims().size() != 2 || param->trans_a) {
+        return -1;
+    }
     const int64_t m = param->a->dims()[0];
     const int64_t k = param->a->dims()[1];
-    const int64_t n = param->b->dims()[1];
+    const int64_t b_k = param->trans_b ? param->b->dims()[1] : param->b->dims()[0];
+    const int64_t n = param->trans_b ? param->b->dims()[0] : param->b->dims()[1];
+    if (k != b_k) {
+        return -1;
+    }
     cuda_detail::DeviceBuffer<T> a;
     cuda_detail::DeviceBuffer<T> b;
     cuda_detail::DeviceBuffer<T> bias;
@@ -49,14 +56,14 @@ int RunGemm(feather::operators::GemmParam* param, const char* timer_name) {
         bias_ptr = bias.get();
         bias_mode = param->bias->dims().size() == 1 ? 1 : 2;
     }
-    if (cuda_detail::LaunchCublasMatMul<dtype>(a.get(), b.get(), out.get(), m, k, n) != 0) {
+    if (cuda_detail::LaunchCublasMatMul<dtype>(a.get(), b.get(), out.get(), m, k, n, param->alpha, param->trans_b) != 0) {
         return -1;
     }
     if (bias_ptr != nullptr) {
         const int64_t total = m * n;
-        cuda_detail::AddBiasKernelCuda<T>
+        cuda_detail::AddScaledBiasKernelCuda<T>
             <<<static_cast<int>(cuda_detail::DivUp(total, cuda_detail::kCudaThreads)), cuda_detail::kCudaThreads, 0,
-               cuda_detail::InferenceStream()>>>(out.get(), bias_ptr, m, n, bias_mode);
+               cuda_detail::InferenceStream()>>>(out.get(), bias_ptr, m, n, bias_mode, param->beta);
     }
     if (cuda_detail::CudaCheck(cudaGetLastError()) != 0) {
         return -1;

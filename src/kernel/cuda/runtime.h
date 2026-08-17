@@ -8,6 +8,7 @@
 #endif
 
 #include <cstddef>
+#include <string>
 
 #include "core/tensor.h"
 
@@ -26,6 +27,7 @@ struct TensorCacheStats {
 void SetDeferredHostSync(bool enabled);
 bool DeferredHostSyncEnabled();
 int WarmupCudaRuntime();
+std::string CudaLastErrorMessage();
 cudaStream_t InferenceStream();
 int SynchronizeInferenceStream();
 void InvalidateTensorDevice(const Tensor* tensor);

@@ -16,6 +16,12 @@ class SliceKernel : public KernelBase {
     int32_t compute() override;
 };
 
+template <>
+class SliceKernel<DeviceType::COMMON, DataType::INT64> : public KernelBase {
+   public:
+    int32_t compute() override;
+};
+
 }  // namespace kernel
 }  // namespace feather
 

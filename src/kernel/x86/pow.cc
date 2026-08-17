@@ -18,9 +18,14 @@ int32_t ComputePowFallback(feather::operators::PowParam* param) {
         return -1;
     }
 
+    float exponent = param->exponent;
+    if (param->exponent_tensor != nullptr && !ReadScalarFloatTensor(param->exponent_tensor.get(), &exponent)) {
+        return -1;
+    }
+
     param->out->set_data_type(dtype);
     for (int64_t i = 0; i < param->input->numel(); ++i) {
-        TensorIO<dtype>::Write(param->out.get(), i, std::pow(TensorIO<dtype>::Read(param->input.get(), i), param->exponent));
+        TensorIO<dtype>::Write(param->out.get(), i, std::pow(TensorIO<dtype>::Read(param->input.get(), i), exponent));
     }
     return 0;
 }
@@ -44,7 +49,10 @@ int32_t PowKernel<DeviceType::X86, DataType::FP32>::compute() {
     const float* input = param->input->data<float>();
     float* output = param->out->mutable_data<float>();
     const int64_t numel = param->input->numel();
-    const float exponent = param->exponent;
+    float exponent = param->exponent;
+    if (param->exponent_tensor != nullptr && !ReadScalarFloatTensor(param->exponent_tensor.get(), &exponent)) {
+        return -1;
+    }
 
     alignas(32) float values[8];
     int64_t i = 0;
@@ -77,7 +85,10 @@ int32_t PowKernel<DeviceType::X86, DataType::FP16>::compute() {
     const uint16_t* input = param->input->data<uint16_t>();
     uint16_t* output = param->out->mutable_data<uint16_t>();
     const int64_t numel = param->input->numel();
-    const float exponent = param->exponent;
+    float exponent = param->exponent;
+    if (param->exponent_tensor != nullptr && !ReadScalarFloatTensor(param->exponent_tensor.get(), &exponent)) {
+        return -1;
+    }
 
     alignas(32) float values[8];
     int64_t i = 0;
