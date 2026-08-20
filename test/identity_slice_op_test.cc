@@ -146,6 +146,13 @@ TEST(identity_slice_op_test, X86Fp16IdentityUsesRegisteredKernel) {
     EXPECT_NE(x86_kernel, nullptr);
 }
 
+TEST(identity_slice_op_test, X86Bf16IdentityUsesRegisteredKernel) {
+    auto kernel = KernelDispatcher::instance().create(DeviceType::X86, DataType::BF16, "Identity");
+    ASSERT_NE(kernel, nullptr);
+    auto* x86_kernel = dynamic_cast<feather::kernel::IdentityKernel<DeviceType::X86, DataType::BF16>*>(kernel.get());
+    EXPECT_NE(x86_kernel, nullptr);
+}
+
 TEST(identity_slice_op_test, CommonFp16SliceKernelRunsCorrectly) {
     auto input = std::make_shared<Tensor>();
     input->Assign<uint16_t>({feather::FloatToHalf(1.0f), feather::FloatToHalf(2.0f), feather::FloatToHalf(3.0f),

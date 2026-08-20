@@ -2,6 +2,7 @@
 #define FEATHER_INFER_DATA_TENSOR_H
 
 #include <cstring>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -69,12 +70,16 @@ class Tensor {
     void set_data_type(const DataType &data_type) { m_data_type = data_type; }
     DataLayout layout() const { return m_layout; }
     void set_layout(DataLayout layout) { m_layout = layout; }
+    bool is_immutable() const { return m_immutable; }
+    void set_immutable(bool immutable) { m_immutable = immutable; }
+    uint64_t mutation_version() const { return m_mutation_version; }
 
     template <typename T>
     T *mutable_data() {
         m_data_type = DataTypeTrait<T>::type();
         m_memory_size = m_dims.production() * sizeof(T);
         CHECK(m_memory_size <= m_buffer->size());
+        ++m_mutation_version;
         return reinterpret_cast<T *>(static_cast<char *>(m_buffer->data()) + m_offset);
     }
 
@@ -83,6 +88,7 @@ class Tensor {
         m_data_type = DataTypeTrait<T>::type();
         m_memory_size = memory_size;
         CHECK(m_memory_size <= m_buffer->size());
+        ++m_mutation_version;
         return reinterpret_cast<T *>(static_cast<char *>(m_buffer->data()) + m_offset);
     }
 
@@ -95,6 +101,7 @@ class Tensor {
     void clear() {
         m_buffer->deallocate();
         m_offset = 0;
+        ++m_mutation_version;
     }
 
     size_t data_size() const { return this->dims().production(); }
@@ -151,6 +158,8 @@ class Tensor {
     std::shared_ptr<Buffer> m_buffer;
     size_t m_memory_size{};
     size_t m_offset{};
+    bool m_immutable{false};
+    uint64_t m_mutation_version{};
 };
 
 }  // namespace feather

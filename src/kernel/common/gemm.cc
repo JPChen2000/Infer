@@ -12,6 +12,19 @@ namespace kernel {
 
 namespace {
 
+bool IsVectorBias(const Tensor* bias, int64_t n) {
+    if (bias == nullptr || !bias->IsInitialized() || bias->dims().empty() ||
+        bias->dims()[bias->dims().size() - 1] != n) {
+        return false;
+    }
+    for (size_t index = 0; index + 1 < bias->dims().size(); ++index) {
+        if (bias->dims()[index] != 1) {
+            return false;
+        }
+    }
+    return bias->numel() == n;
+}
+
 bool g_gemm_kernels_registered = []() {
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP32, "Gemm",
                                                 []() { return std::make_unique<GemmKernel<DeviceType::COMMON, DataType::FP32>>(); });
@@ -50,7 +63,7 @@ int32_t ComputeGemmCommon(feather::operators::GemmParam* param) {
             }
             sum *= param->alpha;
             if (param->bias != nullptr && param->bias->IsInitialized()) {
-                if (param->bias->dims().size() == 1) {
+                if (IsVectorBias(param->bias.get(), n)) {
                     sum += param->beta * TensorIO<dtype>::Read(param->bias.get(), j);
                 } else {
                     sum += param->beta * TensorIO<dtype>::Read(param->bias.get(), i * n + j);

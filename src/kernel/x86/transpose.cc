@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "src/kernel/common/kernel_io.h"
+#include "util/bf16.h"
 #include "util/timer.h"
 
 namespace feather {
@@ -58,6 +59,23 @@ bool Is2DTranspose(const feather::operators::TransposeParam* param) {
     return param != nullptr && param->input != nullptr &&
            param->input->dims().size() == 2 && param->perm.size() == 2 &&
            param->perm[0] == 1 && param->perm[1] == 0;
+}
+
+bool IsLastTwoAxesTranspose(const feather::operators::TransposeParam* param) {
+    if (param == nullptr || param->input == nullptr) {
+        return false;
+    }
+    const size_t rank = param->input->dims().size();
+    if (rank < 2 || param->perm.size() != rank) {
+        return false;
+    }
+    for (size_t axis = 0; axis + 2 < rank; ++axis) {
+        if (param->perm[axis] != static_cast<int64_t>(axis)) {
+            return false;
+        }
+    }
+    return param->perm[rank - 2] == static_cast<int64_t>(rank - 1) &&
+           param->perm[rank - 1] == static_cast<int64_t>(rank - 2);
 }
 
 bool IsYolov5HeadTranspose(const feather::operators::TransposeParam* param) {
@@ -159,13 +177,24 @@ int32_t ComputeTransposeRaw(feather::operators::TransposeParam* param, DataType 
     const auto& in_dims = param->input->dims().data();
     const auto& out_dims = param->out->dims().data();
     const T* input = param->input->data<T>();
-    T* output = param->out->mutable_data<T>();
     param->out->set_data_type(dtype);
+    T* output = static_cast<T*>(param->out->raw_data());
 
     if (Is2DTranspose(param)) {
         const int64_t rows = in_dims[0];
         const int64_t cols = in_dims[1];
         Transpose2DTiled(input, output, rows, cols);
+        return 0;
+    }
+
+    if (IsLastTwoAxesTranspose(param)) {
+        const int64_t rows = in_dims[in_dims.size() - 2];
+        const int64_t cols = in_dims.back();
+        const int64_t matrix_size = rows * cols;
+        const int64_t matrix_count = param->input->numel() / matrix_size;
+        for (int64_t matrix = 0; matrix < matrix_count; ++matrix) {
+            Transpose2DTiled(input + matrix * matrix_size, output + matrix * matrix_size, rows, cols);
+        }
         return 0;
     }
 
@@ -217,6 +246,16 @@ int32_t TransposeKernel<DeviceType::X86, DataType::FP16>::compute() {
     return ComputeTransposeRaw<uint16_t>(param, DataType::FP16);
 }
 
+template <>
+int32_t TransposeKernel<DeviceType::X86, DataType::BF16>::compute() {
+    AutoTimer timer("X86::Transpose::BF16");
+    auto* param = static_cast<feather::operators::TransposeParam*>(param_);
+    if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::BF16) {
+        return ComputeTransposeFallback<DataType::BF16>(param);
+    }
+    return ComputeTransposeRaw<BFloat16>(param, DataType::BF16);
+}
+
 void EnsureX86TransposeKernelsRegistered() {
     static bool registered = []() {
         KernelDispatcher::instance().registerKernel(
@@ -225,6 +264,9 @@ void EnsureX86TransposeKernelsRegistered() {
         KernelDispatcher::instance().registerKernel(
             DeviceType::X86, DataType::FP16, "Transpose",
             []() { return std::make_unique<TransposeKernel<DeviceType::X86, DataType::FP16>>(); });
+        KernelDispatcher::instance().registerKernel(
+            DeviceType::X86, DataType::BF16, "Transpose",
+            []() { return std::make_unique<TransposeKernel<DeviceType::X86, DataType::BF16>>(); });
         return true;
     }();
     (void)registered;

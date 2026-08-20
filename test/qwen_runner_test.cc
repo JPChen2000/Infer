@@ -10,6 +10,7 @@
 #include <cuda_runtime.h>
 #endif
 
+#include "demo/qwen_demo.h"
 #include "demo/qwen_runner.h"
 #include "model/model_io.h"
 
@@ -83,6 +84,69 @@ bool HasCudaDevice() {
 
 }  // namespace
 
+TEST(qwen_demo_test, BuffersIncompleteUtf8UntilTheNextChunk) {
+    feather::demo::QwenUtf8Stream stream;
+
+    EXPECT_EQ(stream.Push("hello"), "hello");
+    EXPECT_TRUE(stream.Push("\xE4").empty());
+    EXPECT_EQ(stream.Push("\xBD\xA0"), "\xE4\xBD\xA0");
+    EXPECT_TRUE(stream.Finish().empty());
+
+    feather::demo::QwenUtf8Stream emoji;
+    EXPECT_TRUE(emoji.Push("\xF0\x9F").empty());
+    EXPECT_EQ(emoji.Push("\x98\x80"), "\xF0\x9F\x98\x80");
+
+    feather::demo::QwenUtf8Stream malformed;
+    EXPECT_EQ(malformed.Push("\xC0ok"), "\xEF\xBF\xBDok");
+
+    feather::demo::QwenUtf8Stream truncated;
+    EXPECT_TRUE(truncated.Push("\xE4").empty());
+    EXPECT_EQ(truncated.Finish(), "\xEF\xBF\xBD");
+}
+
+TEST(qwen_runner_test, StreamsGeneratedTokensThroughCallback) {
+    const auto model_path = WriteAutoregressiveFixture();
+    feather::demo::QwenRunner runner;
+    ASSERT_EQ(runner.Load(model_path.string(), feather::demo::QwenBackend::kCommon), 0) << runner.LastError();
+
+    std::vector<int64_t> streamed;
+    std::vector<int64_t> processed_at_callback;
+    ASSERT_EQ(runner.GenerateStream({0}, 3, {2}, [&runner, &streamed, &processed_at_callback](int64_t token_id) {
+                  streamed.push_back(token_id);
+                  processed_at_callback.push_back(runner.TokensProcessed());
+              }),
+              0)
+        << runner.LastError();
+    EXPECT_EQ(streamed, (std::vector<int64_t>{1, 3, 2}));
+    EXPECT_EQ(processed_at_callback, (std::vector<int64_t>{1, 2, 3}));
+    EXPECT_EQ(runner.TokensProcessed(), 4);
+}
+
+TEST(qwen_runner_test, ExposesRuntimeProfileSummariesWhenEnabled) {
+    const auto model_path = WriteAutoregressiveFixture();
+    feather::demo::QwenRunner runner;
+    ASSERT_EQ(runner.Load(model_path.string(), feather::demo::QwenBackend::kCommon), 0) << runner.LastError();
+
+    runner.SetRuntimeProfilingEnabled(true);
+    std::vector<int64_t> generated;
+    ASSERT_EQ(runner.Generate({0}, 1, {}, &generated), 0) << runner.LastError();
+
+    const auto& summaries = runner.RuntimeProfileSummaries();
+    ASSERT_FALSE(summaries.empty());
+    EXPECT_EQ(summaries[0].call_count, 2);
+    EXPECT_EQ(summaries[0].op_type, "Gather");
+}
+
+TEST(qwen_runner_test, PreservesOutputWhenPromptValidationFails) {
+    const auto model_path = WriteAutoregressiveFixture();
+    feather::demo::QwenRunner runner;
+    ASSERT_EQ(runner.Load(model_path.string(), feather::demo::QwenBackend::kCommon), 0) << runner.LastError();
+
+    std::vector<int64_t> generated = {42};
+    EXPECT_NE(runner.Generate({}, 1, {}, &generated), 0);
+    EXPECT_EQ(generated, (std::vector<int64_t>{42}));
+}
+
 TEST(qwen_runner_test, GreedilyGeneratesTokensAndPersistsExplicitState) {
     const auto model_path = WriteAutoregressiveFixture();
     feather::demo::QwenRunner runner;
@@ -145,6 +209,28 @@ TEST(qwen_runner_test, DefaultExportMatchesReferenceFirstDecodeToken) {
     // safetensors checkpoint. This catches incorrect per-head q/gate packing
     // in the atomic full-attention graph.
     EXPECT_EQ(generated, (std::vector<int64_t>{10748}));
+}
+
+TEST(qwen_runner_test, X86BackendMatchesCommonForReferenceFirstDecodeToken) {
+    const auto model_path =
+        std::filesystem::path("models/llm/qwen3.5-0.8b/qwen3.5-0.8b_decode_bf16_ctx8.fth");
+    if (!std::filesystem::is_regular_file(model_path)) {
+        GTEST_SKIP() << "default Qwen FTH asset is not present";
+    }
+
+    feather::demo::QwenRunner common_runner;
+    ASSERT_EQ(common_runner.Load(model_path.string(), feather::demo::QwenBackend::kCommon), 0)
+        << common_runner.LastError();
+    std::vector<int64_t> common_generated;
+    ASSERT_EQ(common_runner.Generate({151644}, 1, {}, &common_generated), 0) << common_runner.LastError();
+
+    feather::demo::QwenRunner x86_runner;
+    ASSERT_EQ(x86_runner.Load(model_path.string(), feather::demo::QwenBackend::kX86), 0) << x86_runner.LastError();
+    std::vector<int64_t> x86_generated;
+    ASSERT_EQ(x86_runner.Generate({151644}, 1, {}, &x86_generated), 0) << x86_runner.LastError();
+
+    EXPECT_EQ(common_generated, (std::vector<int64_t>{10748}));
+    EXPECT_EQ(x86_generated, common_generated);
 }
 
 #ifdef FEATHER_WITH_CUDA

@@ -10,10 +10,13 @@
 #include "pass/dead_node_elimination_pass.h"
 #include "pass/identity_elimination_pass.h"
 #include "pass/matmul_add_fusion_pass.h"
+#include "pass/qwen_gated_delta_fusion_pass.h"
+#include "pass/qwen_matmul_add_fusion_pass.h"
 #include "pass/no_op_elimination_pass.h"
 #include "pass/resize_concat_fusion_pass.h"
 #include "pass/reshape_chain_elimination_pass.h"
 #include "pass/sigmoid_mul_fusion_pass.h"
+#include "core/graph_lowering.h"
 #include "core/static_graph.h"
 #include "core/tensor.h"
 #include "pass/yolo_decode_fusion_pass.h"
@@ -25,6 +28,8 @@ using feather::DeviceType;
 using feather::GraphPass;
 using feather::IdentityEliminationPass;
 using feather::MatMulAddFusionPass;
+using feather::QwenGatedDeltaFusionPass;
+using feather::QwenMatMulAddFusionPass;
 using feather::NoOpEliminationPass;
 using feather::PassManager;
 using feather::ResizeConcatFusionPass;
@@ -216,6 +221,203 @@ ModelDesc BuildMatMulAddModelDesc(bool keep_matmul_output_live = false) {
     add.outputs = {"output"};
 
     model.graph.nodes = {matmul, add};
+    return model;
+}
+
+ModelDesc BuildQwenMatMulAddModelDesc() {
+    ModelDesc model;
+    model.name = "qwen_matmul_add_graph";
+    model.version = 1;
+    model.graph.name = "main";
+    model.graph.inputs = {"a", "b", "residual"};
+    model.graph.outputs = {"output"};
+
+    auto value = [](const std::string& name, std::vector<int64_t> dims) {
+        ValueDesc desc;
+        desc.tensor.name = name;
+        desc.tensor.dims = std::move(dims);
+        desc.tensor.data_type = DataType::FP32;
+        return desc;
+    };
+
+    model.graph.values = {value("a", {1, 1, 3}), value("b", {3, 4}), value("residual", {1, 1, 4}),
+                          value("matmul_out", {1, 1, 4}), value("output", {1, 1, 4})};
+
+    NodeDesc matmul;
+    matmul.name = "qwen_matmul0";
+    matmul.op_type = "MatMul";
+    matmul.inputs = {"a", "b"};
+    matmul.outputs = {"matmul_out"};
+
+    NodeDesc add;
+    add.name = "qwen_add0";
+    add.op_type = "Add";
+    add.inputs = {"matmul_out", "residual"};
+    add.outputs = {"output"};
+
+    model.graph.nodes = {matmul, add};
+    return model;
+}
+
+ModelDesc BuildQwenGatedDeltaModelDesc() {
+    ModelDesc model;
+    model.name = "qwen_gated_delta_graph";
+    model.version = 1;
+    model.graph.name = "main";
+    model.graph.inputs = {"state", "k", "v", "beta", "decay", "q"};
+    model.graph.outputs = {"next_state", "core"};
+
+    auto value = [](const std::string& name, std::vector<int64_t> dims) {
+        ValueDesc desc;
+        desc.tensor.name = name;
+        desc.tensor.dims = std::move(dims);
+        desc.tensor.data_type = DataType::FP32;
+        return desc;
+    };
+
+    model.graph.values = {
+        value("state", {1, 2, 3, 4}),
+        value("k", {1, 2, 3}),
+        value("v", {1, 2, 4}),
+        value("beta", {1, 2}),
+        value("decay", {1, 2}),
+        value("q", {1, 2, 3}),
+        value("decay_unsqueezed", {1, 2, 1}),
+        value("decay_broadcast", {1, 2, 1, 1}),
+        value("state_decay", {1, 2, 3, 4}),
+        value("k_col", {1, 2, 3, 1}),
+        value("kv_mem_full", {1, 2, 3, 4}),
+        value("kv_mem", {1, 2, 4}),
+        value("v_delta", {1, 2, 4}),
+        value("beta_broadcast", {1, 2, 1}),
+        value("delta", {1, 2, 4}),
+        value("delta_row", {1, 2, 1, 4}),
+        value("update", {1, 2, 3, 4}),
+        value("next_state", {1, 2, 3, 4}),
+        value("q_col", {1, 2, 3, 1}),
+        value("output_full", {1, 2, 3, 4}),
+        value("core", {1, 2, 4}),
+    };
+
+    NodeDesc decay_unsqueeze;
+    decay_unsqueeze.name = "decay_unsqueeze";
+    decay_unsqueeze.op_type = "Unsqueeze";
+    decay_unsqueeze.inputs = {"decay"};
+    decay_unsqueeze.outputs = {"decay_unsqueezed"};
+    decay_unsqueeze.attributes["axes"] = std::vector<int64_t>{2};
+
+    NodeDesc decay_unsqueeze_last;
+    decay_unsqueeze_last.name = "decay_unsqueeze_last";
+    decay_unsqueeze_last.op_type = "Unsqueeze";
+    decay_unsqueeze_last.inputs = {"decay_unsqueezed"};
+    decay_unsqueeze_last.outputs = {"decay_broadcast"};
+    decay_unsqueeze_last.attributes["axes"] = std::vector<int64_t>{3};
+
+    NodeDesc state_decay;
+    state_decay.name = "state_decay";
+    state_decay.op_type = "Mul";
+    state_decay.inputs = {"state", "decay_broadcast"};
+    state_decay.outputs = {"state_decay"};
+
+    NodeDesc k_col;
+    k_col.name = "k_col";
+    k_col.op_type = "Unsqueeze";
+    k_col.inputs = {"k"};
+    k_col.outputs = {"k_col"};
+    k_col.attributes["axes"] = std::vector<int64_t>{3};
+
+    NodeDesc kv_mem_full;
+    kv_mem_full.name = "kv_mem_full";
+    kv_mem_full.op_type = "Mul";
+    kv_mem_full.inputs = {"state_decay", "k_col"};
+    kv_mem_full.outputs = {"kv_mem_full"};
+
+    NodeDesc kv_mem;
+    kv_mem.name = "kv_mem";
+    kv_mem.op_type = "ReduceSum";
+    kv_mem.inputs = {"kv_mem_full"};
+    kv_mem.outputs = {"kv_mem"};
+    kv_mem.attributes["axes"] = std::vector<int64_t>{2};
+    kv_mem.attributes["keepdims"] = static_cast<int64_t>(0);
+
+    NodeDesc v_delta;
+    v_delta.name = "v_delta";
+    v_delta.op_type = "Sub";
+    v_delta.inputs = {"v", "kv_mem"};
+    v_delta.outputs = {"v_delta"};
+
+    NodeDesc beta_unsqueeze;
+    beta_unsqueeze.name = "beta_unsqueeze";
+    beta_unsqueeze.op_type = "Unsqueeze";
+    beta_unsqueeze.inputs = {"beta"};
+    beta_unsqueeze.outputs = {"beta_broadcast"};
+    beta_unsqueeze.attributes["axes"] = std::vector<int64_t>{2};
+
+    NodeDesc delta;
+    delta.name = "delta";
+    delta.op_type = "Mul";
+    delta.inputs = {"v_delta", "beta_broadcast"};
+    delta.outputs = {"delta"};
+
+    NodeDesc delta_row;
+    delta_row.name = "delta_row";
+    delta_row.op_type = "Unsqueeze";
+    delta_row.inputs = {"delta"};
+    delta_row.outputs = {"delta_row"};
+    delta_row.attributes["axes"] = std::vector<int64_t>{2};
+
+    NodeDesc update;
+    update.name = "update";
+    update.op_type = "Mul";
+    update.inputs = {"k_col", "delta_row"};
+    update.outputs = {"update"};
+
+    NodeDesc next_state;
+    next_state.name = "next_state_update";
+    next_state.op_type = "Add";
+    next_state.inputs = {"state_decay", "update"};
+    next_state.outputs = {"next_state"};
+
+    NodeDesc q_col;
+    q_col.name = "q_col";
+    q_col.op_type = "Unsqueeze";
+    q_col.inputs = {"q"};
+    q_col.outputs = {"q_col"};
+    q_col.attributes["axes"] = std::vector<int64_t>{3};
+
+    NodeDesc output_full;
+    output_full.name = "output_full";
+    output_full.op_type = "Mul";
+    output_full.inputs = {"next_state", "q_col"};
+    output_full.outputs = {"output_full"};
+
+    NodeDesc core;
+    core.name = "core";
+    core.op_type = "ReduceSum";
+    core.inputs = {"output_full"};
+    core.outputs = {"core"};
+    core.attributes["axes"] = std::vector<int64_t>{2};
+    core.attributes["keepdims"] = static_cast<int64_t>(0);
+
+    model.graph.nodes = {decay_unsqueeze, decay_unsqueeze_last, state_decay, k_col, kv_mem_full, kv_mem, v_delta,
+                         beta_unsqueeze, delta, delta_row, update, next_state, q_col, output_full, core};
+    return model;
+}
+
+ModelDesc BuildQwenGatedDeltaReversedSubModelDesc() {
+    auto model = BuildQwenGatedDeltaModelDesc();
+    for (auto& node : model.graph.nodes) {
+        if (node.name == "v_delta") {
+            node.inputs = {"kv_mem", "v"};
+            break;
+        }
+    }
+    return model;
+}
+
+ModelDesc BuildQwenGatedDeltaIntermediateOutputModelDesc() {
+    auto model = BuildQwenGatedDeltaModelDesc();
+    model.graph.outputs.push_back("state_decay");
     return model;
 }
 
@@ -511,6 +713,71 @@ void BindMatMulAddInputs(StaticGraph* graph) {
     ASSERT_EQ(graph->SetTensor("a", a), 0);
     ASSERT_EQ(graph->SetTensor("b", b), 0);
     ASSERT_EQ(graph->SetTensor("bias", bias), 0);
+}
+
+void BindQwenMatMulAddInputs(StaticGraph* graph) {
+    auto a = std::make_shared<Tensor>();
+    a->Assign<float>({1.0f, 2.0f, 3.0f}, {1, 1, 3});
+    auto b = std::make_shared<Tensor>();
+    b->Assign<float>({1.0f, 0.0f, 2.0f, 1.0f, 0.0f, 1.0f, 3.0f, 2.0f, 1.0f, 0.0f, 1.0f, 4.0f}, {3, 4});
+    auto residual = std::make_shared<Tensor>();
+    residual->Assign<float>({0.5f, -1.0f, 1.5f, 0.0f}, {1, 1, 4});
+    ASSERT_EQ(graph->SetTensor("a", a), 0);
+    ASSERT_EQ(graph->SetTensor("b", b), 0);
+    ASSERT_EQ(graph->SetTensor("residual", residual), 0);
+}
+
+void BindQwenGatedDeltaInputs(StaticGraph* graph) {
+    auto state = std::make_shared<Tensor>();
+    state->Assign<float>({
+        0.5f, -0.25f, 0.75f, 1.0f,
+        -0.5f, 0.25f, -0.75f, 0.5f,
+        0.125f, -1.0f, 0.625f, -0.375f,
+        -0.75f, 0.25f, 1.5f, -0.5f,
+        0.375f, -0.625f, 0.875f, 0.125f,
+        -0.25f, 0.5f, -1.25f, 0.75f,
+    }, {1, 2, 3, 4});
+    auto k = std::make_shared<Tensor>();
+    k->Assign<float>({0.25f, -0.5f, 0.75f, -0.4f, 0.6f, 0.2f}, {1, 2, 3});
+    auto v = std::make_shared<Tensor>();
+    v->Assign<float>({0.5f, -0.25f, 0.75f, -1.0f, -0.5f, 0.25f, 0.125f, 0.875f}, {1, 2, 4});
+    auto beta = std::make_shared<Tensor>();
+    beta->Assign<float>({0.2f, 0.35f}, {1, 2});
+    auto decay = std::make_shared<Tensor>();
+    decay->Assign<float>({0.9f, 0.8f}, {1, 2});
+    auto q = std::make_shared<Tensor>();
+    q->Assign<float>({0.3f, -0.1f, 0.5f, -0.2f, 0.4f, 0.6f}, {1, 2, 3});
+    ASSERT_EQ(graph->SetTensor("state", state), 0);
+    ASSERT_EQ(graph->SetTensor("k", k), 0);
+    ASSERT_EQ(graph->SetTensor("v", v), 0);
+    ASSERT_EQ(graph->SetTensor("beta", beta), 0);
+    ASSERT_EQ(graph->SetTensor("decay", decay), 0);
+    ASSERT_EQ(graph->SetTensor("q", q), 0);
+}
+
+std::pair<std::vector<float>, std::vector<float>> RunQwenGatedDeltaGraph(DeviceType device, bool apply_fusion) {
+    StaticGraph graph;
+    graph.SetKernelDevice(device);
+    if (graph.SetModel(BuildQwenGatedDeltaModelDesc()) != 0) return {};
+    BindQwenGatedDeltaInputs(&graph);
+    if (graph.Build() != 0) return {};
+
+    auto pass_manager = std::make_shared<PassManager>();
+    if (apply_fusion) pass_manager->AddPass(std::make_unique<QwenGatedDeltaFusionPass>());
+    graph.SetPassManager(pass_manager);
+    if (graph.ApplyPasses() != 0) return {};
+
+    feather::RuntimeGraph runtime;
+    feather::GraphLowering lowering;
+    if (lowering.Lower(graph, &runtime) != 0 || runtime.Run() != 0) return {};
+    const auto next_state = runtime.GetTensor("next_state");
+    const auto core = runtime.GetTensor("core");
+    if (next_state == nullptr || core == nullptr || next_state->data_type() != DataType::FP32 ||
+        core->data_type() != DataType::FP32) {
+        return {};
+    }
+    return {{next_state->data<float>(), next_state->data<float>() + next_state->numel()},
+            {core->data<float>(), core->data<float>() + core->numel()}};
 }
 
 void BindNoOpGraphInputs(StaticGraph* graph, const std::vector<int64_t>& dims) {
@@ -839,16 +1106,143 @@ TEST(static_graph_pass_test, MatMulAddFusionPassSkipsWhenMatMulOutputIsGraphOutp
     EXPECT_EQ(add->op_type, "Add");
 }
 
+TEST(static_graph_pass_test, QwenMatMulAddFusionPassRewritesSingletonResidual) {
+    StaticGraph graph;
+    ASSERT_EQ(graph.SetModel(BuildQwenMatMulAddModelDesc()), 0);
+    BindQwenMatMulAddInputs(&graph);
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<QwenMatMulAddFusionPass>());
+    graph.SetPassManager(pass_manager);
+
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+    EXPECT_EQ(graph.NodeSize(), 1U);
+    EXPECT_EQ(graph.GetNode("qwen_matmul0"), nullptr);
+    const auto* fused = graph.GetNode("qwen_add0");
+    ASSERT_NE(fused, nullptr);
+    EXPECT_EQ(fused->op_type, "Gemm");
+    EXPECT_EQ(fused->inputs, (std::vector<std::string>{"a", "b", "residual"}));
+}
+
+TEST(static_graph_pass_test, QwenMatMulAddFusionPassSkipsNonQwenModel) {
+    StaticGraph graph;
+    ASSERT_EQ(graph.SetModel(BuildMatMulAddModelDesc(false)), 0);
+    BindMatMulAddInputs(&graph);
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<QwenMatMulAddFusionPass>());
+    graph.SetPassManager(pass_manager);
+
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+    EXPECT_NE(graph.GetNode("matmul0"), nullptr);
+    const auto* add = graph.GetNode("add0");
+    ASSERT_NE(add, nullptr);
+    EXPECT_EQ(add->op_type, "Add");
+}
+
+TEST(static_graph_pass_test, QwenGatedDeltaFusionPassRewritesLinearStateAndOutputOnX86) {
+    StaticGraph graph;
+    graph.SetKernelDevice(DeviceType::X86);
+    ASSERT_EQ(graph.SetModel(BuildQwenGatedDeltaModelDesc()), 0);
+    BindQwenGatedDeltaInputs(&graph);
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<QwenGatedDeltaFusionPass>());
+    graph.SetPassManager(pass_manager);
+
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+    EXPECT_EQ(graph.NodeSize(), 2U);
+    const auto* state = graph.GetNode("next_state_update");
+    ASSERT_NE(state, nullptr);
+    EXPECT_EQ(state->op_type, "QwenGatedDeltaState");
+    EXPECT_EQ(state->inputs, (std::vector<std::string>{"state", "k", "v", "beta", "decay"}));
+    const auto* output = graph.GetNode("core");
+    ASSERT_NE(output, nullptr);
+    EXPECT_EQ(output->op_type, "QwenGatedDeltaOutput");
+    EXPECT_EQ(output->inputs, (std::vector<std::string>{"next_state", "q"}));
+    EXPECT_EQ(graph.GetNode("state_decay"), nullptr);
+    EXPECT_EQ(graph.GetNode("output_full"), nullptr);
+}
+
+TEST(static_graph_pass_test, QwenGatedDeltaFusionPassPreservesStateAndCoreValues) {
+    const auto reference = RunQwenGatedDeltaGraph(DeviceType::COMMON, false);
+    const auto fused = RunQwenGatedDeltaGraph(DeviceType::X86, true);
+    ASSERT_EQ(reference.first.size(), fused.first.size());
+    ASSERT_EQ(reference.second.size(), fused.second.size());
+    ASSERT_FALSE(reference.first.empty());
+    ASSERT_FALSE(reference.second.empty());
+    for (size_t index = 0; index < reference.first.size(); ++index) {
+        EXPECT_NEAR(fused.first[index], reference.first[index], 1e-5f) << "state index=" << index;
+    }
+    for (size_t index = 0; index < reference.second.size(); ++index) {
+        EXPECT_NEAR(fused.second[index], reference.second[index], 1e-5f) << "core index=" << index;
+    }
+}
+
+TEST(static_graph_pass_test, QwenGatedDeltaFusionPassSkipsCommonDevice) {
+    StaticGraph graph;
+    graph.SetKernelDevice(DeviceType::COMMON);
+    ASSERT_EQ(graph.SetModel(BuildQwenGatedDeltaModelDesc()), 0);
+    BindQwenGatedDeltaInputs(&graph);
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<QwenGatedDeltaFusionPass>());
+    graph.SetPassManager(pass_manager);
+
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+    EXPECT_EQ(graph.NodeSize(), 15U);
+    EXPECT_EQ(graph.GetNode("next_state_update")->op_type, "Add");
+    EXPECT_EQ(graph.GetNode("core")->op_type, "ReduceSum");
+}
+
+TEST(static_graph_pass_test, QwenGatedDeltaFusionPassRequiresForwardSubtractionOrder) {
+    StaticGraph graph;
+    graph.SetKernelDevice(DeviceType::X86);
+    ASSERT_EQ(graph.SetModel(BuildQwenGatedDeltaReversedSubModelDesc()), 0);
+    BindQwenGatedDeltaInputs(&graph);
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<QwenGatedDeltaFusionPass>());
+    graph.SetPassManager(pass_manager);
+
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+    EXPECT_EQ(graph.NodeSize(), 15U);
+    EXPECT_EQ(graph.GetNode("next_state_update")->op_type, "Add");
+    EXPECT_EQ(graph.GetNode("core")->op_type, "ReduceSum");
+}
+
+TEST(static_graph_pass_test, QwenGatedDeltaFusionPassSkipsGraphOutputIntermediate) {
+    StaticGraph graph;
+    graph.SetKernelDevice(DeviceType::X86);
+    ASSERT_EQ(graph.SetModel(BuildQwenGatedDeltaIntermediateOutputModelDesc()), 0);
+    BindQwenGatedDeltaInputs(&graph);
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<QwenGatedDeltaFusionPass>());
+    graph.SetPassManager(pass_manager);
+
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+    EXPECT_EQ(graph.NodeSize(), 15U);
+    EXPECT_EQ(graph.GetNode("next_state_update")->op_type, "Add");
+    EXPECT_EQ(graph.GetNode("core")->op_type, "ReduceSum");
+}
+
 TEST(static_graph_pass_test, DefaultPassManagerIncludesGeneralFusionPasses) {
     auto pass_manager = feather::CreateDefaultPassManager();
     ASSERT_NE(pass_manager, nullptr);
-    EXPECT_EQ(pass_manager->PassCount(), 6U);
+    EXPECT_EQ(pass_manager->PassCount(), 9U);
 }
 
 TEST(static_graph_pass_test, YoloPassManagerAddsDecodeFusionOnTopOfDefaultPasses) {
     auto pass_manager = feather::CreateYoloPassManager();
     ASSERT_NE(pass_manager, nullptr);
-    EXPECT_EQ(pass_manager->PassCount(), 9U);
+    EXPECT_EQ(pass_manager->PassCount(), 12U);
 }
 
 TEST(static_graph_pass_test, ReshapeChainEliminationPassRemovesInnerReshape) {

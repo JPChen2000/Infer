@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "src/kernel/common/kernel_io.h"
+#include "src/kernel/x86/elementwise.h"
 #include "util/timer.h"
 
 namespace feather {
@@ -49,13 +50,100 @@ int64_t ComputeBroadcastOffset(const std::vector<int64_t>& out_coords, const std
     return offset;
 }
 
-bool IsContiguousSameShape(const feather::operators::BinaryParam* param) {
-    if (param == nullptr || param->lhs == nullptr || param->rhs == nullptr || param->out == nullptr) {
+bool TryComputeLastDimensionBroadcastFp32(feather::operators::BinaryParam* param) {
+    if (param == nullptr || param->lhs == nullptr || param->rhs == nullptr || param->out == nullptr ||
+        !param->lhs->IsInitialized() || !param->rhs->IsInitialized() || !param->out->IsInitialized() ||
+        param->lhs->data_type() != DataType::FP32 || param->rhs->data_type() != DataType::FP32) {
         return false;
     }
-    return param->lhs->dims().data() == param->rhs->dims().data() &&
-           param->lhs->dims().data() == param->out->dims().data() &&
-           param->lhs->data_type() == param->rhs->data_type();
+
+    std::vector<int64_t> out_dims;
+    if (!InferBroadcastShape(param->lhs->dims().data(), param->rhs->dims().data(), &out_dims) || out_dims.empty() ||
+        param->out->dims().data() != out_dims) {
+        return false;
+    }
+    const int64_t inner = out_dims.back();
+    if (inner <= 0 || param->out->numel() <= 0 || param->out->numel() % inner != 0 ||
+        param->lhs->dims().size() == 0 || param->rhs->dims().size() == 0) {
+        return false;
+    }
+    const int64_t lhs_inner = param->lhs->dims()[param->lhs->dims().size() - 1];
+    const int64_t rhs_inner = param->rhs->dims()[param->rhs->dims().size() - 1];
+    if ((lhs_inner != 1 && lhs_inner != inner) || (rhs_inner != 1 && rhs_inner != inner)) {
+        return false;
+    }
+
+    const size_t out_rank = out_dims.size();
+    const size_t lhs_rank = param->lhs->dims().size();
+    const size_t rhs_rank = param->rhs->dims().size();
+    const size_t lhs_gap = out_rank - lhs_rank;
+    const size_t rhs_gap = out_rank - rhs_rank;
+    const auto lhs_strides = ComputeStrides(param->lhs->dims().data());
+    const auto rhs_strides = ComputeStrides(param->rhs->dims().data());
+    const int64_t rows = param->out->numel() / inner;
+    const size_t outer_rank = out_rank - 1;
+    std::vector<int64_t> lhs_row_steps(outer_rank, 0);
+    std::vector<int64_t> rhs_row_steps(outer_rank, 0);
+    for (size_t axis = 0; axis < outer_rank; ++axis) {
+        if (axis >= lhs_gap && param->lhs->dims()[axis - lhs_gap] != 1) {
+            lhs_row_steps[axis] = lhs_strides[axis - lhs_gap];
+        }
+        if (axis >= rhs_gap && param->rhs->dims()[axis - rhs_gap] != 1) {
+            rhs_row_steps[axis] = rhs_strides[axis - rhs_gap];
+        }
+    }
+
+    param->out->set_data_type(DataType::FP32);
+    const float* lhs = param->lhs->data<float>();
+    const float* rhs = param->rhs->data<float>();
+    float* out = static_cast<float*>(param->out->raw_data());
+    std::vector<int64_t> outer_coords(outer_rank, 0);
+    int64_t lhs_offset = 0;
+    int64_t rhs_offset = 0;
+    for (int64_t row = 0; row < rows; ++row) {
+        const float* lhs_row = lhs + lhs_offset;
+        const float* rhs_row = rhs + rhs_offset;
+        float* out_row = out + row * inner;
+        int64_t index = 0;
+        if (lhs_inner == inner && rhs_inner == inner) {
+            for (; index + 8 <= inner; index += 8) {
+                _mm256_storeu_ps(out_row + index,
+                                 _mm256_add_ps(_mm256_loadu_ps(lhs_row + index), _mm256_loadu_ps(rhs_row + index)));
+            }
+        } else if (lhs_inner == 1 && rhs_inner == inner) {
+            const __m256 lhs_value = _mm256_set1_ps(lhs_row[0]);
+            for (; index + 8 <= inner; index += 8) {
+                _mm256_storeu_ps(out_row + index,
+                                 _mm256_add_ps(lhs_value, _mm256_loadu_ps(rhs_row + index)));
+            }
+        } else if (lhs_inner == inner && rhs_inner == 1) {
+            const __m256 rhs_value = _mm256_set1_ps(rhs_row[0]);
+            for (; index + 8 <= inner; index += 8) {
+                _mm256_storeu_ps(out_row + index,
+                                 _mm256_add_ps(_mm256_loadu_ps(lhs_row + index), rhs_value));
+            }
+        } else {
+            const __m256 value = _mm256_set1_ps(lhs_row[0] + rhs_row[0]);
+            for (; index + 8 <= inner; index += 8) _mm256_storeu_ps(out_row + index, value);
+        }
+        for (; index < inner; ++index) {
+            out_row[index] = lhs_row[lhs_inner == 1 ? 0 : index] + rhs_row[rhs_inner == 1 ? 0 : index];
+        }
+
+        for (size_t reverse_axis = outer_rank; reverse_axis > 0; --reverse_axis) {
+            const size_t axis = reverse_axis - 1;
+            ++outer_coords[axis];
+            lhs_offset += lhs_row_steps[axis];
+            rhs_offset += rhs_row_steps[axis];
+            if (outer_coords[axis] < out_dims[axis]) {
+                break;
+            }
+            outer_coords[axis] = 0;
+            lhs_offset -= lhs_row_steps[axis] * out_dims[axis];
+            rhs_offset -= rhs_row_steps[axis] * out_dims[axis];
+        }
+    }
+    return true;
 }
 
 }  // namespace
@@ -99,27 +187,8 @@ int32_t AddKernel<DeviceType::X86, DataType::FP32>::compute() {
         return -1;
     }
 
-    if (!IsContiguousSameShape(param) || param->lhs->data_type() != DataType::FP32) {
-        return ComputeAddFallback<DataType::FP32>(param);
-    }
-
-    param->out->set_data_type(DataType::FP32);
-    const float* lhs = param->lhs->data<float>();
-    const float* rhs = param->rhs->data<float>();
-    float* out = param->out->mutable_data<float>();
-    const int64_t numel = param->out->numel();
-
-    int64_t i = 0;
-    for (; i + 8 <= numel; i += 8) {
-        const __m256 lhs_vec = _mm256_loadu_ps(lhs + i);
-        const __m256 rhs_vec = _mm256_loadu_ps(rhs + i);
-        const __m256 out_vec = _mm256_add_ps(lhs_vec, rhs_vec);
-        _mm256_storeu_ps(out + i, out_vec);
-    }
-    for (; i < numel; ++i) {
-        out[i] = lhs[i] + rhs[i];
-    }
-    return 0;
+    if (TryComputeLastDimensionBroadcastFp32(param)) return 0;
+    return ComputeAddFallback<DataType::FP32>(param);
 }
 
 template <>
@@ -130,7 +199,8 @@ int32_t AddKernel<DeviceType::X86, DataType::FP16>::compute() {
         return -1;
     }
 
-    if (!IsContiguousSameShape(param) || param->lhs->data_type() != DataType::FP16) {
+    if (param->lhs->dims().data() != param->rhs->dims().data() ||
+        param->lhs->dims().data() != param->out->dims().data() || param->lhs->data_type() != DataType::FP16) {
         return ComputeAddFallback<DataType::FP16>(param);
     }
 
@@ -156,6 +226,20 @@ int32_t AddKernel<DeviceType::X86, DataType::FP16>::compute() {
     return 0;
 }
 
+template <>
+int32_t AddKernel<DeviceType::X86, DataType::BF16>::compute() {
+    AutoTimer timer("X86::Add::BF16");
+    auto* param = static_cast<feather::operators::BinaryParam*>(param_);
+    if (param == nullptr || param->lhs == nullptr || param->rhs == nullptr || param->out == nullptr) {
+        return -1;
+    }
+    if (x86::elementwise_detail::TryComputeLastDimensionBroadcast<
+            x86::elementwise_detail::BinaryOperation::kAdd>(param)) {
+        return 0;
+    }
+    return ComputeAddFallback<DataType::BF16>(param);
+}
+
 void EnsureX86AddKernelsRegistered() {
     static bool registered = []() {
         KernelDispatcher::instance().registerKernel(
@@ -164,6 +248,9 @@ void EnsureX86AddKernelsRegistered() {
         KernelDispatcher::instance().registerKernel(
             DeviceType::X86, DataType::FP16, "Add",
             []() { return std::make_unique<AddKernel<DeviceType::X86, DataType::FP16>>(); });
+        KernelDispatcher::instance().registerKernel(
+            DeviceType::X86, DataType::BF16, "Add",
+            []() { return std::make_unique<AddKernel<DeviceType::X86, DataType::BF16>>(); });
         return true;
     }();
     (void)registered;

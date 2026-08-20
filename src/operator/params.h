@@ -68,6 +68,29 @@ struct MatMulParam : ParamBase {
     std::shared_ptr<Tensor> out;
 };
 
+struct QwenGatedDeltaStateParam : ParamBase {
+    std::shared_ptr<Tensor> state;
+    std::shared_ptr<Tensor> k;
+    std::shared_ptr<Tensor> v;
+    std::shared_ptr<Tensor> beta;
+    std::shared_ptr<Tensor> decay;
+    std::shared_ptr<Tensor> out;
+};
+
+struct QwenGatedDeltaOutputParam : ParamBase {
+    std::shared_ptr<Tensor> state;
+    std::shared_ptr<Tensor> q;
+    std::shared_ptr<Tensor> out;
+};
+
+struct QwenRmsNormParam : ParamBase {
+    std::shared_ptr<Tensor> input;
+    std::shared_ptr<Tensor> weight;
+    std::shared_ptr<Tensor> epsilon;
+    std::shared_ptr<Tensor> out;
+    float weight_offset{0.0f};
+};
+
 struct ReshapeParam : ParamBase {
     std::shared_ptr<Tensor> input;
     std::shared_ptr<Tensor> shape;

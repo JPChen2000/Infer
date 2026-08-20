@@ -119,7 +119,10 @@ int32_t ExpandKernel<DeviceType::COMMON, DataType::BOOL>::compute() {
 
 void EnsureCommonExpandKernelsRegistered() { (void)g_common_expand_kernels_registered; }
 
-void EnsureExpandKernelsRegistered() { EnsureCommonExpandKernelsRegistered(); }
+void EnsureExpandKernelsRegistered() {
+    EnsureCommonExpandKernelsRegistered();
+    EnsureX86ExpandKernelsRegistered();
+}
 
 }  // namespace kernel
 }  // namespace feather

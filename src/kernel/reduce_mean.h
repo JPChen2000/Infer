@@ -8,6 +8,7 @@ namespace feather {
 namespace kernel {
 
 void EnsureCommonReduceMeanKernelsRegistered();
+void EnsureX86ReduceMeanKernelsRegistered();
 void EnsureReduceMeanKernelsRegistered();
 
 template <DeviceType dev, DataType dtype>

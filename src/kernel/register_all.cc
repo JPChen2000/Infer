@@ -44,6 +44,8 @@
 #include "src/kernel/constant_of_shape.h"
 #include "src/kernel/expand.h"
 #include "src/kernel/where.h"
+#include "src/kernel/qwen_gated_delta.h"
+#include "src/kernel/qwen_rms_norm.h"
 #include "src/kernel/yolo_decode.h"
 
 namespace feather {
@@ -98,6 +100,8 @@ void EnsureBuiltinKernelsRegistered() {
     EnsureConstantOfShapeKernelsRegistered();
     EnsureExpandKernelsRegistered();
     EnsureWhereKernelsRegistered();
+    EnsureQwenGatedDeltaKernelsRegistered();
+    EnsureQwenRmsNormKernelsRegistered();
     EnsureYoloDecodeKernelsRegistered();
 #ifdef FEATHER_WITH_CUDA
     EnsureCudaKernelsRegistered();

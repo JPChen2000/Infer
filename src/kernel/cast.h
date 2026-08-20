@@ -8,6 +8,7 @@ namespace feather {
 namespace kernel {
 
 void EnsureCommonCastKernelsRegistered();
+void EnsureX86CastKernelsRegistered();
 void EnsureCastKernelsRegistered();
 
 template <DeviceType dev, DataType dtype>

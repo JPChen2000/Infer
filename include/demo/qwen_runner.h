@@ -2,6 +2,7 @@
 #define FEATHER_DEMO_QWEN_RUNNER_H
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -29,6 +30,11 @@ class QwenRunner {
     int32_t Load(const std::string& model_path, QwenBackend backend = QwenBackend::kCommon);
     int32_t Reset();
     int32_t Consume(const std::vector<int64_t>& token_ids);
+    // Calls the callback before feeding each selected token back into the decoder.
+    // Stop tokens are included so the existing state-update semantics are preserved.
+    int32_t GenerateStream(const std::vector<int64_t>& prompt_tokens, int max_new_tokens,
+                           const std::vector<int64_t>& stop_token_ids,
+                           const std::function<void(int64_t)>& on_token);
     int32_t Generate(const std::vector<int64_t>& prompt_tokens, int max_new_tokens,
                      const std::vector<int64_t>& stop_token_ids, std::vector<int64_t>* generated_tokens);
 
@@ -37,6 +43,10 @@ class QwenRunner {
     const std::string& LastError() const { return last_error_; }
     const std::string& DescribeLastBuild() const { return last_build_summary_; }
     const std::string& DescribeLastRun() const { return last_run_summary_; }
+    void SetRuntimeProfilingEnabled(bool enabled) { runtime_graph_.SetProfilingEnabled(enabled); }
+    const std::vector<RuntimeProfileSummary>& RuntimeProfileSummaries() const {
+        return runtime_graph_.ProfileSummaries();
+    }
 
    private:
     struct StateBinding {
@@ -47,6 +57,10 @@ class QwenRunner {
 
     const model::ValueDesc* FindValueDesc(const std::string& name) const;
     int32_t PrepareExecutableGraph();
+    int32_t GenerateImpl(const std::vector<int64_t>& prompt_tokens, int max_new_tokens,
+                         const std::vector<int64_t>& stop_token_ids,
+                         const std::function<void(int64_t)>& on_token,
+                         std::vector<int64_t>* generated_tokens);
     int32_t RunToken(int64_t token_id, int64_t* next_token_id);
     int32_t SetDecodeInputs(int64_t token_id);
     int32_t UpdateStates();

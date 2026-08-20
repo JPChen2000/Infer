@@ -57,7 +57,10 @@ int32_t DivKernel<DeviceType::COMMON, DataType::BF16>::compute() {
                                                     [](float lhs, float rhs) { return lhs / rhs; });
 }
 
-void EnsureDivKernelsRegistered() { (void)g_div_kernels_registered; }
+void EnsureDivKernelsRegistered() {
+    (void)g_div_kernels_registered;
+    EnsureX86DivKernelsRegistered();
+}
 
 }  // namespace kernel
 }  // namespace feather

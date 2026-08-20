@@ -32,6 +32,8 @@ TEST(runtime_profile_test, ProfileSummaryAccumulatesNodeTiming) {
     EXPECT_EQ(summaries[0].call_count, 2);
     EXPECT_DOUBLE_EQ(summaries[0].total_ms, 4.0);
     EXPECT_DOUBLE_EQ(summaries[0].avg_ms, 2.0);
+    EXPECT_DOUBLE_EQ(summaries[0].min_ms, 1.5);
+    EXPECT_DOUBLE_EQ(summaries[0].max_ms, 2.5);
 }
 
 TEST(runtime_profile_test, ProfileSummaryIsSafeForParallelNodeRecording) {

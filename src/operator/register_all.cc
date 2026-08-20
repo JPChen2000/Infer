@@ -47,6 +47,8 @@ void EnsureShapeOperatorRegistered();
 void EnsureConstantOfShapeOperatorRegistered();
 void EnsureExpandOperatorRegistered();
 void EnsureWhereOperatorRegistered();
+void EnsureQwenGatedDeltaOperatorsRegistered();
+void EnsureQwenRmsNormOperatorRegistered();
 void EnsureYoloDecodeOperatorRegistered();
 
 void EnsureBuiltinOperatorsRegistered() {
@@ -94,6 +96,8 @@ void EnsureBuiltinOperatorsRegistered() {
     EnsureConstantOfShapeOperatorRegistered();
     EnsureExpandOperatorRegistered();
     EnsureWhereOperatorRegistered();
+    EnsureQwenGatedDeltaOperatorsRegistered();
+    EnsureQwenRmsNormOperatorRegistered();
     EnsureYoloDecodeOperatorRegistered();
 }
 

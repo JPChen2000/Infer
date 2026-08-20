@@ -95,7 +95,10 @@ int32_t CastKernel<DeviceType::COMMON, DataType::BF16>::compute() {
 
 void EnsureCommonCastKernelsRegistered() { (void)g_common_cast_kernels_registered; }
 
-void EnsureCastKernelsRegistered() { EnsureCommonCastKernelsRegistered(); }
+void EnsureCastKernelsRegistered() {
+    EnsureCommonCastKernelsRegistered();
+    EnsureX86CastKernelsRegistered();
+}
 
 }  // namespace kernel
 }  // namespace feather

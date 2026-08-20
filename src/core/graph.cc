@@ -114,13 +114,16 @@ void RuntimeGraph::RecordNodeProfile(const std::string& node_name, const std::st
     auto it = std::find_if(profile_summaries_.begin(), profile_summaries_.end(),
                            [&](const RuntimeProfileSummary& summary) { return summary.node_name == node_name; });
     if (it == profile_summaries_.end()) {
-        profile_summaries_.push_back(RuntimeProfileSummary{node_name, op_type, 1, elapsed_ms, elapsed_ms});
+        profile_summaries_.push_back(
+            RuntimeProfileSummary{node_name, op_type, 1, elapsed_ms, elapsed_ms, elapsed_ms, elapsed_ms});
         return;
     }
 
     it->call_count += 1;
     it->total_ms += elapsed_ms;
     it->avg_ms = it->total_ms / static_cast<double>(it->call_count);
+    it->min_ms = std::min(it->min_ms, elapsed_ms);
+    it->max_ms = std::max(it->max_ms, elapsed_ms);
 }
 
 void RuntimeGraph::SetThreadCount(size_t count) {
@@ -176,6 +179,17 @@ int32_t RuntimeGraph::Finalize() {
         thread_pool_.reset();
         worker_count_ = 1;
         return status;
+    }
+
+    // Prepare immutable-weight kernels before the first timed inference. This
+    // keeps one-time packing/reformatting out of decode latency while leaving
+    // kernels that do not need preparation unchanged.
+    for (const auto& node : nodes_) {
+        if (node.kernel != nullptr && node.kernel->Prepare() != 0) {
+            thread_pool_.reset();
+            worker_count_ = 1;
+            return -1;
+        }
     }
 
     if (thread_mode_ == RuntimeThreadMode::kSerialGraph) {

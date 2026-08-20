@@ -26,11 +26,7 @@ std::shared_ptr<OpBase> BuildMatMulOp(const model::NodeDesc& node, OperatorRegis
         return nullptr;
     }
     kernel::EnsureMatMulKernelsRegistered();
-    const bool is_batched_matmul = param.a->dims().size() != 2 || param.b->dims().size() != 2;
-    auto kernel = is_batched_matmul && ActiveKernelDevice() != DeviceType::CUDA
-                      ? CreateKernelForTensor(DeviceType::COMMON, "MatMul", {param.a, param.b, param.out},
-                                              DataType::FP32)
-                      : CreateHostKernelForTensor("MatMul", {param.a, param.b, param.out}, DataType::FP32);
+    auto kernel = CreateHostKernelForTensor("MatMul", {param.a, param.b, param.out}, DataType::FP32);
     if (kernel == nullptr) {
         return nullptr;
     }

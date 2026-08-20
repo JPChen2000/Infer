@@ -20,6 +20,8 @@ struct RuntimeProfileSummary {
     int64_t call_count{0};
     double total_ms{0.0};
     double avg_ms{0.0};
+    double min_ms{0.0};
+    double max_ms{0.0};
 };
 
 enum class RuntimeThreadMode {

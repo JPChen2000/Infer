@@ -20,7 +20,11 @@ class KernelBase {
    public:
     KernelBase() = default;
     explicit KernelBase(const KernelBase& base);
+    virtual ~KernelBase() = default;
     virtual void SetParam(void* param) { param_ = param; };
+    // Optional one-time preparation hook for immutable weights and other
+    // runtime-owned resources. Kernels may keep the default no-op behavior.
+    virtual int32_t Prepare() { return 0; }
     virtual int32_t compute() = 0;
     void SetMetadata(DeviceType device, DataType data_type, std::string op_type) {
         device_ = device;
@@ -39,7 +43,7 @@ class KernelBase {
     const std::string& op_type() const { return op_type_; }
 
    protected:
-    void* param_;
+    void* param_{nullptr};
     DeviceType device_{DeviceType::UNKNOWN};
     DataType data_type_{DataType::UNKNOWN};
     DataLayout layout_{DataLayout::ND};

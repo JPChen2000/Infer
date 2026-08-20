@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "util/timer.h"
+#include "util/bf16.h"
 #include "util/types.h"
 
 namespace feather {
@@ -86,6 +87,16 @@ int32_t IdentityKernel<DeviceType::X86, DataType::FP16>::compute() {
     return ComputeIdentityRaw<uint16_t>(param, DataType::FP16);
 }
 
+template <>
+int32_t IdentityKernel<DeviceType::X86, DataType::BF16>::compute() {
+    AutoTimer timer("X86::Identity::BF16");
+    auto* param = static_cast<feather::operators::UnaryParam*>(param_);
+    if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::BF16) {
+        return ComputeIdentityFallback<DataType::BF16>(param);
+    }
+    return ComputeIdentityRaw<BFloat16>(param, DataType::BF16);
+}
+
 void EnsureX86IdentityKernelsRegistered() {
     static bool registered = []() {
         KernelDispatcher::instance().registerKernel(
@@ -94,6 +105,9 @@ void EnsureX86IdentityKernelsRegistered() {
         KernelDispatcher::instance().registerKernel(
             DeviceType::X86, DataType::FP16, "Identity",
             []() { return std::make_unique<IdentityKernel<DeviceType::X86, DataType::FP16>>(); });
+        KernelDispatcher::instance().registerKernel(
+            DeviceType::X86, DataType::BF16, "Identity",
+            []() { return std::make_unique<IdentityKernel<DeviceType::X86, DataType::BF16>>(); });
         return true;
     }();
     (void)registered;

@@ -5,6 +5,14 @@ option(BUILD_UNITTEST "BUILD UNITTEST" OFF)
 option(FEATHER_DEBUG "Enable Feather debug logging and operator timers" OFF)
 option(FEATHER_ENABLE_CUDA "Enable CUDA kernels when a CUDA compiler is available" ON)
 option(FEATHER_ENABLE_CUDNN "Enable cuDNN acceleration when cuDNN is available" ON)
+option(FEATHER_ENABLE_OPENMP "Enable OpenMP acceleration for CPU kernels" ON)
+if (DEFINED FEATHER_WITH_CUDA)
+    # Preserve the historical command-line spelling while keeping
+    # FEATHER_WITH_CUDA as the detected backend state below.
+    set(FEATHER_ENABLE_CUDA "${FEATHER_WITH_CUDA}" CACHE BOOL
+        "Enable CUDA kernels when a CUDA compiler is available" FORCE)
+    unset(FEATHER_WITH_CUDA CACHE)
+endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -19,6 +27,9 @@ List(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(util)
 
 find_package(Threads REQUIRED)
+if (FEATHER_ENABLE_OPENMP)
+    find_package(OpenMP REQUIRED COMPONENTS CXX)
+endif()
 
 set(FEATHER_WITH_CUDA OFF)
 set(FEATHER_WITH_CUDNN OFF)
@@ -57,16 +68,42 @@ if (CONAN_EXPORTED)
     include(${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
     conan_basic_setup(TARGETS)
 else()
-    if (NOT EXISTS "${CMAKE_BINARY_DIR}/conan.cmake")
-        file(DOWNLOAD
-            "https://raw.githubusercontent.com/conan-io/cmake-conan/master/conan.cmake"
-            "${CMAKE_BINARY_DIR}/conan.cmake" SHOW_PROGRESS)
+    if (NOT DEFINED ENV{CONAN_USER_HOME})
+        set(ENV{CONAN_USER_HOME} "${CMAKE_SOURCE_DIR}/.conan_local")
     endif()
-    include(${CMAKE_BINARY_DIR}/conan.cmake)
+    set(CONAN_CMAKE_PATH "${CMAKE_BINARY_DIR}/conan.cmake")
+    set(CONAN_CMAKE_URL
+        "https://raw.githubusercontent.com/conan-io/cmake-conan/0.18.1/conan.cmake")
+    set(NEEDS_CONAN_CMAKE_DOWNLOAD TRUE)
+    if (EXISTS "${CONAN_CMAKE_PATH}")
+        file(READ "${CONAN_CMAKE_PATH}" CONAN_CMAKE_CONTENTS)
+        if (CONAN_CMAKE_CONTENTS MATCHES "conan_cmake_run")
+            set(NEEDS_CONAN_CMAKE_DOWNLOAD FALSE)
+        endif()
+    endif()
+    if (NEEDS_CONAN_CMAKE_DOWNLOAD)
+        file(DOWNLOAD
+            "${CONAN_CMAKE_URL}" "${CONAN_CMAKE_PATH}" SHOW_PROGRESS
+            STATUS CONAN_CMAKE_DOWNLOAD_STATUS TLS_VERIFY ON)
+        list(GET CONAN_CMAKE_DOWNLOAD_STATUS 0 CONAN_CMAKE_DOWNLOAD_RESULT)
+        list(GET CONAN_CMAKE_DOWNLOAD_STATUS 1 CONAN_CMAKE_DOWNLOAD_MESSAGE)
+        if (NOT CONAN_CMAKE_DOWNLOAD_RESULT EQUAL 0)
+            message(FATAL_ERROR
+                "Failed to download the Conan 1 CMake helper: ${CONAN_CMAKE_DOWNLOAD_MESSAGE}")
+        endif()
+    endif()
+    include("${CONAN_CMAKE_PATH}")
+    if (NOT COMMAND conan_cmake_run)
+        message(FATAL_ERROR "The Conan CMake helper does not define conan_cmake_run.")
+    endif()
+    set(CONAN_PROFILE_ARGUMENT)
+    if (DEFINED CONAN_PROFILE_PATH AND NOT "${CONAN_PROFILE_PATH}" STREQUAL "")
+        set(CONAN_PROFILE_ARGUMENT PROFILE "${CONAN_PROFILE_PATH}")
+    endif()
     conan_cmake_run(CONANFILE conanfile.py
         BASIC_SETUP CMAKE_TARGETS UPDATE
         BUILD missing
-        PROFILE ${CONAN_PROFILE_PATH}
+        ${CONAN_PROFILE_ARGUMENT}
         SETTINGS build_type=${CMAKE_BUILD_TYPE}
         OPTIONS
         BUILD_UNITTEST=${BUILD_UNITTEST})
@@ -85,6 +122,9 @@ set(SRC "src/core/memory.cc"
     "src/pass/graph_pass.cc"
     "src/pass/identity_elimination_pass.cc"
     "src/pass/matmul_add_fusion_pass.cc"
+    "src/pass/qwen_gated_delta_fusion_pass.cc"
+    "src/pass/qwen_matmul_add_fusion_pass.cc"
+    "src/pass/qwen_rms_norm_fusion_pass.cc"
     "src/pass/no_op_elimination_pass.cc"
     "src/pass/resize_concat_fusion_pass.cc"
     "src/pass/reshape_chain_elimination_pass.cc"
@@ -138,6 +178,8 @@ set(SRC "src/core/memory.cc"
     "src/operator/constant_of_shape_op.cc"
     "src/operator/expand_op.cc"
     "src/operator/where_op.cc"
+    "src/operator/qwen_gated_delta_op.cc"
+    "src/operator/qwen_rms_norm_op.cc"
     "src/operator/yolo_decode_op.cc"
     "src/kernel/common/add.cc"
     "src/kernel/common/batch_normalization.cc"
@@ -179,6 +221,8 @@ set(SRC "src/core/memory.cc"
     "src/kernel/common/constant_of_shape.cc"
     "src/kernel/common/expand.cc"
     "src/kernel/common/where.cc"
+    "src/kernel/common/qwen_gated_delta.cc"
+    "src/kernel/common/qwen_rms_norm.cc"
     "src/kernel/common/sqrt.cc"
     "src/kernel/common/sub.cc"
     "src/kernel/common/tanh.cc"
@@ -186,13 +230,17 @@ set(SRC "src/core/memory.cc"
     "src/kernel/common/resize_concat.cc"
     "src/kernel/common/yolo_decode.cc"
     "src/kernel/x86/add.cc"
+    "src/kernel/x86/cast.cc"
     "src/kernel/x86/concat.cc"
     "src/kernel/x86/conv2d.cc"
+    "src/kernel/x86/div.cc"
     "src/kernel/x86/direct_conv_fp32.cc"
+    "src/kernel/x86/expand.cc"
     "src/kernel/x86/fc.cc"
     "src/kernel/x86/flatten.cc"
     "src/kernel/x86/gemm.cc"
     "src/kernel/x86/identity.cc"
+    "src/kernel/x86/linear.cc"
     "src/kernel/x86/linear_fp16.cc"
     "src/kernel/x86/linear_fp32.cc"
     "src/kernel/x86/matmul.cc"
@@ -200,6 +248,8 @@ set(SRC "src/core/memory.cc"
     "src/kernel/x86/pointwise_conv_fp32.cc"
     "src/kernel/x86/pool.cc"
     "src/kernel/x86/pow.cc"
+    "src/kernel/x86/reduce_sum.cc"
+    "src/kernel/x86/reduce_mean.cc"
     "src/kernel/x86/relu.cc"
     "src/kernel/x86/resize.cc"
     "src/kernel/x86/reshape.cc"
@@ -209,6 +259,8 @@ set(SRC "src/core/memory.cc"
     "src/kernel/x86/split.cc"
     "src/kernel/x86/softmax.cc"
     "src/kernel/x86/transpose.cc"
+    "src/kernel/x86/qwen_gated_delta.cc"
+    "src/kernel/x86/qwen_rms_norm.cc"
     "src/kernel/x86/yolo_decode.cc"
     "src/demo/classification_demo.cc"
     "src/demo/classification_runner.cc"
@@ -276,6 +328,10 @@ target_link_libraries(infer
     PUBLIC
     Threads::Threads
     )
+if (FEATHER_ENABLE_OPENMP)
+    target_compile_definitions(infer PUBLIC FEATHER_WITH_OPENMP)
+    target_link_libraries(infer PUBLIC OpenMP::OpenMP_CXX)
+endif()
 if (FEATHER_WITH_CUDA)
     target_compile_definitions(infer PUBLIC FEATHER_WITH_CUDA)
     target_link_libraries(infer PUBLIC CUDA::cudart CUDA::cublas)
@@ -310,13 +366,17 @@ if (FEATHER_DEBUG)
 endif()
 set_source_files_properties(
     src/kernel/x86/add.cc
+    src/kernel/x86/cast.cc
     src/kernel/x86/concat.cc
     src/kernel/x86/conv2d.cc
+    src/kernel/x86/div.cc
     src/kernel/x86/direct_conv_fp32.cc
+    src/kernel/x86/expand.cc
     src/kernel/x86/fc.cc
     src/kernel/x86/flatten.cc
     src/kernel/x86/gemm.cc
     src/kernel/x86/identity.cc
+    src/kernel/x86/linear.cc
     src/kernel/x86/linear_fp16.cc
     src/kernel/x86/linear_fp32.cc
     src/kernel/x86/matmul.cc
@@ -324,6 +384,8 @@ set_source_files_properties(
     src/kernel/x86/pointwise_conv_fp32.cc
     src/kernel/x86/pool.cc
     src/kernel/x86/pow.cc
+    src/kernel/x86/reduce_sum.cc
+    src/kernel/x86/reduce_mean.cc
     src/kernel/x86/relu.cc
     src/kernel/x86/resize.cc
     src/kernel/x86/reshape.cc
@@ -333,6 +395,8 @@ set_source_files_properties(
     src/kernel/x86/split.cc
     src/kernel/x86/softmax.cc
     src/kernel/x86/transpose.cc
+    src/kernel/x86/qwen_gated_delta.cc
+    src/kernel/x86/qwen_rms_norm.cc
     src/kernel/x86/yolo_decode.cc
     PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-mf16c")
 target_include_directories(yolov5_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include

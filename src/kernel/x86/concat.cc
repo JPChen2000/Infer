@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "src/kernel/common/kernel_io.h"
+#include "util/bf16.h"
 #include "util/thread_pool_nv.h"
 #include "util/threading.h"
 #include "util/timer.h"
@@ -57,7 +58,9 @@ ThreadPoolNv& GetConcatThreadPool() {
 
 template <typename Fn>
 void ParallelForConcat(int64_t total_work_items, int64_t total_scalar_work_items, Fn&& fn) {
-    if (total_work_items <= 1 || total_scalar_work_items < 16384) {
+    // The runtime executes graph nodes serially; keep small copies local instead of
+    // paying for a worker-pool rendezvous on every Concat node.
+    if (total_work_items <= 1 || total_scalar_work_items < 262144) {
         fn(0, total_work_items);
         return;
     }
@@ -159,6 +162,7 @@ int32_t ComputeConcatRaw(feather::operators::ConcatParam* param, DataType dtype,
 
     param->out->set_data_type(dtype);
     T* output = param->out->mutable_data<T>();
+    param->out->set_data_type(dtype);
     ParallelForConcat(outer, outer * out_axis * inner, [&](int64_t begin, int64_t end) {
         for (int64_t outer_idx = begin; outer_idx < end; ++outer_idx) {
             int64_t axis_offset = 0;
@@ -197,6 +201,19 @@ int32_t ConcatKernel<DeviceType::X86, DataType::FP16>::compute() {
     return ComputeConcatRaw<uint16_t>(param, DataType::FP16, CopyHalfBlock);
 }
 
+template <>
+int32_t ConcatKernel<DeviceType::X86, DataType::BF16>::compute() {
+    AutoTimer timer("X86::Concat::BF16");
+    auto* param = static_cast<feather::operators::ConcatParam*>(param_);
+    if (!AllInputsMatchType<BFloat16>(param, DataType::BF16)) {
+        return ComputeConcatFallback<DataType::BF16>(param);
+    }
+    return ComputeConcatRaw<BFloat16>(param, DataType::BF16,
+                                      [](const BFloat16* src, BFloat16* dst, int64_t count) {
+                                          std::memcpy(dst, src, static_cast<size_t>(count) * sizeof(BFloat16));
+                                      });
+}
+
 void EnsureX86ConcatKernelsRegistered() {
     static bool registered = []() {
         KernelDispatcher::instance().registerKernel(
@@ -205,6 +222,9 @@ void EnsureX86ConcatKernelsRegistered() {
         KernelDispatcher::instance().registerKernel(
             DeviceType::X86, DataType::FP16, "Concat",
             []() { return std::make_unique<ConcatKernel<DeviceType::X86, DataType::FP16>>(); });
+        KernelDispatcher::instance().registerKernel(
+            DeviceType::X86, DataType::BF16, "Concat",
+            []() { return std::make_unique<ConcatKernel<DeviceType::X86, DataType::BF16>>(); });
         return true;
     }();
     (void)registered;

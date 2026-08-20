@@ -9,6 +9,7 @@
 #include "src/kernel/gemm.h"
 #include "src/operator/params.h"
 #include "src/operator/gemm_op.h"
+#include "util/bf16.h"
 #include "util/fp16.h"
 
 using feather::KernelDispatcher;
@@ -17,6 +18,45 @@ using feather::Tensor;
 using feather::DeviceType;
 using feather::DataType;
 using feather::operators::GemmParam;
+
+TEST(gemm_op_test, X86Bf16AcceptsSingletonLeadingBroadcastBias) {
+    auto lhs = std::make_shared<Tensor>();
+    lhs->Assign<feather::BFloat16>(
+        {feather::BFloat16{feather::FloatToBFloat16(1.0f)}, feather::BFloat16{feather::FloatToBFloat16(2.0f)},
+         feather::BFloat16{feather::FloatToBFloat16(3.0f)}},
+        {1, 1, 3});
+
+    auto rhs = std::make_shared<Tensor>();
+    rhs->Assign<feather::BFloat16>(
+        {feather::BFloat16{feather::FloatToBFloat16(1.0f)}, feather::BFloat16{feather::FloatToBFloat16(2.0f)},
+         feather::BFloat16{feather::FloatToBFloat16(3.0f)}, feather::BFloat16{feather::FloatToBFloat16(4.0f)},
+         feather::BFloat16{feather::FloatToBFloat16(5.0f)}, feather::BFloat16{feather::FloatToBFloat16(6.0f)}},
+        {3, 2});
+
+    auto bias = std::make_shared<Tensor>();
+    bias->Assign<feather::BFloat16>(
+        {feather::BFloat16{feather::FloatToBFloat16(0.5f)}, feather::BFloat16{feather::FloatToBFloat16(-1.0f)}},
+        {1, 1, 2});
+
+    auto out = std::make_shared<Tensor>(std::vector<int64_t>{1, 1, 2});
+    GemmParam param;
+    param.a = lhs;
+    param.b = rhs;
+    param.bias = bias;
+    param.out = out;
+    feather::operators::GemmOp op("broadcast_bias", param);
+    ASSERT_EQ(op.CheckShape(), 0);
+    ASSERT_EQ(op.InferOutputShapes(), 0);
+
+    auto kernel = KernelDispatcher::instance().create(DeviceType::X86, DataType::BF16, "Gemm");
+    ASSERT_NE(kernel, nullptr);
+    op.AttachKernel(std::move(kernel));
+    ASSERT_EQ(op.Run(), 0);
+
+    const auto* values = out->data<feather::BFloat16>();
+    EXPECT_NEAR(feather::BFloat16ToFloat(values[0].bits), 22.5f, 0.2f);
+    EXPECT_NEAR(feather::BFloat16ToFloat(values[1].bits), 27.0f, 0.2f);
+}
 
 TEST(gemm_op_test, GemmRunsOnX86) {
     auto lhs = std::make_shared<Tensor>();

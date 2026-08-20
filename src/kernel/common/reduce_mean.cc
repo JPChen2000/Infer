@@ -109,7 +109,10 @@ int32_t ReduceMeanKernel<DeviceType::COMMON, DataType::BF16>::compute() {
 
 void EnsureCommonReduceMeanKernelsRegistered() { (void)g_common_reduce_mean_kernels_registered; }
 
-void EnsureReduceMeanKernelsRegistered() { EnsureCommonReduceMeanKernelsRegistered(); }
+void EnsureReduceMeanKernelsRegistered() {
+    EnsureCommonReduceMeanKernelsRegistered();
+    EnsureX86ReduceMeanKernelsRegistered();
+}
 
 }  // namespace kernel
 }  // namespace feather

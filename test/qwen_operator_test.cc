@@ -173,6 +173,31 @@ TEST(qwen_operator_test, ReduceSumInfersAxesAndRunsOnBF16) {
     EXPECT_NEAR(feather::BFloat16ToFloat(output->data<BFloat16>()[1].bits), 15.0f, 0.1f);
 }
 
+TEST(qwen_operator_test, X86ReduceSumUsesNativeFp32KernelForLastAxis) {
+    auto input = std::make_shared<Tensor>();
+    std::vector<float> values;
+    for (int64_t i = 0; i < 2 * 3 * 17; ++i) values.push_back(static_cast<float>((i % 11) - 5));
+    input->Assign<float>(values, {2, 3, 17});
+    auto output = std::make_shared<Tensor>(std::vector<int64_t>{2, 3, 1});
+
+    ReduceSumParam param{};
+    param.input = input;
+    param.out = output;
+    param.axes = {-1};
+    param.keepdims = true;
+    auto kernel = KernelDispatcher::instance().create(DeviceType::X86, DataType::FP32, "ReduceSum");
+    ASSERT_NE(kernel, nullptr);
+    EXPECT_EQ(kernel->device(), DeviceType::X86);
+    kernel->SetParam(&param);
+    ASSERT_EQ(kernel->compute(), 0);
+    EXPECT_EQ(output->data_type(), DataType::FP32);
+    for (int64_t row = 0; row < 6; ++row) {
+        float expected = 0.0f;
+        for (int64_t col = 0; col < 17; ++col) expected += values[static_cast<size_t>(row * 17 + col)];
+        EXPECT_FLOAT_EQ(output->data<float>()[row], expected);
+    }
+}
+
 TEST(qwen_operator_test, RunsDepthwiseConv2DOnBF16) {
     const auto encode = [](std::initializer_list<float> values) {
         std::vector<BFloat16> result;

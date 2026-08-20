@@ -8,6 +8,7 @@ namespace feather {
 namespace kernel {
 
 void EnsureCommonExpandKernelsRegistered();
+void EnsureX86ExpandKernelsRegistered();
 void EnsureExpandKernelsRegistered();
 
 template <DeviceType dev, DataType dtype>

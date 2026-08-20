@@ -8,6 +8,7 @@ namespace feather {
 namespace kernel {
 
 void EnsureDivKernelsRegistered();
+void EnsureX86DivKernelsRegistered();
 
 template <DeviceType dev, DataType dtype>
 class DivKernel : public KernelBase {

@@ -122,6 +122,7 @@ int32_t StaticGraph::Build() {
     for (const auto& value : model_.graph.values) {
         auto it = tensors_.find(value.tensor.name);
         if (it != tensors_.end()) {
+            it->second->set_immutable(value.constant);
             if (value.constant) {
                 static_values.insert(value.tensor.name);
             }

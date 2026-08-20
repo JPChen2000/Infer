@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "src/kernel/common/kernel_io.h"
+#include "util/bf16.h"
 #include "util/timer.h"
 
 namespace feather {
@@ -99,13 +100,16 @@ int32_t ComputeSplitRaw(feather::operators::SplitParam* param, DataType dtype,
     const int64_t inner = ComputeProduct(in_dims, static_cast<size_t>(axis) + 1, in_dims.size());
     const int64_t input_axis = in_dims[axis];
     const T* input = param->input->data<T>();
+    std::vector<T*> output_data;
+    output_data.reserve(param->outputs.size());
 
     for (auto& output : param->outputs) {
         if (output == nullptr) {
             return -1;
         }
+        T* output_ptr = output->mutable_data<T>();
         output->set_data_type(dtype);
-        output->mutable_data<T>();
+        output_data.push_back(output_ptr);
     }
 
     for (int64_t outer_idx = 0; outer_idx < outer; ++outer_idx) {
@@ -115,7 +119,7 @@ int32_t ComputeSplitRaw(feather::operators::SplitParam* param, DataType dtype,
             const int64_t copy_count = output_axis * inner;
             const int64_t input_base = (outer_idx * input_axis + axis_offset) * inner;
             const int64_t output_base = outer_idx * copy_count;
-            copy_fn(input + input_base, param->outputs[i]->mutable_data<T>() + output_base, copy_count);
+            copy_fn(input + input_base, output_data[i] + output_base, copy_count);
             axis_offset += output_axis;
         }
     }
@@ -144,6 +148,19 @@ int32_t SplitKernel<DeviceType::X86, DataType::FP16>::compute() {
     return ComputeSplitRaw<uint16_t>(param, DataType::FP16, CopyHalfBlock);
 }
 
+template <>
+int32_t SplitKernel<DeviceType::X86, DataType::BF16>::compute() {
+    AutoTimer timer("X86::Split::BF16");
+    auto* param = static_cast<feather::operators::SplitParam*>(param_);
+    if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::BF16) {
+        return ComputeSplitFallback<DataType::BF16>(param);
+    }
+    return ComputeSplitRaw<BFloat16>(param, DataType::BF16,
+                                     [](const BFloat16* src, BFloat16* dst, int64_t count) {
+                                         std::memcpy(dst, src, static_cast<size_t>(count) * sizeof(BFloat16));
+                                     });
+}
+
 void EnsureX86SplitKernelsRegistered() {
     static bool registered = []() {
         KernelDispatcher::instance().registerKernel(
@@ -152,6 +169,9 @@ void EnsureX86SplitKernelsRegistered() {
         KernelDispatcher::instance().registerKernel(
             DeviceType::X86, DataType::FP16, "Split",
             []() { return std::make_unique<SplitKernel<DeviceType::X86, DataType::FP16>>(); });
+        KernelDispatcher::instance().registerKernel(
+            DeviceType::X86, DataType::BF16, "Split",
+            []() { return std::make_unique<SplitKernel<DeviceType::X86, DataType::BF16>>(); });
         return true;
     }();
     (void)registered;

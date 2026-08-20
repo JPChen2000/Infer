@@ -36,6 +36,19 @@ float GetFloatAttribute(const std::unordered_map<std::string, model::AttributeVa
     return default_value;
 }
 
+bool IsVectorBias(const Tensor* bias, int64_t n) {
+    if (bias == nullptr || !bias->IsInitialized() || bias->dims().empty() ||
+        bias->dims()[bias->dims().size() - 1] != n) {
+        return false;
+    }
+    for (size_t index = 0; index + 1 < bias->dims().size(); ++index) {
+        if (bias->dims()[index] != 1) {
+            return false;
+        }
+    }
+    return bias->numel() == n;
+}
+
 std::shared_ptr<OpBase> BuildGemmOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
     if (node.inputs.size() < 2 || node.outputs.size() != 1) {
         return nullptr;
@@ -103,10 +116,9 @@ int32_t GemmOp::CheckShape() const {
         return -1;
     }
     if (param_.bias != nullptr && param_.bias->IsInitialized()) {
-        if (param_.bias->dims().size() == 1) {
-            if (param_.bias->dims()[0] != out_n) {
-                return -1;
-            }
+        if (IsVectorBias(param_.bias.get(), out_n)) {
+            // A vector bias may carry singleton leading dimensions so it can
+            // be broadcast over a batched decode activation.
         } else if (param_.bias->dims().size() == 2) {
             if (param_.a->dims().size() != 2) {
                 return -1;

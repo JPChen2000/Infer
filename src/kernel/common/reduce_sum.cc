@@ -88,7 +88,12 @@ template <> int32_t ReduceSumKernel<DeviceType::COMMON, DataType::BF16>::compute
     return ComputeReduceSum<DataType::BF16>(static_cast<feather::operators::ReduceSumParam*>(param_));
 }
 
-void EnsureReduceSumKernelsRegistered() { (void)g_reduce_sum_kernels_registered; }
+void EnsureCommonReduceSumKernelsRegistered() { (void)g_reduce_sum_kernels_registered; }
+
+void EnsureReduceSumKernelsRegistered() {
+    EnsureCommonReduceSumKernelsRegistered();
+    EnsureX86ReduceSumKernelsRegistered();
+}
 
 }  // namespace kernel
 }  // namespace feather

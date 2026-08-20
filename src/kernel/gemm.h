@@ -2,6 +2,7 @@
 #define FEATHER_KERNEL_GEMM_H
 
 #include "core/kernel.h"
+#include "src/kernel/x86/linear.h"
 
 namespace feather {
 namespace kernel {
@@ -14,6 +15,17 @@ template <DeviceType dev, DataType dtype>
 class GemmKernel : public KernelBase {
    public:
     int32_t compute() override;
+};
+
+template <>
+class GemmKernel<DeviceType::X86, DataType::BF16> : public KernelBase {
+   public:
+    int32_t Prepare() override;
+    int32_t compute() override;
+
+   private:
+    x86::PackedBf16TransposedRhs packed_transposed_rhs_;
+    x86::Bf16LinearWorkspace workspace_;
 };
 
 }  // namespace kernel

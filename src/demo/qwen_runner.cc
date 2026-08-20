@@ -334,7 +334,7 @@ int32_t QwenRunner::CopyState(const StateBinding& binding) {
         return -1;
     }
     if (binding.cache_axis < 0) {
-        if (input->dims().data() != output->dims().data() || TensorBytes(*input) != TensorBytes(*output)) {
+        if (input->dims() != output->dims() || TensorBytes(*input) != TensorBytes(*output)) {
             last_error_ = "Qwen state shape changed unexpectedly: " + binding.input_name;
             return -1;
         }
@@ -460,10 +460,12 @@ int32_t QwenRunner::RunToken(int64_t token_id, int64_t* next_token_id) {
     return 0;
 }
 
-int32_t QwenRunner::Generate(const std::vector<int64_t>& prompt_tokens, int max_new_tokens,
-                              const std::vector<int64_t>& stop_token_ids, std::vector<int64_t>* generated_tokens) {
+int32_t QwenRunner::GenerateImpl(const std::vector<int64_t>& prompt_tokens, int max_new_tokens,
+                                 const std::vector<int64_t>& stop_token_ids,
+                                 const std::function<void(int64_t)>& on_token,
+                                 std::vector<int64_t>* generated_tokens) {
     last_error_.clear();
-    if (generated_tokens == nullptr || prompt_tokens.empty() || max_new_tokens <= 0) {
+    if (prompt_tokens.empty() || max_new_tokens <= 0 || (!on_token && generated_tokens == nullptr)) {
         last_error_ = "Qwen prompt and max_new_tokens must be non-empty and positive";
         return -1;
     }
@@ -473,18 +475,46 @@ int32_t QwenRunner::Generate(const std::vector<int64_t>& prompt_tokens, int max_
             return -1;
         }
     }
-    generated_tokens->clear();
+    if (generated_tokens != nullptr) {
+        generated_tokens->clear();
+    }
     const std::unordered_set<int64_t> stop_ids(stop_token_ids.begin(), stop_token_ids.end());
     for (int index = 0; index < max_new_tokens; ++index) {
-        generated_tokens->push_back(next_token);
+        const int64_t generated_token = next_token;
+        if (generated_tokens != nullptr) {
+            generated_tokens->push_back(generated_token);
+        }
+        if (on_token) {
+            on_token(generated_token);
+        }
         if (RunToken(next_token, &next_token) != 0) {
             return -1;
         }
-        if (stop_ids.count(generated_tokens->back()) != 0) {
+        if (stop_ids.count(generated_token) != 0) {
             break;
         }
     }
     return 0;
+}
+
+int32_t QwenRunner::GenerateStream(const std::vector<int64_t>& prompt_tokens, int max_new_tokens,
+                                   const std::vector<int64_t>& stop_token_ids,
+                                   const std::function<void(int64_t)>& on_token) {
+    if (!on_token) {
+        last_error_ = "Qwen streaming callback must not be empty";
+        return -1;
+    }
+    return GenerateImpl(prompt_tokens, max_new_tokens, stop_token_ids, on_token, nullptr);
+}
+
+int32_t QwenRunner::Generate(const std::vector<int64_t>& prompt_tokens, int max_new_tokens,
+                              const std::vector<int64_t>& stop_token_ids, std::vector<int64_t>* generated_tokens) {
+    if (generated_tokens == nullptr) {
+        last_error_ = "Qwen prompt and max_new_tokens must be non-empty and positive";
+        return -1;
+    }
+    return GenerateImpl(prompt_tokens, max_new_tokens, stop_token_ids, std::function<void(int64_t)>(),
+                        generated_tokens);
 }
 
 int32_t QwenRunner::Consume(const std::vector<int64_t>& token_ids) {
