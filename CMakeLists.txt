@@ -335,24 +335,56 @@ if (FEATHER_WITH_CUDA)
     list(APPEND SRC ${CUDA_SRC})
 endif()
 
-add_library(infer ${SRC})
-target_link_libraries(infer
-    PUBLIC
-    Threads::Threads
-    )
+set(INFER_CORE_SRC ${SRC})
+list(FILTER INFER_CORE_SRC EXCLUDE REGEX "^src/kernel/")
+list(FILTER INFER_CORE_SRC EXCLUDE REGEX "^src/model/")
+list(FILTER INFER_CORE_SRC EXCLUDE REGEX "^src/demo/")
+
+set(INFER_BACKEND_SRC ${SRC})
+list(FILTER INFER_BACKEND_SRC INCLUDE REGEX "^src/kernel/")
+
+set(INFER_MODEL_SRC ${SRC})
+list(FILTER INFER_MODEL_SRC INCLUDE REGEX "^src/model/")
+
+set(INFER_DEMO_SRC ${SRC})
+list(FILTER INFER_DEMO_SRC INCLUDE REGEX "^src/demo/")
+
+set(INFER_INCLUDE_DIRS
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR})
+
+add_library(infer_core OBJECT ${INFER_CORE_SRC})
+add_library(infer_backend OBJECT ${INFER_BACKEND_SRC})
+add_library(infer_model OBJECT ${INFER_MODEL_SRC})
+add_library(infer ${INFER_DEMO_SRC}
+    $<TARGET_OBJECTS:infer_core>
+    $<TARGET_OBJECTS:infer_backend>
+    $<TARGET_OBJECTS:infer_model>)
+
+foreach(INFER_TARGET infer_core infer_backend infer_model infer)
+    target_include_directories(${INFER_TARGET} PUBLIC ${INFER_INCLUDE_DIRS})
+endforeach()
+
+target_link_libraries(infer_core PUBLIC Threads::Threads)
+target_link_libraries(infer_backend PUBLIC infer_core)
+target_link_libraries(infer_model PUBLIC infer_core)
+target_link_libraries(infer PUBLIC infer_core infer_backend infer_model)
+
 if (FEATHER_ENABLE_OPENMP)
-    target_compile_definitions(infer PUBLIC FEATHER_WITH_OPENMP)
-    target_link_libraries(infer PUBLIC OpenMP::OpenMP_CXX)
+    target_compile_definitions(infer_core PUBLIC FEATHER_WITH_OPENMP)
+    target_compile_definitions(infer_backend PUBLIC FEATHER_WITH_OPENMP)
+    target_link_libraries(infer_core PUBLIC OpenMP::OpenMP_CXX)
+    target_link_libraries(infer_backend PUBLIC OpenMP::OpenMP_CXX)
 endif()
 if (FEATHER_WITH_CUDA)
-    target_compile_definitions(infer PUBLIC FEATHER_WITH_CUDA)
-    target_link_libraries(infer PUBLIC CUDA::cudart CUDA::cublas)
+    target_compile_definitions(infer_backend PUBLIC FEATHER_WITH_CUDA)
+    target_link_libraries(infer_backend PUBLIC CUDA::cudart CUDA::cublas)
     if (FEATHER_WITH_CUDNN)
-        target_compile_definitions(infer PUBLIC FEATHER_WITH_CUDNN)
-        target_include_directories(infer PUBLIC ${CUDNN_INCLUDE_DIR})
-        target_link_libraries(infer PUBLIC ${CUDNN_LIBRARY})
+        target_compile_definitions(infer_backend PUBLIC FEATHER_WITH_CUDNN)
+        target_include_directories(infer_backend PUBLIC ${CUDNN_INCLUDE_DIR})
+        target_link_libraries(infer_backend PUBLIC ${CUDNN_LIBRARY})
     endif()
-    set_target_properties(infer PROPERTIES
+    set_target_properties(infer_backend PROPERTIES
         CUDA_STANDARD 17
         CUDA_STANDARD_REQUIRED ON
         CUDA_EXTENSIONS OFF)
@@ -369,12 +401,10 @@ add_executable(fth_layout_convert demo/fth_layout_convert_demo.cc)
 add_executable(x86_conv_benchmark_demo demo/x86_conv_benchmark_demo.cc)
 add_executable(x86_linear_benchmark_demo demo/x86_linear_benchmark_demo.cc)
 add_executable(x86_softmax_benchmark_demo demo/x86_softmax_benchmark_demo.cc)
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR})
-target_include_directories(infer PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/include)
 if (FEATHER_DEBUG)
-    target_compile_definitions(infer PUBLIC FEATHER_DEBUG)
+    target_compile_definitions(infer_core PUBLIC FEATHER_DEBUG)
+    target_compile_definitions(infer_backend PUBLIC FEATHER_DEBUG)
+    target_compile_definitions(infer_model PUBLIC FEATHER_DEBUG)
 endif()
 set_source_files_properties(
     src/kernel/x86/add.cc
@@ -464,7 +494,9 @@ if (BUILD_UNITTEST)
         ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(unit_tests infer CONAN_PKG::gtest)
     enable_testing()
-    # add_subdirectory(test)
+    add_test(NAME infer_unit_tests COMMAND unit_tests)
+    set_tests_properties(infer_unit_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 endif()
 message("\n")
 message("unittest: " ${BUILD_UNITTEST})
