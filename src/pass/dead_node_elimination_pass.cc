@@ -12,8 +12,7 @@ namespace {
 const std::string kDeadNodeEliminationPassName = "DeadNodeEliminationPass";
 
 bool IsGraphOutput(const StaticGraph& graph, const std::string& value_name) {
-    const auto& outputs = graph.model().graph.outputs;
-    return std::find(outputs.begin(), outputs.end(), value_name) != outputs.end();
+    return graph.IsGraphOutputValue(value_name);
 }
 
 }  // namespace

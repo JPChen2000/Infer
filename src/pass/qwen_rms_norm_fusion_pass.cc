@@ -34,8 +34,7 @@ bool IsQwenModel(const StaticGraph& graph) {
 }
 
 bool IsGraphOutput(const StaticGraph& graph, const std::string& value_name) {
-    const auto& outputs = graph.model().graph.outputs;
-    return std::find(outputs.begin(), outputs.end(), value_name) != outputs.end();
+    return graph.IsGraphOutputValue(value_name);
 }
 
 const StaticNode* Producer(const StaticGraph& graph, const std::string& value_name,
@@ -375,7 +374,8 @@ int32_t QwenRmsNormFusionPass::Run(StaticGraph* graph) {
     if (graph == nullptr) {
         return -1;
     }
-    if (graph->KernelDevice() != DeviceType::X86 || !IsQwenModel(*graph)) {
+    if ((graph->KernelDevice() != DeviceType::X86 && graph->KernelDevice() != DeviceType::CUDA) ||
+        !IsQwenModel(*graph)) {
         return 0;
     }
 

@@ -42,6 +42,22 @@ class QwenGatedDeltaOutputOp : public OpBase {
     std::unique_ptr<KernelBase> kernel_;
 };
 
+class QwenGatedDeltaOp : public OpBase {
+   public:
+    QwenGatedDeltaOp(std::string name, const QwenGatedDeltaParam& param);
+    int32_t CheckShape() const override;
+    int32_t InferOutputShapes() override;
+    void AttachKernel(std::unique_ptr<KernelBase> kernel) override;
+    std::unique_ptr<KernelBase> DetachKernel() override { return std::move(kernel_); }
+    bool HasKernel() const override { return kernel_ != nullptr; }
+    int32_t Run() override;
+
+   private:
+    void SyncIO();
+    QwenGatedDeltaParam param_;
+    std::unique_ptr<KernelBase> kernel_;
+};
+
 void EnsureQwenGatedDeltaOperatorsRegistered();
 
 }  // namespace operators

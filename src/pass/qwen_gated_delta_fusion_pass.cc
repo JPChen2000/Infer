@@ -105,8 +105,7 @@ bool IsQwenModel(const StaticGraph& graph) {
 }
 
 bool IsGraphOutput(const StaticGraph& graph, const std::string& value_name) {
-    const auto& outputs = graph.model().graph.outputs;
-    return std::find(outputs.begin(), outputs.end(), value_name) != outputs.end();
+    return graph.IsGraphOutputValue(value_name);
 }
 
 bool IsFp32(const std::shared_ptr<Tensor>& tensor) {
@@ -330,6 +329,7 @@ bool MatchOutputPattern(const StaticGraph& graph, GatedDeltaPattern* pattern) {
         }
         const auto* output = graph.GetNode(graph.GetUsers(output_full->outputs[0]).front());
         if (output == nullptr || output->op_type != "ReduceSum" || output->inputs.size() != 1 ||
+            output->outputs.size() != 1 ||
             output->inputs[0] != output_full->outputs[0] ||
             !HasVectorAttribute(graph, *output, "axes", {2}) || !HasIntAttribute(graph, *output, "keepdims", 0)) {
             continue;
@@ -392,7 +392,8 @@ int32_t QwenGatedDeltaFusionPass::Run(StaticGraph* graph) {
     if (graph == nullptr) {
         return -1;
     }
-    if (graph->KernelDevice() != DeviceType::X86 || !IsQwenModel(*graph)) {
+    if ((graph->KernelDevice() != DeviceType::X86 && graph->KernelDevice() != DeviceType::CUDA) ||
+        !IsQwenModel(*graph)) {
         return 0;
     }
 
@@ -409,12 +410,16 @@ int32_t QwenGatedDeltaFusionPass::Run(StaticGraph* graph) {
 
     for (const auto& pattern : patterns) {
         const auto* state_node = graph->GetNode(pattern.state_update);
-        if (state_node == nullptr || !CanRemoveMatchedNodes(*graph, pattern)) {
+        const auto* output_node = graph->GetNode(pattern.output);
+        if (state_node == nullptr || output_node == nullptr || !CanRemoveMatchedNodes(*graph, pattern)) {
             continue;
         }
-        if (!graph->ReplaceNodeOp(pattern.state_update, "QwenGatedDeltaState",
-                                  {pattern.state, pattern.k, pattern.v, pattern.beta, pattern.decay}) ||
-            !graph->ReplaceNodeOp(pattern.output, "QwenGatedDeltaOutput", {pattern.next_state, pattern.q}) ||
+        model::NodeDesc fused;
+        fused.name = pattern.state_update;
+        fused.op_type = "QwenGatedDelta";
+        fused.inputs = {pattern.state, pattern.k, pattern.v, pattern.beta, pattern.decay, pattern.q};
+        fused.outputs = {pattern.next_state, output_node->outputs[0]};
+        if (!graph->ReplaceNodeDescAndAbsorbNode(fused, pattern.output) ||
             !RemoveMatchedNodes(graph, pattern)) {
             return -1;
         }

@@ -14,6 +14,8 @@ namespace kernel {
 
 namespace {
 
+constexpr int64_t kBf16PackedRhsMinimumMacs = 1 << 18;
+
 std::vector<int64_t> ComputeStrides(const std::vector<int64_t>& dims) {
     std::vector<int64_t> strides(dims.size(), 1);
     for (int64_t axis = static_cast<int64_t>(dims.size()) - 2; axis >= 0; --axis) {
@@ -85,6 +87,14 @@ bool ValidateBatchedMatMulX86(const feather::operators::MatMulParam* param, MatM
         return false;
     }
     return true;
+}
+
+bool ShouldUsePackedBf16Rhs(const feather::operators::MatMulParam* param, const MatMulShape& shape) {
+    if (param == nullptr || param->b == nullptr || !param->b->is_immutable() || !shape.singleton_batch ||
+        shape.batch_count != 1 || shape.m != 1 || shape.k <= 0 || shape.n < 64) {
+        return false;
+    }
+    return shape.k >= kBf16PackedRhsMinimumMacs / shape.n;
 }
 
 template <typename T, typename MatrixCompute>
@@ -171,7 +181,8 @@ int32_t ComputeMatMulX86(feather::operators::MatMulParam* param) {
     }
 }
 
-int32_t ComputeBf16MatMulX86(feather::operators::MatMulParam* param, x86::Bf16LinearWorkspace* workspace) {
+int32_t ComputeBf16MatMulX86(feather::operators::MatMulParam* param, x86::Bf16LinearWorkspace* workspace,
+                             const x86::PackedBf16Rhs* packed_rhs) {
     if (param == nullptr || param->a == nullptr || param->b == nullptr || param->out == nullptr ||
         param->a->data_type() != DataType::BF16 || param->b->data_type() != DataType::BF16) {
         return -1;
@@ -181,6 +192,15 @@ int32_t ComputeBf16MatMulX86(feather::operators::MatMulParam* param, x86::Bf16Li
         return -1;
     }
     param->out->set_data_type(DataType::BF16);
+
+    const uint16_t* rhs = static_cast<const uint16_t*>(param->b->raw_data());
+    if (ShouldUsePackedBf16Rhs(param, shape) && packed_rhs != nullptr &&
+        packed_rhs->Matches(rhs, shape.k, shape.n, param->b->mutation_version())) {
+        return x86::ComputeLinearRowMajorX86Bf16PackedRhs(
+            static_cast<const uint16_t*>(param->a->raw_data()), rhs, *packed_rhs, nullptr, shape.m, shape.k,
+            shape.n, x86::LinearBiasType::kNone, static_cast<uint16_t*>(param->out->raw_data()), workspace,
+            param->b->mutation_version());
+    }
 
     return ComputeBatchedMatMulX86<uint16_t>(
         param, [workspace](const uint16_t* lhs, const uint16_t* rhs, int64_t m, int64_t k, int64_t n,
@@ -204,9 +224,27 @@ int32_t MatMulKernel<DeviceType::X86, DataType::FP16>::compute() {
     return ComputeMatMulX86<DataType::FP16>(static_cast<feather::operators::MatMulParam*>(param_));
 }
 
+int32_t MatMulKernel<DeviceType::X86, DataType::BF16>::Prepare() {
+    auto* param = static_cast<feather::operators::MatMulParam*>(param_);
+    MatMulShape shape;
+    if (param == nullptr || param->a == nullptr || param->b == nullptr || param->out == nullptr ||
+        param->a->data_type() != DataType::BF16 || param->b->data_type() != DataType::BF16 ||
+        !ValidateBatchedMatMulX86(param, &shape) || !ShouldUsePackedBf16Rhs(param, shape)) {
+        return 0;
+    }
+
+    // Packing preserves the original immutable tensor and is deliberately
+    // best-effort: a memory-constrained process falls back to the direct path.
+    (void)packed_rhs_.Pack(static_cast<const uint16_t*>(param->b->raw_data()), shape.k, shape.n,
+                           param->b->mutation_version());
+    return 0;
+}
+
 int32_t MatMulKernel<DeviceType::X86, DataType::BF16>::compute() {
     AutoTimer timer("X86::MatMul::BF16");
-    return ComputeBf16MatMulX86(static_cast<feather::operators::MatMulParam*>(param_), &workspace_);
+    auto* param = static_cast<feather::operators::MatMulParam*>(param_);
+    MatMulShape shape;
+    return ComputeBf16MatMulX86(param, &workspace_, &packed_rhs_);
 }
 
 void EnsureX86MatMulKernelsRegistered() {

@@ -108,6 +108,9 @@ void EnsureCommonQwenRmsNormKernelsRegistered() { (void)g_common_qwen_rms_norm_k
 void EnsureQwenRmsNormKernelsRegistered() {
     EnsureCommonQwenRmsNormKernelsRegistered();
     EnsureX86QwenRmsNormKernelsRegistered();
+#ifdef FEATHER_WITH_CUDA
+    EnsureCudaQwenRmsNormKernelsRegistered();
+#endif
 }
 
 }  // namespace kernel

@@ -30,7 +30,9 @@ int RunReshape(feather::operators::ReshapeParam* param, const char* timer_name) 
     if (param == nullptr || param->input == nullptr || param->out == nullptr) {
         return -1;
     }
-    return cuda_detail::RunDeviceCopy<T>(param->input.get(), param->out.get());
+    // Reshape is a contiguous view: host metadata remains per Tensor, but the
+    // CUDA allocation is shared with the input instead of copied.
+    return cuda_detail::RunDeviceAlias<T>(param->input.get(), param->out.get());
 }
 
 }  // namespace

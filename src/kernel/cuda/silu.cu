@@ -17,6 +17,8 @@ bool g_cuda_silu_kernels_registered = []() {
                               []() { return std::make_unique<SiluKernel<DeviceType::CUDA, DataType::FP32>>(); });
     dispatcher.registerKernel(DeviceType::CUDA, DataType::FP16, "SiLU",
                               []() { return std::make_unique<SiluKernel<DeviceType::CUDA, DataType::FP16>>(); });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::BF16, "SiLU",
+                              []() { return std::make_unique<SiluKernel<DeviceType::CUDA, DataType::BF16>>(); });
     return true;
 }();
 
@@ -153,6 +155,16 @@ int32_t SiluKernel<DeviceType::CUDA, DataType::FP16>::compute() {
 #endif
     SetLastCudaSiluBackend(CudaSiluBackend::kFallback);
     return cuda_detail::RunUnary<DataType::FP16, 3>(param, "CUDA::SiLU::FP16");
+}
+
+template <>
+int32_t SiluKernel<DeviceType::CUDA, DataType::BF16>::compute() {
+    auto* param = static_cast<feather::operators::UnaryParam*>(param_);
+    if (RunSiluDirect<DataType::BF16>(param)) {
+        return 0;
+    }
+    SetLastCudaSiluBackend(CudaSiluBackend::kFallback);
+    return cuda_detail::RunUnary<DataType::BF16, 3>(param, "CUDA::SiLU::BF16");
 }
 
 void EnsureCudaSiluKernelsRegistered() { (void)g_cuda_silu_kernels_registered; }

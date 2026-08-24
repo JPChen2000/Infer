@@ -9,6 +9,9 @@ namespace kernel {
 
 void EnsureCommonQwenRmsNormKernelsRegistered();
 void EnsureX86QwenRmsNormKernelsRegistered();
+#ifdef FEATHER_WITH_CUDA
+void EnsureCudaQwenRmsNormKernelsRegistered();
+#endif
 void EnsureQwenRmsNormKernelsRegistered();
 
 template <DeviceType dev, DataType dtype>

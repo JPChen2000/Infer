@@ -41,6 +41,9 @@ TEST(reshape_op_test, ReshapePreservesDataAndChangesShape) {
     for (size_t i = 0; i < 6; ++i) {
         EXPECT_FLOAT_EQ(out->data<float>()[i], input->data<float>()[i]);
     }
+    EXPECT_EQ(out->raw_data(), input->raw_data());
+    input->mutable_data<float>()[0] = 42.0f;
+    EXPECT_FLOAT_EQ(out->data<float>()[0], 42.0f);
 }
 
 TEST(reshape_op_test, ReshapePreservesDataAndChangesShapeFP16) {

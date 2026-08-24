@@ -56,9 +56,32 @@ std::shared_ptr<OpBase> BuildOutput(const model::NodeDesc& node, OperatorRegistr
     return op;
 }
 
+std::shared_ptr<OpBase> BuildCombined(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+    if (node.inputs.size() != 6 || node.outputs.size() != 2) return nullptr;
+    QwenGatedDeltaParam param{};
+    param.state = tensors[node.inputs[0]];
+    param.k = tensors[node.inputs[1]];
+    param.v = tensors[node.inputs[2]];
+    param.beta = tensors[node.inputs[3]];
+    param.decay = tensors[node.inputs[4]];
+    param.q = tensors[node.inputs[5]];
+    param.next_state = tensors[node.outputs[0]];
+    param.out = tensors[node.outputs[1]];
+    auto op = std::make_shared<QwenGatedDeltaOp>(node.name.empty() ? "qwen_gated_delta" : node.name, param);
+    if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) return nullptr;
+    auto kernel = CreateHostKernelForTensor("QwenGatedDelta",
+                                            {param.state, param.k, param.v, param.beta, param.decay, param.q,
+                                             param.next_state, param.out},
+                                            DataType::FP32);
+    if (kernel == nullptr) return nullptr;
+    op->AttachKernel(std::move(kernel));
+    return op;
+}
+
 bool g_registered = []() {
     OperatorRegistry::instance().Register("QwenGatedDeltaState", BuildState);
     OperatorRegistry::instance().Register("QwenGatedDeltaOutput", BuildOutput);
+    OperatorRegistry::instance().Register("QwenGatedDelta", BuildCombined);
     return true;
 }();
 
@@ -137,6 +160,59 @@ void QwenGatedDeltaOutputOp::AttachKernel(std::unique_ptr<KernelBase> kernel) {
 }
 
 int32_t QwenGatedDeltaOutputOp::Run() { return InferOutputShapes() == 0 && kernel_ != nullptr ? kernel_->compute() : -1; }
+
+QwenGatedDeltaOp::QwenGatedDeltaOp(std::string name, const QwenGatedDeltaParam& param)
+    : OpBase(std::move(name), "QwenGatedDelta"), param_(param) {
+    SyncIO();
+}
+
+void QwenGatedDeltaOp::SyncIO() {
+    SetInputs({param_.state, param_.k, param_.v, param_.beta, param_.decay, param_.q});
+    SetOutputs({param_.next_state, param_.out});
+}
+
+int32_t QwenGatedDeltaOp::CheckShape() const {
+    if (!IsStateShape(param_.state.get()) || param_.k == nullptr || param_.v == nullptr || param_.beta == nullptr ||
+        param_.decay == nullptr || param_.q == nullptr || param_.next_state == nullptr || param_.out == nullptr) {
+        return -1;
+    }
+    const int64_t heads = param_.state->dims()[1];
+    const int64_t key = param_.state->dims()[2];
+    const int64_t value = param_.state->dims()[3];
+    return IsHeadVector(param_.k.get(), heads, key) && IsHeadVector(param_.v.get(), heads, value) &&
+                   IsHeadVector(param_.beta.get(), heads, 1) && IsHeadVector(param_.decay.get(), heads, 1) &&
+                   IsHeadVector(param_.q.get(), heads, key)
+               ? 0
+               : -1;
+}
+
+int32_t QwenGatedDeltaOp::InferOutputShapes() {
+    if (CheckShape() != 0) return -1;
+    const auto state_shape = param_.state->dims().data();
+    const size_t state_bytes = static_cast<size_t>(Product(state_shape)) * sizeof(float);
+    if (!param_.next_state->IsInitialized() || param_.next_state->memory_size() < state_bytes) {
+        param_.next_state = std::make_shared<Tensor>(state_bytes);
+    }
+    param_.next_state->Resize(state_shape);
+    param_.next_state->set_data_type(DataType::FP32);
+
+    const std::vector<int64_t> output_shape = {state_shape[0], state_shape[1], state_shape[3]};
+    const size_t output_bytes = static_cast<size_t>(Product(output_shape)) * sizeof(float);
+    if (!param_.out->IsInitialized() || param_.out->memory_size() < output_bytes) {
+        param_.out = std::make_shared<Tensor>(output_bytes);
+    }
+    param_.out->Resize(output_shape);
+    param_.out->set_data_type(DataType::FP32);
+    SyncIO();
+    return 0;
+}
+
+void QwenGatedDeltaOp::AttachKernel(std::unique_ptr<KernelBase> kernel) {
+    kernel_ = std::move(kernel);
+    if (kernel_ != nullptr) kernel_->SetParam(&param_);
+}
+
+int32_t QwenGatedDeltaOp::Run() { return InferOutputShapes() == 0 && kernel_ != nullptr ? kernel_->compute() : -1; }
 
 }  // namespace operators
 }  // namespace feather

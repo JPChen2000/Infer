@@ -79,6 +79,7 @@ int32_t RuntimeGraph::SetTensor(const std::string& name, std::shared_ptr<Tensor>
         return -1;
     }
     tensors_[name] = std::move(tensor);
+    RefreshOutputTensorPointers();
     return 0;
 }
 
@@ -102,6 +103,12 @@ void RuntimeGraph::SetProfilingEnabled(bool enabled) {
     profiling_enabled_ = enabled;
     if (!profiling_enabled_) {
         profile_summaries_.clear();
+        profile_index_by_node_.clear();
+    } else {
+        // Qwen decode has more than a thousand runtime nodes. Reserve once so
+        // turning profiling on does not allocate on the per-node hot path.
+        profile_summaries_.reserve(nodes_.size());
+        profile_index_by_node_.reserve(nodes_.size());
     }
 }
 
@@ -111,19 +118,20 @@ void RuntimeGraph::RecordNodeProfile(const std::string& node_name, const std::st
     }
 
     std::lock_guard<std::mutex> lock(profile_mutex_);
-    auto it = std::find_if(profile_summaries_.begin(), profile_summaries_.end(),
-                           [&](const RuntimeProfileSummary& summary) { return summary.node_name == node_name; });
-    if (it == profile_summaries_.end()) {
+    const auto index = profile_index_by_node_.find(node_name);
+    if (index == profile_index_by_node_.end()) {
+        profile_index_by_node_.emplace(node_name, profile_summaries_.size());
         profile_summaries_.push_back(
             RuntimeProfileSummary{node_name, op_type, 1, elapsed_ms, elapsed_ms, elapsed_ms, elapsed_ms});
         return;
     }
 
-    it->call_count += 1;
-    it->total_ms += elapsed_ms;
-    it->avg_ms = it->total_ms / static_cast<double>(it->call_count);
-    it->min_ms = std::min(it->min_ms, elapsed_ms);
-    it->max_ms = std::max(it->max_ms, elapsed_ms);
+    auto& summary = profile_summaries_[index->second];
+    summary.call_count += 1;
+    summary.total_ms += elapsed_ms;
+    summary.avg_ms = summary.total_ms / static_cast<double>(summary.call_count);
+    summary.min_ms = std::min(summary.min_ms, elapsed_ms);
+    summary.max_ms = std::max(summary.max_ms, elapsed_ms);
 }
 
 void RuntimeGraph::SetThreadCount(size_t count) {
@@ -135,6 +143,7 @@ void RuntimeGraph::SetOutputNames(std::vector<std::string> output_names) {
     for (auto& name : output_names) {
         output_names_.insert(std::move(name));
     }
+    RefreshOutputTensorPointers();
 }
 
 void RuntimeGraph::Clear() {
@@ -143,10 +152,12 @@ void RuntimeGraph::Clear() {
     node_index_by_name_.clear();
     remaining_uses_.clear();
     output_names_.clear();
+    output_tensor_ptrs_.clear();
     thread_pool_.reset();
     worker_count_ = 1;
     profiling_enabled_ = false;
     profile_summaries_.clear();
+    profile_index_by_node_.clear();
 }
 
 int32_t RuntimeGraph::Check() const {
@@ -164,7 +175,9 @@ int32_t RuntimeGraph::Run() {
         return status;
     }
     ResetPendingDependencies();
+#ifdef FEATHER_WITH_CUDA
     ResetRemainingUses();
+#endif
     return RunSerial();
 }
 
@@ -246,6 +259,7 @@ int32_t RuntimeGraph::BuildDependencies() {
     for (auto& node : nodes_) {
         node.pending_dependencies = node.predecessors.size();
     }
+
     return 0;
 }
 
@@ -272,6 +286,9 @@ bool RuntimeGraph::ShouldKeepTensorDevice(const std::string& value_name, const s
     if (output_names_.find(value_name) != output_names_.end()) {
         return true;
     }
+    if (output_tensor_ptrs_.find(tensor.get()) != output_tensor_ptrs_.end()) {
+        return true;
+    }
     if (kernel::cuda_detail::IsTensorDevicePersistent(tensor.get())) {
         return true;
     }
@@ -279,6 +296,16 @@ bool RuntimeGraph::ShouldKeepTensorDevice(const std::string& value_name, const s
     (void)value_name;
 #endif
     return false;
+}
+
+void RuntimeGraph::RefreshOutputTensorPointers() {
+    output_tensor_ptrs_.clear();
+    for (const auto& output_name : output_names_) {
+        const auto it = tensors_.find(output_name);
+        if (it != tensors_.end() && it->second != nullptr) {
+            output_tensor_ptrs_.insert(it->second.get());
+        }
+    }
 }
 
 void RuntimeGraph::ReleaseUnusedInputs(const RuntimeNode& node) {

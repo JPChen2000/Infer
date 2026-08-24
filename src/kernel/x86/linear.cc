@@ -26,7 +26,13 @@ constexpr int64_t kBf16OutputBlock = 32;
 // logits width is divisible by 64, so this removes a second packed-block
 // setup per K row without changing the source tensor layout contract.
 constexpr int64_t kBf16PackedOutputBlock = 64;
-constexpr int64_t kBf16MinimumParallelMacs = 1 << 20;
+constexpr int64_t kBf16ArgmaxSingleThreadOutputBlock = 32;
+constexpr int64_t kBf16MinimumParallelMacs = 1 << 18;
+// Decode GEMV is memory-bandwidth bound on the target x86 CPUs. Four workers
+// saturate the useful bandwidth without paying the large OpenMP team cost seen
+// with eight workers on small projection shapes. The environment variable
+// remains an explicit escape hatch for machines with a different balance.
+constexpr size_t kBf16DefaultWorkerLimit = 4;
 
 bool Bf16LinearWorkspace::Resize(size_t count) {
     if (values_.size() >= count) {
@@ -59,8 +65,9 @@ size_t Bf16LinearWorkerCount(int64_t m, int64_t k, int64_t n) {
         return 1;
     }
 
-    const int64_t output_blocks = n / kBf16OutputBlock + (n % kBf16OutputBlock != 0 ? 1 : 0);
-    size_t worker_limit = DefaultThreadCount();
+    const int64_t output_blocks =
+        n / kBf16PackedOutputBlock + (n % kBf16PackedOutputBlock != 0 ? 1 : 0);
+    size_t worker_limit = std::min(DefaultThreadCount(), kBf16DefaultWorkerLimit);
     const char* configured_limit = std::getenv("FEATHER_X86_BF16_THREADS");
     if (configured_limit != nullptr && configured_limit[0] != '\0') {
         char* end = nullptr;
@@ -69,6 +76,12 @@ size_t Bf16LinearWorkerCount(int64_t m, int64_t k, int64_t n) {
             worker_limit = std::min(DefaultThreadCount(), static_cast<size_t>(parsed_limit));
         }
     }
+#if defined(FEATHER_WITH_OPENMP)
+    const int openmp_limit = omp_get_max_threads();
+    if (openmp_limit > 0) {
+        worker_limit = std::min(worker_limit, static_cast<size_t>(openmp_limit));
+    }
+#endif
     return std::min(worker_limit, static_cast<size_t>(output_blocks));
 }
 
@@ -82,12 +95,13 @@ void ParallelForBf16OutputColumns(int64_t n, size_t worker_count, Fn&& fn) {
     }
 
 #if defined(FEATHER_WITH_OPENMP)
-    const int64_t output_blocks = n / kBf16OutputBlock + (n % kBf16OutputBlock != 0 ? 1 : 0);
-    constexpr int64_t kMaxBlocksPerChunk = 8;
-    const int64_t target_chunks = static_cast<int64_t>(worker_count) * 4;
-    const int64_t blocks_per_chunk = std::min(
-        kMaxBlocksPerChunk,
-        std::max<int64_t>(1, output_blocks / target_chunks + (output_blocks % target_chunks != 0 ? 1 : 0)));
+    // Packed decode kernels consume 64-column tiles. Align work boundaries to
+    // that tile so a worker never starts in the middle of a packed block.
+    const int64_t output_blocks =
+        n / kBf16PackedOutputBlock + (n % kBf16PackedOutputBlock != 0 ? 1 : 0);
+    const int64_t blocks_per_chunk =
+        std::max<int64_t>(1, output_blocks / static_cast<int64_t>(worker_count) +
+                                  (output_blocks % static_cast<int64_t>(worker_count) != 0 ? 1 : 0));
     const int64_t task_count =
         output_blocks / blocks_per_chunk + (output_blocks % blocks_per_chunk != 0 ? 1 : 0);
     // Qwen decode runs its graph serially.  Avoid nested teams for callers
@@ -98,11 +112,11 @@ void ParallelForBf16OutputColumns(int64_t n, size_t worker_count, Fn&& fn) {
     }
 
     const int omp_worker_count = static_cast<int>(worker_count);
-#pragma omp parallel for schedule(dynamic, 1) num_threads(omp_worker_count)
+#pragma omp parallel for schedule(static) num_threads(omp_worker_count)
     for (int64_t task = 0; task < task_count; ++task) {
         const int64_t block = task * blocks_per_chunk;
-        const int64_t begin = block * kBf16OutputBlock;
-        const int64_t end = std::min(n, (block + blocks_per_chunk) * kBf16OutputBlock);
+        const int64_t begin = block * kBf16PackedOutputBlock;
+        const int64_t end = std::min(n, (block + blocks_per_chunk) * kBf16PackedOutputBlock);
         fn(begin, end);
     }
 #else
@@ -116,7 +130,26 @@ inline __m256 LoadBf16x8(const uint16_t* input) {
     return _mm256_castsi256_ps(_mm256_slli_epi32(expanded, 16));
 }
 
-inline void StoreBf16x8(__m256 value, uint16_t* output) {
+struct Bf16x16 {
+    __m256 lo;
+    __m256 hi;
+};
+
+inline Bf16x16 LoadBf16x16(const uint16_t* input) {
+    const __m256i packed = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(input));
+    const __m256i low = _mm256_cvtepu16_epi32(_mm256_castsi256_si128(packed));
+    const __m256i high = _mm256_cvtepu16_epi32(_mm256_extracti128_si256(packed, 1));
+    return {_mm256_castsi256_ps(_mm256_slli_epi32(low, 16)),
+            _mm256_castsi256_ps(_mm256_slli_epi32(high, 16))};
+}
+
+inline void FmaBf16x16(__m256 lhs, const uint16_t* rhs, __m256* acc_lo, __m256* acc_hi) {
+    const Bf16x16 values = LoadBf16x16(rhs);
+    *acc_lo = _mm256_fmadd_ps(lhs, values.lo, *acc_lo);
+    *acc_hi = _mm256_fmadd_ps(lhs, values.hi, *acc_hi);
+}
+
+inline __m256i RoundBf16Bits(__m256 value) {
     const __m256i bits = _mm256_castps_si256(value);
     const __m256i exponent = _mm256_and_si256(bits, _mm256_set1_epi32(0x7f800000));
     const __m256i mantissa = _mm256_and_si256(bits, _mm256_set1_epi32(0x007fffff));
@@ -126,7 +159,11 @@ inline void StoreBf16x8(__m256 value, uint16_t* output) {
     const __m256i round_bias =
         _mm256_add_epi32(_mm256_set1_epi32(0x7fff), _mm256_and_si256(_mm256_srli_epi32(bits, 16), _mm256_set1_epi32(1)));
     __m256i high_bits = _mm256_srli_epi32(_mm256_add_epi32(bits, round_bias), 16);
-    high_bits = _mm256_or_si256(high_bits, _mm256_and_si256(nan_mask, _mm256_set1_epi32(0x0040)));
+    return _mm256_or_si256(high_bits, _mm256_and_si256(nan_mask, _mm256_set1_epi32(0x0040)));
+}
+
+inline void StoreBf16x8(__m256 value, uint16_t* output) {
+    const __m256i high_bits = RoundBf16Bits(value);
     const __m128i packed = _mm_packus_epi32(_mm256_castsi256_si128(high_bits),
                                              _mm256_extracti128_si256(high_bits, 1));
     _mm_storeu_si128(reinterpret_cast<__m128i*>(output), packed);
@@ -218,7 +255,68 @@ inline void ComputeSingleRowWideBf16PackedColumns(const float* lhs, const uint16
                                                   const uint16_t* bias, int64_t k, int64_t n,
                                                   LinearBiasType bias_type, int64_t begin, int64_t end,
                                                   uint16_t* out) {
-    for (int64_t col = begin; col < end;) {
+    int64_t col = begin;
+    for (; col + kBf16PackedOutputBlock <= end && col % kBf16PackedOutputBlock == 0;
+         col += kBf16PackedOutputBlock) {
+        const uint16_t* rhs_block = packed_rhs + (col / kBf16PackedOutputBlock) * k * kBf16PackedOutputBlock;
+        __m256 acc0 = LoadBiasVectorBf16(bias, bias_type, 0, n, col);
+        __m256 acc1 = LoadBiasVectorBf16(bias, bias_type, 0, n, col + 8);
+        __m256 acc2 = LoadBiasVectorBf16(bias, bias_type, 0, n, col + 16);
+        __m256 acc3 = LoadBiasVectorBf16(bias, bias_type, 0, n, col + 24);
+        __m256 acc4 = LoadBiasVectorBf16(bias, bias_type, 0, n, col + 32);
+        __m256 acc5 = LoadBiasVectorBf16(bias, bias_type, 0, n, col + 40);
+        __m256 acc6 = LoadBiasVectorBf16(bias, bias_type, 0, n, col + 48);
+        __m256 acc7 = LoadBiasVectorBf16(bias, bias_type, 0, n, col + 56);
+        int64_t row = 0;
+        for (; row + 4 <= k; row += 4) {
+            const uint16_t* rhs_row0 = rhs_block + (row + 0) * kBf16PackedOutputBlock;
+            const uint16_t* rhs_row1 = rhs_block + (row + 1) * kBf16PackedOutputBlock;
+            const uint16_t* rhs_row2 = rhs_block + (row + 2) * kBf16PackedOutputBlock;
+            const uint16_t* rhs_row3 = rhs_block + (row + 3) * kBf16PackedOutputBlock;
+            if (row + 8 < k) {
+                __builtin_prefetch(rhs_row0 + 8 * kBf16PackedOutputBlock, 0, 1);
+            }
+            const __m256 lhs0 = _mm256_set1_ps(lhs[row + 0]);
+            const __m256 lhs1 = _mm256_set1_ps(lhs[row + 1]);
+            const __m256 lhs2 = _mm256_set1_ps(lhs[row + 2]);
+            const __m256 lhs3 = _mm256_set1_ps(lhs[row + 3]);
+#define FEATHER_BF16_FMA_ROW(lhs_value, rhs_row) \
+            acc0 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row), acc0); \
+            acc1 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row + 8), acc1); \
+            acc2 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row + 16), acc2); \
+            acc3 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row + 24), acc3); \
+            acc4 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row + 32), acc4); \
+            acc5 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row + 40), acc5); \
+            acc6 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row + 48), acc6); \
+            acc7 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row + 56), acc7)
+            FEATHER_BF16_FMA_ROW(lhs0, rhs_row0);
+            FEATHER_BF16_FMA_ROW(lhs1, rhs_row1);
+            FEATHER_BF16_FMA_ROW(lhs2, rhs_row2);
+            FEATHER_BF16_FMA_ROW(lhs3, rhs_row3);
+#undef FEATHER_BF16_FMA_ROW
+        }
+        for (; row < k; ++row) {
+            const __m256 lhs_value = _mm256_set1_ps(lhs[row]);
+            const uint16_t* rhs_row = rhs_block + row * kBf16PackedOutputBlock;
+            acc0 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row), acc0);
+            acc1 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row + 8), acc1);
+            acc2 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row + 16), acc2);
+            acc3 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row + 24), acc3);
+            acc4 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row + 32), acc4);
+            acc5 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row + 40), acc5);
+            acc6 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row + 48), acc6);
+            acc7 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row + 56), acc7);
+        }
+        StoreBf16x8(acc0, out + col);
+        StoreBf16x8(acc1, out + col + 8);
+        StoreBf16x8(acc2, out + col + 16);
+        StoreBf16x8(acc3, out + col + 24);
+        StoreBf16x8(acc4, out + col + 32);
+        StoreBf16x8(acc5, out + col + 40);
+        StoreBf16x8(acc6, out + col + 48);
+        StoreBf16x8(acc7, out + col + 56);
+    }
+    if (col < end) {
         const int64_t packed_offset = col % kBf16PackedOutputBlock;
         const int64_t width = std::min({kBf16PackedOutputBlock - packed_offset, end - col,
                                          static_cast<int64_t>(kBf16PackedOutputBlock)});
@@ -232,8 +330,7 @@ inline void ComputeSingleRowWideBf16PackedColumns(const float* lhs, const uint16
                 }
                 out[col + lane] = FloatToBFloat16(sum);
             }
-            col += width;
-            continue;
+            return;
         }
         __m256 acc0 = LoadBiasVectorBf16(bias, bias_type, 0, n, col);
         __m256 acc1 = LoadBiasVectorBf16(bias, bias_type, 0, n, col + 8);
@@ -415,17 +512,46 @@ inline void ComputeSingleRowWideBf16PackedTransposedLogitsColumns(const float* l
         __m256 acc5 = _mm256_setzero_ps();
         __m256 acc6 = _mm256_setzero_ps();
         __m256 acc7 = _mm256_setzero_ps();
-        for (int64_t t = 0; t < k; ++t) {
+        int64_t t = 0;
+        for (; t + 4 <= k; t += 4) {
+            const uint16_t* rhs_row0 = rhs_block + (t + 0) * kBf16PackedOutputBlock;
+            const uint16_t* rhs_row1 = rhs_block + (t + 1) * kBf16PackedOutputBlock;
+            const uint16_t* rhs_row2 = rhs_block + (t + 2) * kBf16PackedOutputBlock;
+            const uint16_t* rhs_row3 = rhs_block + (t + 3) * kBf16PackedOutputBlock;
+            // The logits RHS is a long stream of 128-byte K rows. Keep a
+            // short look-ahead in flight while four independent K rows are
+            // exposed to the FMA scheduler.
+            if (t + 8 < k) {
+                __builtin_prefetch(rhs_row0 + 8 * kBf16PackedOutputBlock, 0, 1);
+            }
+            const __m256 lhs0 = _mm256_set1_ps(lhs[t + 0]);
+            const __m256 lhs1 = _mm256_set1_ps(lhs[t + 1]);
+            const __m256 lhs2 = _mm256_set1_ps(lhs[t + 2]);
+            const __m256 lhs3 = _mm256_set1_ps(lhs[t + 3]);
+            FmaBf16x16(lhs0, rhs_row0 + 0, &acc0, &acc1);
+            FmaBf16x16(lhs0, rhs_row0 + 16, &acc2, &acc3);
+            FmaBf16x16(lhs0, rhs_row0 + 32, &acc4, &acc5);
+            FmaBf16x16(lhs0, rhs_row0 + 48, &acc6, &acc7);
+            FmaBf16x16(lhs1, rhs_row1 + 0, &acc0, &acc1);
+            FmaBf16x16(lhs1, rhs_row1 + 16, &acc2, &acc3);
+            FmaBf16x16(lhs1, rhs_row1 + 32, &acc4, &acc5);
+            FmaBf16x16(lhs1, rhs_row1 + 48, &acc6, &acc7);
+            FmaBf16x16(lhs2, rhs_row2 + 0, &acc0, &acc1);
+            FmaBf16x16(lhs2, rhs_row2 + 16, &acc2, &acc3);
+            FmaBf16x16(lhs2, rhs_row2 + 32, &acc4, &acc5);
+            FmaBf16x16(lhs2, rhs_row2 + 48, &acc6, &acc7);
+            FmaBf16x16(lhs3, rhs_row3 + 0, &acc0, &acc1);
+            FmaBf16x16(lhs3, rhs_row3 + 16, &acc2, &acc3);
+            FmaBf16x16(lhs3, rhs_row3 + 32, &acc4, &acc5);
+            FmaBf16x16(lhs3, rhs_row3 + 48, &acc6, &acc7);
+        }
+        for (; t < k; ++t) {
             const __m256 lhs_value = _mm256_set1_ps(lhs[t]);
             const uint16_t* rhs_row = rhs_block + t * kBf16PackedOutputBlock;
-            acc0 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row), acc0);
-            acc1 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row + 8), acc1);
-            acc2 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row + 16), acc2);
-            acc3 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row + 24), acc3);
-            acc4 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row + 32), acc4);
-            acc5 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row + 40), acc5);
-            acc6 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row + 48), acc6);
-            acc7 = _mm256_fmadd_ps(lhs_value, LoadBf16x8(rhs_row + 56), acc7);
+            FmaBf16x16(lhs_value, rhs_row + 0, &acc0, &acc1);
+            FmaBf16x16(lhs_value, rhs_row + 16, &acc2, &acc3);
+            FmaBf16x16(lhs_value, rhs_row + 32, &acc4, &acc5);
+            FmaBf16x16(lhs_value, rhs_row + 48, &acc6, &acc7);
         }
         StoreBf16x8(acc0, out + col);
         StoreBf16x8(acc1, out + col + 8);
@@ -456,6 +582,179 @@ inline int32_t ComputeSingleRowWideBf16PackedTransposed(const float* lhs, const 
                                                          end, out);
     });
     return 0;
+}
+
+struct Bf16ArgmaxResult {
+    int64_t index{-1};
+    float value{0.0f};
+    uint32_t key{0};
+};
+
+inline __m256i Bf16SortableKeys(__m256i rounded_bits) {
+    const __m256i sign = _mm256_and_si256(rounded_bits, _mm256_set1_epi32(0x8000));
+    const __m256i negative_mask = _mm256_cmpeq_epi32(sign, _mm256_set1_epi32(0x8000));
+    const __m256i positive_keys = _mm256_xor_si256(rounded_bits, _mm256_set1_epi32(0x8000));
+    const __m256i negative_keys = _mm256_xor_si256(rounded_bits, _mm256_set1_epi32(0xffff));
+    __m256i keys = _mm256_blendv_epi8(positive_keys, negative_keys, negative_mask);
+
+    // Match scalar `value > best_value`: +0 and -0 compare equal, so the
+    // first zero must win regardless of its sign bit.
+    const __m256i magnitude = _mm256_and_si256(rounded_bits, _mm256_set1_epi32(0x7fff));
+    const __m256i zero_mask = _mm256_cmpeq_epi32(magnitude, _mm256_setzero_si256());
+    keys = _mm256_blendv_epi8(keys, _mm256_set1_epi32(0x8000), zero_mask);
+    return keys;
+}
+
+inline void ConsiderRoundedBf16Vector(__m256 value, int64_t base_index, int64_t lane_limit,
+                                      Bf16ArgmaxResult* result) {
+    if (result == nullptr || lane_limit <= 0) {
+        return;
+    }
+    const __m256i rounded_bits = RoundBf16Bits(value);
+    const __m256i keys = Bf16SortableKeys(rounded_bits);
+    alignas(32) uint32_t bits[8];
+    alignas(32) uint32_t sortable_keys[8];
+    _mm256_store_si256(reinterpret_cast<__m256i*>(bits), rounded_bits);
+    _mm256_store_si256(reinterpret_cast<__m256i*>(sortable_keys), keys);
+    const int valid_lane_count = std::min<int64_t>(lane_limit, 8);
+    for (int lane = 0; lane < valid_lane_count; ++lane) {
+        const uint16_t selected_bits = static_cast<uint16_t>(bits[lane]);
+        if ((selected_bits & 0x7f80u) == 0x7f80u && (selected_bits & 0x007fu) != 0) {
+            continue;
+        }
+        const uint32_t key = sortable_keys[lane];
+        if (result->index < 0 || key > result->key) {
+            result->index = base_index + lane;
+            result->value = BFloat16ToFloat(selected_bits);
+            result->key = key;
+        }
+    }
+}
+
+inline Bf16ArgmaxResult ComputeSingleRowWideBf16PackedTransposedArgmaxColumns(const float* lhs,
+                                                                                  const uint16_t* packed_rhs,
+                                                                                  int64_t k, int64_t n, int64_t begin,
+                                                                                  int64_t end) {
+    Bf16ArgmaxResult result;
+    for (int64_t col = begin; col < end;) {
+        const int64_t block = col / kBf16PackedOutputBlock;
+        const int64_t block_begin = block * kBf16PackedOutputBlock;
+        const int64_t block_end = std::min(end, std::min(n, block_begin + kBf16PackedOutputBlock));
+        const uint16_t* rhs_block = packed_rhs + block * k * kBf16PackedOutputBlock;
+        __m256 acc0 = _mm256_setzero_ps();
+        __m256 acc1 = _mm256_setzero_ps();
+        __m256 acc2 = _mm256_setzero_ps();
+        __m256 acc3 = _mm256_setzero_ps();
+        __m256 acc4 = _mm256_setzero_ps();
+        __m256 acc5 = _mm256_setzero_ps();
+        __m256 acc6 = _mm256_setzero_ps();
+        __m256 acc7 = _mm256_setzero_ps();
+        int64_t row = 0;
+        for (; row + 4 <= k; row += 4) {
+            const uint16_t* rhs_row0 = rhs_block + (row + 0) * kBf16PackedOutputBlock;
+            const uint16_t* rhs_row1 = rhs_block + (row + 1) * kBf16PackedOutputBlock;
+            const uint16_t* rhs_row2 = rhs_block + (row + 2) * kBf16PackedOutputBlock;
+            const uint16_t* rhs_row3 = rhs_block + (row + 3) * kBf16PackedOutputBlock;
+            if (row + 8 < k) {
+                __builtin_prefetch(rhs_row0 + 8 * kBf16PackedOutputBlock, 0, 1);
+            }
+            const __m256 lhs0 = _mm256_set1_ps(lhs[row + 0]);
+            const __m256 lhs1 = _mm256_set1_ps(lhs[row + 1]);
+            const __m256 lhs2 = _mm256_set1_ps(lhs[row + 2]);
+            const __m256 lhs3 = _mm256_set1_ps(lhs[row + 3]);
+            FmaBf16x16(lhs0, rhs_row0 + 0, &acc0, &acc1);
+            FmaBf16x16(lhs0, rhs_row0 + 16, &acc2, &acc3);
+            FmaBf16x16(lhs0, rhs_row0 + 32, &acc4, &acc5);
+            FmaBf16x16(lhs0, rhs_row0 + 48, &acc6, &acc7);
+            FmaBf16x16(lhs1, rhs_row1 + 0, &acc0, &acc1);
+            FmaBf16x16(lhs1, rhs_row1 + 16, &acc2, &acc3);
+            FmaBf16x16(lhs1, rhs_row1 + 32, &acc4, &acc5);
+            FmaBf16x16(lhs1, rhs_row1 + 48, &acc6, &acc7);
+            FmaBf16x16(lhs2, rhs_row2 + 0, &acc0, &acc1);
+            FmaBf16x16(lhs2, rhs_row2 + 16, &acc2, &acc3);
+            FmaBf16x16(lhs2, rhs_row2 + 32, &acc4, &acc5);
+            FmaBf16x16(lhs2, rhs_row2 + 48, &acc6, &acc7);
+            FmaBf16x16(lhs3, rhs_row3 + 0, &acc0, &acc1);
+            FmaBf16x16(lhs3, rhs_row3 + 16, &acc2, &acc3);
+            FmaBf16x16(lhs3, rhs_row3 + 32, &acc4, &acc5);
+            FmaBf16x16(lhs3, rhs_row3 + 48, &acc6, &acc7);
+        }
+        for (; row < k; ++row) {
+            const __m256 lhs_value = _mm256_set1_ps(lhs[row]);
+            const uint16_t* rhs_row = rhs_block + row * kBf16PackedOutputBlock;
+            FmaBf16x16(lhs_value, rhs_row + 0, &acc0, &acc1);
+            FmaBf16x16(lhs_value, rhs_row + 16, &acc2, &acc3);
+            FmaBf16x16(lhs_value, rhs_row + 32, &acc4, &acc5);
+            FmaBf16x16(lhs_value, rhs_row + 48, &acc6, &acc7);
+        }
+        const int64_t lane_limit = block_end - block_begin;
+        ConsiderRoundedBf16Vector(acc0, block_begin + 0, lane_limit, &result);
+        ConsiderRoundedBf16Vector(acc1, block_begin + 8, lane_limit - 8, &result);
+        ConsiderRoundedBf16Vector(acc2, block_begin + 16, lane_limit - 16, &result);
+        ConsiderRoundedBf16Vector(acc3, block_begin + 24, lane_limit - 24, &result);
+        ConsiderRoundedBf16Vector(acc4, block_begin + 32, lane_limit - 32, &result);
+        ConsiderRoundedBf16Vector(acc5, block_begin + 40, lane_limit - 40, &result);
+        ConsiderRoundedBf16Vector(acc6, block_begin + 48, lane_limit - 48, &result);
+        ConsiderRoundedBf16Vector(acc7, block_begin + 56, lane_limit - 56, &result);
+        col = block_end;
+    }
+    return result;
+}
+
+// AVX2 exposes sixteen YMM registers. Keeping only four accumulators for a
+// 32-column tile leaves enough registers for widened BF16 loads and the
+// four-way K unroll, avoiding spills in the single-threaded lm-head path.
+inline Bf16ArgmaxResult ComputeSingleRowWideBf16PackedTransposedArgmaxColumns32(
+    const float* lhs, const uint16_t* packed_rhs, int64_t k, int64_t n, int64_t begin, int64_t end) {
+    Bf16ArgmaxResult result;
+    for (int64_t col = begin; col < end;) {
+        const int64_t block_begin = (col / kBf16ArgmaxSingleThreadOutputBlock) *
+                                    kBf16ArgmaxSingleThreadOutputBlock;
+        const int64_t block_end = std::min(end, std::min(n, block_begin + kBf16ArgmaxSingleThreadOutputBlock));
+        const int64_t packed_block = block_begin / kBf16PackedOutputBlock;
+        const int64_t packed_offset = block_begin % kBf16PackedOutputBlock;
+        const uint16_t* rhs_block =
+            packed_rhs + packed_block * k * kBf16PackedOutputBlock + packed_offset;
+        __m256 acc0 = _mm256_setzero_ps();
+        __m256 acc1 = _mm256_setzero_ps();
+        __m256 acc2 = _mm256_setzero_ps();
+        __m256 acc3 = _mm256_setzero_ps();
+        int64_t row = 0;
+        for (; row + 4 <= k; row += 4) {
+            const uint16_t* rhs_row0 = rhs_block + (row + 0) * kBf16PackedOutputBlock;
+            const uint16_t* rhs_row1 = rhs_block + (row + 1) * kBf16PackedOutputBlock;
+            const uint16_t* rhs_row2 = rhs_block + (row + 2) * kBf16PackedOutputBlock;
+            const uint16_t* rhs_row3 = rhs_block + (row + 3) * kBf16PackedOutputBlock;
+            if (row + 8 < k) {
+                __builtin_prefetch(rhs_row0 + 8 * kBf16PackedOutputBlock, 0, 1);
+            }
+            const __m256 lhs0 = _mm256_set1_ps(lhs[row + 0]);
+            const __m256 lhs1 = _mm256_set1_ps(lhs[row + 1]);
+            const __m256 lhs2 = _mm256_set1_ps(lhs[row + 2]);
+            const __m256 lhs3 = _mm256_set1_ps(lhs[row + 3]);
+            FmaBf16x16(lhs0, rhs_row0 + 0, &acc0, &acc1);
+            FmaBf16x16(lhs0, rhs_row0 + 16, &acc2, &acc3);
+            FmaBf16x16(lhs1, rhs_row1 + 0, &acc0, &acc1);
+            FmaBf16x16(lhs1, rhs_row1 + 16, &acc2, &acc3);
+            FmaBf16x16(lhs2, rhs_row2 + 0, &acc0, &acc1);
+            FmaBf16x16(lhs2, rhs_row2 + 16, &acc2, &acc3);
+            FmaBf16x16(lhs3, rhs_row3 + 0, &acc0, &acc1);
+            FmaBf16x16(lhs3, rhs_row3 + 16, &acc2, &acc3);
+        }
+        for (; row < k; ++row) {
+            const __m256 lhs_value = _mm256_set1_ps(lhs[row]);
+            const uint16_t* rhs_row = rhs_block + row * kBf16PackedOutputBlock;
+            FmaBf16x16(lhs_value, rhs_row + 0, &acc0, &acc1);
+            FmaBf16x16(lhs_value, rhs_row + 16, &acc2, &acc3);
+        }
+        const int64_t lane_limit = block_end - block_begin;
+        ConsiderRoundedBf16Vector(acc0, block_begin + 0, lane_limit, &result);
+        ConsiderRoundedBf16Vector(acc1, block_begin + 8, lane_limit - 8, &result);
+        ConsiderRoundedBf16Vector(acc2, block_begin + 16, lane_limit - 16, &result);
+        ConsiderRoundedBf16Vector(acc3, block_begin + 24, lane_limit - 24, &result);
+        col = block_end;
+    }
+    return result;
 }
 
 inline float HorizontalSum(__m256 value) {
@@ -685,7 +984,32 @@ int32_t ComputeLinearRowMajorX86Bf16PackedRhs(const uint16_t* lhs, const uint16_
         !packed_rhs.Matches(rhs, k, n, source_version)) {
         return -1;
     }
+    if (Bf16LinearWorkerCount(m, k, n) <= 1) {
+        return ComputeLinearRowMajorX86Bf16PackedRhsSingleThread(lhs, rhs, packed_rhs, bias, m, k, n, bias_type,
+                                                                  out, workspace, source_version);
+    }
     return ComputeSingleRowWideBf16Packed(lhs, packed_rhs.data(), bias, k, n, bias_type, out, workspace);
+}
+
+int32_t ComputeLinearRowMajorX86Bf16PackedRhsSingleThread(
+    const uint16_t* lhs, const uint16_t* rhs, const PackedBf16Rhs& packed_rhs, const uint16_t* bias, int64_t m,
+    int64_t k, int64_t n, LinearBiasType bias_type, uint16_t* out, Bf16LinearWorkspace* workspace,
+    uint64_t source_version) {
+    if (lhs == nullptr || rhs == nullptr || out == nullptr || m != 1 || k <= 0 || n <= 0 ||
+        !packed_rhs.Matches(rhs, k, n, source_version)) {
+        return -1;
+    }
+
+    Bf16LinearWorkspace local_workspace;
+    if (workspace == nullptr) {
+        workspace = &local_workspace;
+    }
+    if (!workspace->Resize(static_cast<size_t>(k))) {
+        return -1;
+    }
+    ConvertBf16ArrayToFp32(lhs, k, workspace->data());
+    ComputeSingleRowWideBf16PackedColumns(workspace->data(), packed_rhs.data(), bias, k, n, bias_type, 0, n, out);
+    return 0;
 }
 
 int32_t ComputeLinearRowMajorX86Bf16PackedTransposedRhs(
@@ -696,12 +1020,105 @@ int32_t ComputeLinearRowMajorX86Bf16PackedTransposedRhs(
         !packed_rhs.Matches(rhs_transposed, k, n, source_version)) {
         return -1;
     }
+    if (Bf16LinearWorkerCount(m, k, n) <= 1) {
+        return ComputeLinearRowMajorX86Bf16PackedTransposedRhsSingleThread(
+            lhs, rhs_transposed, packed_rhs, bias, m, k, n, bias_type, alpha, beta, out, workspace, source_version);
+    }
     Bf16LinearWorkspace local_workspace;
     if (workspace == nullptr) workspace = &local_workspace;
     if (!workspace->Resize(static_cast<size_t>(k))) return -1;
     ConvertBf16ArrayToFp32(lhs, k, workspace->data());
     return ComputeSingleRowWideBf16PackedTransposed(workspace->data(), packed_rhs.data(), bias, k, n, bias_type,
                                                      alpha, beta, out);
+}
+
+int32_t ComputeLinearRowMajorX86Bf16PackedTransposedRhsSingleThread(
+    const uint16_t* lhs, const uint16_t* rhs_transposed, const PackedBf16TransposedRhs& packed_rhs,
+    const uint16_t* bias, int64_t m, int64_t k, int64_t n, LinearBiasType bias_type, float alpha, float beta,
+    uint16_t* out, Bf16LinearWorkspace* workspace, uint64_t source_version) {
+    if (lhs == nullptr || rhs_transposed == nullptr || out == nullptr || m != 1 || k <= 0 || n <= 0 ||
+        !packed_rhs.Matches(rhs_transposed, k, n, source_version)) {
+        return -1;
+    }
+    Bf16LinearWorkspace local_workspace;
+    if (workspace == nullptr) {
+        workspace = &local_workspace;
+    }
+    if (!workspace->Resize(static_cast<size_t>(k))) {
+        return -1;
+    }
+    ConvertBf16ArrayToFp32(lhs, k, workspace->data());
+    if (bias == nullptr && alpha == 1.0f) {
+        ComputeSingleRowWideBf16PackedTransposedLogitsColumns(workspace->data(), packed_rhs.data(), k, 0, n, out);
+    } else {
+        ComputeSingleRowWideBf16PackedTransposedColumns(workspace->data(), packed_rhs.data(), bias, k, n, bias_type,
+                                                         alpha, beta, 0, n, out);
+    }
+    return 0;
+}
+
+int32_t ComputeLinearRowMajorX86Bf16PackedTransposedRhsArgmax(
+    const uint16_t* lhs, const uint16_t* rhs_transposed, const PackedBf16TransposedRhs& packed_rhs, int64_t k,
+    int64_t n, int64_t* token, Bf16LinearWorkspace* workspace, uint64_t source_version) {
+    if (lhs == nullptr || rhs_transposed == nullptr || token == nullptr || k <= 0 || n <= 0 ||
+        !packed_rhs.Matches(rhs_transposed, k, n, source_version)) {
+        return -1;
+    }
+    Bf16LinearWorkspace local_workspace;
+    if (workspace == nullptr) {
+        workspace = &local_workspace;
+    }
+    if (!workspace->Resize(static_cast<size_t>(k))) {
+        return -1;
+    }
+    ConvertBf16ArrayToFp32(lhs, k, workspace->data());
+
+    const size_t worker_count = Bf16LinearWorkerCount(1, k, n);
+    if (worker_count <= 1) {
+        return ComputeLinearRowMajorX86Bf16PackedTransposedRhsArgmaxSingleThread(
+            lhs, rhs_transposed, packed_rhs, k, n, token, workspace, source_version);
+    }
+
+    const int64_t block_count = (n + kBf16PackedOutputBlock - 1) / kBf16PackedOutputBlock;
+    std::vector<Bf16ArgmaxResult> partial(static_cast<size_t>(block_count));
+    ParallelForBf16OutputColumns(n, worker_count, [&](int64_t begin, int64_t end) {
+        for (int64_t block_begin = begin; block_begin < end; block_begin += kBf16PackedOutputBlock) {
+            const int64_t block_end = std::min(end, std::min(n, block_begin + kBf16PackedOutputBlock));
+            partial[static_cast<size_t>(block_begin / kBf16PackedOutputBlock)] =
+                ComputeSingleRowWideBf16PackedTransposedArgmaxColumns(workspace->data(), packed_rhs.data(), k, n,
+                                                                       block_begin, block_end);
+        }
+    });
+
+    Bf16ArgmaxResult best;
+    for (const auto& candidate : partial) {
+        if (candidate.index >= 0 && (best.index < 0 || candidate.value > best.value)) {
+            best = candidate;
+        }
+    }
+    *token = best.index < 0 ? 0 : best.index;
+    return 0;
+}
+
+int32_t ComputeLinearRowMajorX86Bf16PackedTransposedRhsArgmaxSingleThread(
+    const uint16_t* lhs, const uint16_t* rhs_transposed, const PackedBf16TransposedRhs& packed_rhs, int64_t k,
+    int64_t n, int64_t* token, Bf16LinearWorkspace* workspace, uint64_t source_version) {
+    if (lhs == nullptr || rhs_transposed == nullptr || token == nullptr || k <= 0 || n <= 0 ||
+        !packed_rhs.Matches(rhs_transposed, k, n, source_version)) {
+        return -1;
+    }
+    Bf16LinearWorkspace local_workspace;
+    if (workspace == nullptr) {
+        workspace = &local_workspace;
+    }
+    if (!workspace->Resize(static_cast<size_t>(k))) {
+        return -1;
+    }
+    ConvertBf16ArrayToFp32(lhs, k, workspace->data());
+    const Bf16ArgmaxResult result = ComputeSingleRowWideBf16PackedTransposedArgmaxColumns32(
+        workspace->data(), packed_rhs.data(), k, n, 0, n);
+    *token = result.index < 0 ? 0 : result.index;
+    return 0;
 }
 
 int32_t ComputeLinearRowMajorX86Bf16TransposedRhs(const uint16_t* lhs, const uint16_t* rhs_transposed,

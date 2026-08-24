@@ -5,6 +5,7 @@
 
 #include "core/kernel.h"
 #include "core/operator.h"
+#include "core/operator_registry.h"
 #include "core/tensor.h"
 #include "src/kernel/identity.h"
 #include "src/kernel/slice.h"
@@ -44,6 +45,50 @@ TEST(identity_slice_op_test, IdentityRunsOnX86) {
     for (size_t i = 0; i < 4; ++i) {
         EXPECT_FLOAT_EQ(out->data<float>()[i], input->data<float>()[i]);
     }
+}
+
+TEST(identity_slice_op_test, HostIdentityAliasesInputStorage) {
+    auto input = std::make_shared<Tensor>();
+    input->Assign<float>({1, 2, 3, 4}, {2, 2});
+    auto out = std::make_shared<Tensor>(std::vector<int64_t>{2, 2});
+
+    UnaryParam param{};
+    param.input = input;
+    param.out = out;
+    std::shared_ptr<OpBase> op = std::make_shared<feather::operators::IdentityOp>("identity_view", param);
+
+    {
+        feather::KernelDeviceScope device_scope(DeviceType::X86);
+        ASSERT_EQ(op->InferOutputShapes(), 0);
+    }
+    EXPECT_EQ(out->raw_data(), input->raw_data());
+
+    auto kernel = KernelDispatcher::instance().create(DeviceType::X86, DataType::FP32, "Identity");
+    ASSERT_NE(kernel, nullptr);
+    op->AttachKernel(std::move(kernel));
+    ASSERT_EQ(op->Run(), 0);
+
+    input->mutable_data<float>()[1] = 9.0f;
+    EXPECT_FLOAT_EQ(out->data<float>()[1], 9.0f);
+}
+
+TEST(identity_slice_op_test, CudaIdentityKeepsDistinctHostStorage) {
+    auto input = std::make_shared<Tensor>();
+    input->Assign<float>({1, 2, 3, 4}, {2, 2});
+    auto out = std::make_shared<Tensor>(std::vector<int64_t>{2, 2});
+    const void* const out_storage = out->raw_data();
+
+    UnaryParam param{};
+    param.input = input;
+    param.out = out;
+    std::shared_ptr<OpBase> op = std::make_shared<feather::operators::IdentityOp>("identity_cuda_copy", param);
+
+    {
+        feather::KernelDeviceScope device_scope(DeviceType::CUDA);
+        ASSERT_EQ(op->InferOutputShapes(), 0);
+    }
+    EXPECT_EQ(out->raw_data(), out_storage);
+    EXPECT_NE(out->raw_data(), input->raw_data());
 }
 
 TEST(identity_slice_op_test, SliceRunsOnX86) {

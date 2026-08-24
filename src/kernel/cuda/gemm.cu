@@ -12,6 +12,19 @@ namespace kernel {
 
 namespace {
 
+bool IsVectorBias(const Tensor* bias, int64_t n) {
+    if (bias == nullptr || !bias->IsInitialized() || bias->dims().empty() || n <= 0 ||
+        bias->dims()[bias->dims().size() - 1] != n || bias->numel() != n) {
+        return false;
+    }
+    for (size_t index = 0; index + 1 < bias->dims().size(); ++index) {
+        if (bias->dims()[index] != 1) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool g_cuda_gemm_kernels_registered = []() {
     auto& dispatcher = KernelDispatcher::instance();
     dispatcher.registerKernel(DeviceType::CUDA, DataType::FP32, "Gemm",
@@ -30,14 +43,18 @@ int RunGemm(feather::operators::GemmParam* param, const char* timer_name) {
     if (param == nullptr || param->a == nullptr || param->b == nullptr || param->out == nullptr) {
         return -1;
     }
-    if (param->a->dims().size() != 2 || param->b->dims().size() != 2 || param->trans_a) {
+    if (param->a->dims().size() < 2 || param->b->dims().size() != 2 || param->trans_a ||
+        param->a->data_type() != dtype || param->b->data_type() != dtype || param->out->data_type() != dtype) {
         return -1;
     }
-    const int64_t m = param->a->dims()[0];
-    const int64_t k = param->a->dims()[1];
+    const int64_t k = param->a->dims()[param->a->dims().size() - 1];
+    if (k <= 0 || param->a->numel() <= 0 || param->a->numel() % k != 0) {
+        return -1;
+    }
+    const int64_t m = param->a->numel() / k;
     const int64_t b_k = param->trans_b ? param->b->dims()[1] : param->b->dims()[0];
     const int64_t n = param->trans_b ? param->b->dims()[0] : param->b->dims()[1];
-    if (k != b_k) {
+    if (k != b_k || n <= 0 || param->out->numel() != m * n) {
         return -1;
     }
     cuda_detail::DeviceBuffer<T> a;
@@ -49,14 +66,26 @@ int RunGemm(feather::operators::GemmParam* param, const char* timer_name) {
     if (cuda_detail::CopyTensorToDevice(param->a.get(), &a) != 0 ||
         cuda_detail::CopyTensorToDevice(param->b.get(), &b) != 0 ||
         cuda_detail::AllocateTensorOnDevice(param->out.get(), &out) != 0) {
+        std::fprintf(stderr, "CUDA Gemm device buffer setup failed\n");
         return -1;
     }
     if (param->bias != nullptr && param->bias->IsInitialized()) {
+        if (param->bias->data_type() != dtype) {
+            return -1;
+        }
         if (cuda_detail::CopyTensorToDevice(param->bias.get(), &bias) != 0) {
             return -1;
         }
         bias_ptr = bias.get();
-        bias_mode = param->bias->dims().size() == 1 ? 1 : 2;
+        if (IsVectorBias(param->bias.get(), n)) {
+            bias_mode = 1;
+        } else {
+            if (param->a->dims().size() != 2 || param->bias->dims().size() != 2 ||
+                param->bias->dims()[0] != m || param->bias->dims()[1] != n) {
+                return -1;
+            }
+            bias_mode = 2;
+        }
     }
     if (cuda_detail::LaunchCublasMatMul<dtype>(a.get(), b.get(), out.get(), m, k, n, param->alpha, param->trans_b) != 0) {
         return -1;

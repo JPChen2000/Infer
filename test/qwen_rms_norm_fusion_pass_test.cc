@@ -5,6 +5,9 @@
 #include <string>
 #include <vector>
 
+#ifdef FEATHER_WITH_CUDA
+#include "core/graph_lowering.h"
+#endif
 #include "core/static_graph.h"
 #include "model/model_format.h"
 #include "pass/qwen_rms_norm_fusion_pass.h"
@@ -258,5 +261,32 @@ TEST(qwen_rms_norm_fusion_pass_test, FusesGatedNormWithDirectWeightAndFp32Output
     EXPECT_EQ(fused->op_type, "QwenRmsNorm");
     EXPECT_EQ(fused->inputs, (std::vector<std::string>{"core_bf16", "weight", "epsilon"}));
 }
+
+#ifdef FEATHER_WITH_CUDA
+TEST(qwen_rms_norm_fusion_pass_test, FusesAndLowersBf16RmsNormChainToCuda) {
+    StaticGraph graph;
+    graph.SetKernelDevice(DeviceType::CUDA);
+    ASSERT_EQ(graph.SetModel(BuildRmsNormModel(false, false)), 0);
+    BindInputs(&graph, false);
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto passes = std::make_shared<PassManager>();
+    passes->AddPass(std::make_unique<feather::QwenRmsNormFusionPass>());
+    graph.SetPassManager(passes);
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+
+    ASSERT_EQ(graph.NodeSize(), 1U);
+    const auto* fused = graph.GetNode("output_cast");
+    ASSERT_NE(fused, nullptr);
+    EXPECT_EQ(fused->op_type, "QwenRmsNorm");
+
+    feather::RuntimeGraph runtime;
+    feather::GraphLowering lowering;
+    ASSERT_EQ(lowering.Lower(graph, &runtime), 0);
+    const auto* node = runtime.GetNode("output_cast");
+    ASSERT_NE(node, nullptr);
+    EXPECT_EQ(node->kernel_device, DeviceType::CUDA);
+}
+#endif
 
 }  // namespace

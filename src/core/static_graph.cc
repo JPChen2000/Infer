@@ -100,6 +100,26 @@ int32_t StaticGraph::SetTensor(const std::string& name, std::shared_ptr<Tensor> 
     return 0;
 }
 
+bool StaticGraph::SetValueDataType(const std::string& name, DataType data_type) {
+    if (name.empty() || data_type == DataType::UNKNOWN) {
+        return false;
+    }
+    bool found = false;
+    for (auto& value : model_.graph.values) {
+        if (value.tensor.name == name) {
+            value.tensor.data_type = data_type;
+            found = true;
+            break;
+        }
+    }
+    const auto tensor = GetTensor(name);
+    if (tensor != nullptr) {
+        tensor->set_data_type(data_type);
+        found = true;
+    }
+    return found;
+}
+
 std::shared_ptr<Tensor> StaticGraph::GetTensor(const std::string& name) const {
     auto it = tensors_.find(name);
     if (it == tensors_.end()) {
@@ -252,6 +272,24 @@ std::vector<std::string> StaticGraph::GetUsers(const std::string& value_name) co
     return it->second;
 }
 
+bool StaticGraph::IsGraphOutputValue(const std::string& value_name) const {
+    for (const auto& output_name : model_.graph.outputs) {
+        std::string current = output_name;
+        std::unordered_set<std::string> visited;
+        while (visited.insert(current).second) {
+            if (current == value_name) {
+                return true;
+            }
+            const auto alias = output_aliases_.find(current);
+            if (alias == output_aliases_.end()) {
+                break;
+            }
+            current = alias->second;
+        }
+    }
+    return false;
+}
+
 bool StaticGraph::RemoveNode(const std::string& node_name) {
     auto it = node_index_by_name_.find(node_name);
     if (it == node_index_by_name_.end()) {
@@ -262,7 +300,7 @@ bool StaticGraph::RemoveNode(const std::string& node_name) {
         return false;
     }
     for (const auto& output_name : node.outputs) {
-        if (std::find(model_.graph.outputs.begin(), model_.graph.outputs.end(), output_name) != model_.graph.outputs.end()) {
+        if (IsGraphOutputValue(output_name)) {
             return false;
         }
         if (!GetUsers(output_name).empty()) {
@@ -280,6 +318,46 @@ bool StaticGraph::RemoveNode(const std::string& node_name) {
         }
         users_by_value_.erase(output_name);
     }
+    node.removed = true;
+    node.op.reset();
+    RebuildActiveOperators();
+    return true;
+}
+
+bool StaticGraph::RemoveNodeWithOutputAlias(const std::string& node_name) {
+    auto it = node_index_by_name_.find(node_name);
+    if (it == node_index_by_name_.end()) {
+        return false;
+    }
+    auto& node = nodes_[it->second];
+    if (node.removed || node.inputs.size() != 1 || node.outputs.size() != 1) {
+        return false;
+    }
+
+    const std::string& input_name = node.inputs[0];
+    const std::string& output_name = node.outputs[0];
+    if (std::find(model_.graph.outputs.begin(), model_.graph.outputs.end(), output_name) == model_.graph.outputs.end() ||
+        !GetUsers(output_name).empty()) {
+        return false;
+    }
+    const auto input = GetTensor(input_name);
+    const auto output = GetTensor(output_name);
+    if (input == nullptr || output == nullptr || input->dims() != output->dims() ||
+        input->data_type() != output->data_type() || input->layout() != output->layout()) {
+        return false;
+    }
+
+    // Keep the public graph-output name, but let lowering expose the source
+    // Tensor directly so an otherwise no-op relay does not become a runtime
+    // node.
+    tensors_[output_name] = input;
+    output_aliases_[output_name] = input_name;
+    UnregisterValueUse(input_name, node_name);
+    auto producer_it = producer_by_value_.find(output_name);
+    if (producer_it != producer_by_value_.end() && producer_it->second == node_name) {
+        producer_by_value_.erase(producer_it);
+    }
+    users_by_value_.erase(output_name);
     node.removed = true;
     node.op.reset();
     RebuildActiveOperators();
@@ -382,12 +460,86 @@ bool StaticGraph::ReplaceNodeDesc(const model::NodeDesc& desc) {
     return true;
 }
 
+bool StaticGraph::ReplaceNodeDescAndAbsorbNode(const model::NodeDesc& desc,
+                                                const std::string& absorbed_node_name) {
+    auto target_it = node_index_by_name_.find(desc.name);
+    auto absorbed_it = node_index_by_name_.find(absorbed_node_name);
+    if (target_it == node_index_by_name_.end() || absorbed_it == node_index_by_name_.end() ||
+        desc.name.empty() || desc.op_type.empty() || desc.name == absorbed_node_name) {
+        return false;
+    }
+
+    auto& target = nodes_[target_it->second];
+    auto& absorbed = nodes_[absorbed_it->second];
+    if (target.removed || absorbed.removed || desc.outputs.size() <= target.outputs.size() ||
+        !std::equal(target.outputs.begin(), target.outputs.end(), desc.outputs.begin())) {
+        return false;
+    }
+    const auto appended_begin = desc.outputs.begin() + static_cast<std::ptrdiff_t>(target.outputs.size());
+    if (!std::equal(appended_begin, desc.outputs.end(), absorbed.outputs.begin(), absorbed.outputs.end())) {
+        return false;
+    }
+    for (const auto& output_name : absorbed.outputs) {
+        if (GetProducer(output_name) != absorbed_node_name) {
+            return false;
+        }
+    }
+    for (const auto& input_name : desc.inputs) {
+        if (GetTensor(input_name) == nullptr) {
+            return false;
+        }
+    }
+
+    auto model_target = std::find_if(model_.graph.nodes.begin(), model_.graph.nodes.end(),
+                                     [&](const model::NodeDesc& node) { return node.name == desc.name; });
+    if (model_target == model_.graph.nodes.end()) {
+        return false;
+    }
+
+    KernelDeviceScope kernel_device_scope(kernel_device_);
+    auto op = OperatorRegistry::instance().Create(desc, tensors_);
+    if (op == nullptr || op->outputs().size() != desc.outputs.size()) {
+        return false;
+    }
+    for (const auto& output : op->outputs()) {
+        if (output == nullptr) {
+            return false;
+        }
+    }
+
+    for (const auto& input_name : target.inputs) {
+        UnregisterValueUse(input_name, desc.name);
+    }
+    target.op_type = desc.op_type;
+    target.inputs = desc.inputs;
+    target.outputs = desc.outputs;
+    target.op = std::move(op);
+    for (const auto& input_name : target.inputs) {
+        RegisterValueUse(input_name, desc.name);
+    }
+    for (size_t index = 0; index < target.outputs.size(); ++index) {
+        RestoreDeclaredTensorMetadata(model_, target.outputs[index], target.op->outputs()[index]);
+        tensors_[target.outputs[index]] = target.op->outputs()[index];
+        producer_by_value_[target.outputs[index]] = target.name;
+    }
+    *model_target = desc;
+
+    for (const auto& input_name : absorbed.inputs) {
+        UnregisterValueUse(input_name, absorbed_node_name);
+    }
+    absorbed.removed = true;
+    absorbed.op.reset();
+    RebuildActiveOperators();
+    return true;
+}
+
 void StaticGraph::ClearGraphState() {
     operators_.clear();
     nodes_.clear();
     node_index_by_name_.clear();
     producer_by_value_.clear();
     users_by_value_.clear();
+    output_aliases_.clear();
 }
 
 void StaticGraph::RegisterValueUse(const std::string& value_name, const std::string& node_name) {

@@ -335,6 +335,275 @@ TEST(runtime_graph_test, CudaGraphSynchronizesAroundCommonFallbackNode) {
 #endif
 }
 
+TEST(runtime_graph_test, CudaTensorCacheTracksInPlaceTensorMutation) {
+#ifndef FEATHER_WITH_CUDA
+    GTEST_SKIP() << "CUDA kernels are not built";
+#else
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
+    feather::kernel::cuda_detail::ClearTensorCache();
+    auto input = std::make_shared<Tensor>();
+    input->Assign<float>({1.0f}, {1});
+
+    void* device_ptr = nullptr;
+    {
+        feather::kernel::cuda_detail::DeferredHostSyncScope deferred_sync;
+        ASSERT_EQ(feather::kernel::cuda_detail::AcquireTensorDevice(
+                      input.get(), sizeof(float), input->data<float>(), &device_ptr),
+                  0);
+        ASSERT_NE(device_ptr, nullptr);
+        ASSERT_EQ(feather::kernel::cuda_detail::SynchronizeInferenceStream(), 0);
+
+        float device_value = 0.0f;
+        ASSERT_EQ(cudaMemcpy(&device_value, device_ptr, sizeof(device_value), cudaMemcpyDeviceToHost), cudaSuccess);
+        EXPECT_FLOAT_EQ(device_value, 1.0f);
+
+        input->mutable_data<float>()[0] = 2.0f;
+        void* updated_device_ptr = nullptr;
+        ASSERT_EQ(feather::kernel::cuda_detail::AcquireTensorDevice(
+                      input.get(), sizeof(float), input->data<float>(), &updated_device_ptr),
+                  0);
+        ASSERT_EQ(updated_device_ptr, device_ptr);
+        ASSERT_EQ(feather::kernel::cuda_detail::SynchronizeInferenceStream(), 0);
+        ASSERT_EQ(cudaMemcpy(&device_value, updated_device_ptr, sizeof(device_value), cudaMemcpyDeviceToHost),
+                  cudaSuccess);
+        EXPECT_FLOAT_EQ(device_value, 2.0f);
+    }
+    feather::kernel::cuda_detail::ClearTensorCache();
+#endif
+}
+
+TEST(runtime_graph_test, CudaTensorCacheTracksMutationThroughSharedHostStorage) {
+#ifndef FEATHER_WITH_CUDA
+    GTEST_SKIP() << "CUDA kernels are not built";
+#else
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
+    feather::kernel::cuda_detail::ClearTensorCache();
+    auto source = std::make_shared<Tensor>();
+    source->Assign<float>({1.0f}, {1});
+    auto alias = std::make_shared<Tensor>();
+    alias->ShareDataWith(*source);
+
+    void* device_ptr = nullptr;
+    {
+        feather::kernel::cuda_detail::DeferredHostSyncScope deferred_sync;
+        ASSERT_EQ(feather::kernel::cuda_detail::AcquireTensorDevice(
+                      alias.get(), sizeof(float), alias->data<float>(), &device_ptr),
+                  0);
+        ASSERT_NE(device_ptr, nullptr);
+        ASSERT_EQ(feather::kernel::cuda_detail::SynchronizeInferenceStream(), 0);
+
+        float device_value = 0.0f;
+        ASSERT_EQ(cudaMemcpy(&device_value, device_ptr, sizeof(device_value), cudaMemcpyDeviceToHost), cudaSuccess);
+        EXPECT_FLOAT_EQ(device_value, 1.0f);
+
+        source->mutable_data<float>()[0] = 2.0f;
+        void* updated_device_ptr = nullptr;
+        ASSERT_EQ(feather::kernel::cuda_detail::AcquireTensorDevice(
+                      alias.get(), sizeof(float), alias->data<float>(), &updated_device_ptr),
+                  0);
+        ASSERT_EQ(updated_device_ptr, device_ptr);
+        ASSERT_EQ(feather::kernel::cuda_detail::SynchronizeInferenceStream(), 0);
+        ASSERT_EQ(cudaMemcpy(&device_value, updated_device_ptr, sizeof(device_value), cudaMemcpyDeviceToHost),
+                  cudaSuccess);
+        EXPECT_FLOAT_EQ(device_value, 2.0f);
+    }
+    feather::kernel::cuda_detail::ClearTensorCache();
+#endif
+}
+
+TEST(runtime_graph_test, CudaHostMutationIsNotOverwrittenBeforeCommonFallback) {
+#ifndef FEATHER_WITH_CUDA
+    GTEST_SKIP() << "CUDA kernels are not built";
+#else
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
+    feather::kernel::cuda_detail::ClearTensorCache();
+    auto value = std::make_shared<Tensor>();
+    value->Assign<float>({0.0f}, {1});
+
+    void* device_ptr = nullptr;
+    ASSERT_EQ(feather::kernel::cuda_detail::AcquireOutputTensorDevice(value.get(), sizeof(float), &device_ptr), 0);
+    ASSERT_NE(device_ptr, nullptr);
+    const float device_value = 1.0f;
+    ASSERT_EQ(cudaMemcpyAsync(device_ptr, &device_value, sizeof(device_value), cudaMemcpyHostToDevice,
+                              feather::kernel::cuda_detail::InferenceStream()),
+              cudaSuccess);
+    ASSERT_EQ(feather::kernel::cuda_detail::SynchronizeInferenceStream(), 0);
+
+    value->mutable_data<float>()[0] = 2.0f;
+    ASSERT_EQ(feather::kernel::cuda_detail::SyncTensorToHostIfNeeded(value.get(), sizeof(float), value->raw_data()),
+              0);
+    EXPECT_FLOAT_EQ(value->data<float>()[0], 2.0f);
+    feather::kernel::cuda_detail::ClearTensorCache();
+#endif
+}
+
+TEST(runtime_graph_test, CudaStateAppendRejectsReleasedOutputDeviceStorage) {
+#ifndef FEATHER_WITH_CUDA
+    GTEST_SKIP() << "CUDA kernels are not built";
+#else
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
+    feather::kernel::cuda_detail::ClearTensorCache();
+    auto state = std::make_shared<Tensor>();
+    state->Assign<float>({1.0f, 2.0f, 3.0f}, {1, 3, 1});
+    auto token = std::make_shared<Tensor>();
+    token->Assign<float>({4.0f}, {1, 1, 1});
+
+    void* state_device = nullptr;
+    void* token_device = nullptr;
+    {
+        feather::kernel::cuda_detail::DeferredHostSyncScope deferred_sync;
+        ASSERT_EQ(feather::kernel::cuda_detail::AcquireTensorDevice(
+                      state.get(), 3 * sizeof(float), state->data<float>(), &state_device),
+                  0);
+        ASSERT_EQ(feather::kernel::cuda_detail::AcquireTensorDevice(
+                      token.get(), sizeof(float), token->data<float>(), &token_device),
+                  0);
+        ASSERT_NE(state_device, nullptr);
+        ASSERT_NE(token_device, nullptr);
+        ASSERT_EQ(feather::kernel::cuda_detail::SynchronizeInferenceStream(), 0);
+
+        feather::kernel::cuda_detail::ReleaseTensorDevice(token.get());
+        EXPECT_NE(feather::kernel::cuda_detail::AppendTensorStateOnDevice(state.get(), token.get(), 1), 0);
+    }
+    feather::kernel::cuda_detail::ClearTensorCache();
+#endif
+}
+
+TEST(runtime_graph_test, CudaOutputAliasKeepsSourceDeviceStorageAlive) {
+#ifndef FEATHER_WITH_CUDA
+    GTEST_SKIP() << "CUDA kernels are not built";
+#else
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
+    ModelDesc model;
+    model.name = "qwen_cuda_output_alias_lifetime";
+    model.version = 1;
+    model.graph.name = "decode";
+    model.graph.inputs = {"cache_state", "bias"};
+    model.graph.outputs = {"next_cache_state", "consumer_out"};
+
+    auto value = [](const std::string& name) {
+        ValueDesc desc;
+        desc.tensor.name = name;
+        desc.tensor.dims = {1};
+        desc.tensor.data_type = DataType::FP32;
+        return desc;
+    };
+    model.graph.values = {value("cache_state"), value("bias"), value("state_raw"), value("next_cache_state"),
+                          value("consumer_out")};
+
+    NodeDesc produce;
+    produce.name = "produce_state";
+    produce.op_type = "Add";
+    produce.inputs = {"cache_state", "bias"};
+    produce.outputs = {"state_raw"};
+
+    NodeDesc consume;
+    consume.name = "consume_state";
+    consume.op_type = "Relu";
+    consume.inputs = {"state_raw"};
+    consume.outputs = {"consumer_out"};
+
+    NodeDesc relay;
+    relay.name = "state_output";
+    relay.op_type = "Identity";
+    relay.inputs = {"state_raw"};
+    relay.outputs = {"next_cache_state"};
+    model.graph.nodes = {produce, consume, relay};
+
+    auto cache_state = std::make_shared<Tensor>();
+    cache_state->Assign<float>({1.0f}, {1});
+    auto bias = std::make_shared<Tensor>();
+    bias->Assign<float>({2.0f}, {1});
+    auto state_raw = std::make_shared<Tensor>();
+    state_raw->Assign<float>({0.0f}, {1});
+
+    feather::kernel::cuda_detail::ClearTensorCache();
+    StaticGraph static_graph;
+    static_graph.SetKernelDevice(DeviceType::CUDA);
+    ASSERT_EQ(static_graph.SetModel(model), 0);
+    ASSERT_EQ(static_graph.SetTensor("cache_state", cache_state), 0);
+    ASSERT_EQ(static_graph.SetTensor("bias", bias), 0);
+    ASSERT_EQ(static_graph.SetTensor("state_raw", state_raw), 0);
+    ASSERT_EQ(static_graph.Build(), 0);
+    ASSERT_EQ(static_graph.ApplyPasses(), 0);
+    ASSERT_EQ(static_graph.NodeSize(), 2U);
+    EXPECT_EQ(static_graph.GetTensor("next_cache_state"), static_graph.GetTensor("state_raw"));
+
+    RuntimeGraph runtime;
+    GraphLowering lowering;
+    ASSERT_EQ(lowering.Lower(static_graph, &runtime), 0);
+    {
+        feather::kernel::cuda_detail::DeferredHostSyncScope deferred_sync;
+        ASSERT_EQ(runtime.Run(), 0);
+        ASSERT_EQ(feather::kernel::cuda_detail::SynchronizeInferenceStream(), 0);
+    }
+
+    const auto next_state = runtime.GetTensor("next_cache_state");
+    ASSERT_NE(next_state, nullptr);
+    ASSERT_EQ(feather::kernel::cuda_detail::SyncTensorToHost(next_state.get(), sizeof(float), next_state->raw_data()),
+              0);
+    EXPECT_FLOAT_EQ(next_state->data<float>()[0], 3.0f);
+    feather::kernel::cuda_detail::ClearTensorCache();
+#endif
+}
+
+TEST(runtime_graph_test, CudaViewAliasSharesDeviceAllocationAndLifetime) {
+#ifndef FEATHER_WITH_CUDA
+    GTEST_SKIP() << "CUDA kernels are not built";
+#else
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
+    feather::kernel::cuda_detail::ClearTensorCache();
+    auto input = std::make_shared<Tensor>();
+    input->Assign<float>({1.0f, 2.0f}, {1, 2});
+    auto output = std::make_shared<Tensor>();
+    output->Assign<float>({0.0f, 0.0f}, {2, 1});
+
+    void* input_device = nullptr;
+    void* output_device = nullptr;
+    {
+        feather::kernel::cuda_detail::DeferredHostSyncScope deferred_sync;
+        ASSERT_EQ(feather::kernel::cuda_detail::AcquireTensorDevice(
+                      input.get(), 2 * sizeof(float), input->data<float>(), &input_device),
+                  0);
+        ASSERT_NE(input_device, nullptr);
+        ASSERT_EQ(feather::kernel::cuda_detail::AliasTensorDeviceStorage(
+                      input.get(), output.get(), 2 * sizeof(float)),
+                  0);
+        ASSERT_EQ(feather::kernel::cuda_detail::AcquireTensorDevice(
+                      output.get(), 2 * sizeof(float), output->data<float>(), &output_device),
+                  0);
+        EXPECT_EQ(output_device, input_device);
+
+        feather::kernel::cuda_detail::ReleaseTensorDevice(input.get());
+        ASSERT_EQ(feather::kernel::cuda_detail::SyncTensorToHost(
+                      output.get(), 2 * sizeof(float), output->raw_data()),
+                  0);
+    }
+    EXPECT_FLOAT_EQ(output->data<float>()[0], 1.0f);
+    EXPECT_FLOAT_EQ(output->data<float>()[1], 2.0f);
+    feather::kernel::cuda_detail::ClearTensorCache();
+#endif
+}
+
+
 TEST(runtime_graph_test, CudaGraphReleasesDeadTensorCachesIntoPool) {
 #ifndef FEATHER_WITH_CUDA
     GTEST_SKIP() << "CUDA kernels are not built";

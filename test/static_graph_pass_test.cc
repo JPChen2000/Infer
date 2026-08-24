@@ -10,8 +10,10 @@
 #include "pass/dead_node_elimination_pass.h"
 #include "pass/identity_elimination_pass.h"
 #include "pass/matmul_add_fusion_pass.h"
+#include "pass/qwen_depthwise_conv_fusion_pass.h"
 #include "pass/qwen_gated_delta_fusion_pass.h"
 #include "pass/qwen_matmul_add_fusion_pass.h"
+#include "pass/qwen_state_output_alias_pass.h"
 #include "pass/no_op_elimination_pass.h"
 #include "pass/resize_concat_fusion_pass.h"
 #include "pass/reshape_chain_elimination_pass.h"
@@ -21,6 +23,7 @@
 #include "core/tensor.h"
 #include "pass/yolo_decode_fusion_pass.h"
 #include "model/model_format.h"
+#include "util/bf16.h"
 
 using feather::DataType;
 using feather::DeadNodeEliminationPass;
@@ -28,8 +31,10 @@ using feather::DeviceType;
 using feather::GraphPass;
 using feather::IdentityEliminationPass;
 using feather::MatMulAddFusionPass;
+using feather::QwenDepthwiseConvFusionPass;
 using feather::QwenGatedDeltaFusionPass;
 using feather::QwenMatMulAddFusionPass;
+using feather::QwenStateOutputAliasPass;
 using feather::NoOpEliminationPass;
 using feather::PassManager;
 using feather::ResizeConcatFusionPass;
@@ -188,6 +193,38 @@ ModelDesc BuildIdentityRelayModelDesc(bool identity_output_is_graph_output = fal
     return model;
 }
 
+ModelDesc BuildQwenStateOutputIdentityModelDesc() {
+    ModelDesc model;
+    model.name = "qwen_state_output_alias_graph";
+    model.version = 1;
+    model.graph.name = "decode";
+    model.graph.inputs = {"cache_state"};
+    model.graph.outputs = {"next_cache_state"};
+
+    auto value = [](const std::string& name) {
+        ValueDesc desc;
+        desc.tensor.name = name;
+        desc.tensor.dims = {1, 4};
+        desc.tensor.data_type = DataType::BF16;
+        return desc;
+    };
+    model.graph.values = {value("cache_state"), value("state_raw"), value("next_cache_state")};
+
+    NodeDesc produce;
+    produce.name = "state_producer";
+    produce.op_type = "Identity";
+    produce.inputs = {"cache_state"};
+    produce.outputs = {"state_raw"};
+
+    NodeDesc output;
+    output.name = "state_output";
+    output.op_type = "Identity";
+    output.inputs = {"state_raw"};
+    output.outputs = {"next_cache_state"};
+    model.graph.nodes = {produce, output};
+    return model;
+}
+
 ModelDesc BuildMatMulAddModelDesc(bool keep_matmul_output_live = false) {
     ModelDesc model;
     model.name = "matmul_add_graph";
@@ -256,6 +293,84 @@ ModelDesc BuildQwenMatMulAddModelDesc() {
     add.outputs = {"output"};
 
     model.graph.nodes = {matmul, add};
+    return model;
+}
+
+ModelDesc BuildQwenDepthwiseConvModelDesc(bool prefix_has_user = false, bool prefix_is_graph_output = false) {
+    constexpr int64_t kChannels = 3;
+    ModelDesc model;
+    model.name = "qwen_depthwise_conv_graph";
+    model.version = 1;
+    model.graph.name = "decode";
+    model.graph.inputs = {"state", "mixed", "weight", "reshape_shape"};
+    model.graph.outputs = {"conv_out", "next_state"};
+    if (prefix_is_graph_output) {
+        model.graph.outputs.push_back("discarded_prefix");
+    }
+
+    auto value = [](const std::string& name, std::vector<int64_t> dims, DataType data_type) {
+        ValueDesc desc;
+        desc.tensor.name = name;
+        desc.tensor.dims = std::move(dims);
+        desc.tensor.data_type = data_type;
+        return desc;
+    };
+    model.graph.values = {
+        value("state", {1, kChannels, 3}, DataType::BF16),
+        value("mixed", {1, kChannels, 1}, DataType::BF16),
+        value("weight", {kChannels, 1, 1, 4}, DataType::BF16),
+        value("reshape_shape", {4}, DataType::INT64),
+        value("joined", {1, kChannels, 4}, DataType::BF16),
+        value("conv_input", {1, kChannels, 1, 4}, DataType::BF16),
+        value("conv_out", {1, kChannels, 1, 1}, DataType::BF16),
+        value("discarded_prefix", {1, kChannels, 1}, DataType::BF16),
+        value("next_state", {1, kChannels, 3}, DataType::BF16),
+        value("prefix_user_out", {1, kChannels, 1}, DataType::BF16),
+    };
+
+    NodeDesc concat;
+    concat.name = "state_concat";
+    concat.op_type = "Concat";
+    concat.inputs = {"state", "mixed"};
+    concat.outputs = {"joined"};
+    concat.attributes["axis"] = static_cast<int64_t>(2);
+
+    NodeDesc reshape;
+    reshape.name = "state_reshape";
+    reshape.op_type = "Reshape";
+    reshape.inputs = {"joined", "reshape_shape"};
+    reshape.outputs = {"conv_input"};
+
+    NodeDesc conv;
+    conv.name = "state_conv";
+    conv.op_type = "Conv2D";
+    conv.inputs = {"conv_input", "weight"};
+    conv.outputs = {"conv_out"};
+    conv.attributes["group"] = kChannels;
+    conv.attributes["stride_h"] = static_cast<int64_t>(1);
+    conv.attributes["stride_w"] = static_cast<int64_t>(1);
+    conv.attributes["pad_h"] = static_cast<int64_t>(0);
+    conv.attributes["pad_w"] = static_cast<int64_t>(0);
+    conv.attributes["dilation_h"] = static_cast<int64_t>(1);
+    conv.attributes["dilation_w"] = static_cast<int64_t>(1);
+
+    NodeDesc split;
+    split.name = "state_split";
+    split.op_type = "Split";
+    split.inputs = {"joined"};
+    split.outputs = {"discarded_prefix", "next_state"};
+    split.attributes["axis"] = static_cast<int64_t>(2);
+    split.attributes["split_sizes"] = std::vector<int64_t>{1, 3};
+
+    model.graph.nodes = {concat, reshape, conv, split};
+    if (prefix_has_user) {
+        NodeDesc prefix_user;
+        prefix_user.name = "prefix_user";
+        prefix_user.op_type = "Identity";
+        prefix_user.inputs = {"discarded_prefix"};
+        prefix_user.outputs = {"prefix_user_out"};
+        model.graph.nodes.push_back(prefix_user);
+    }
     return model;
 }
 
@@ -727,6 +842,41 @@ void BindQwenMatMulAddInputs(StaticGraph* graph) {
     ASSERT_EQ(graph->SetTensor("residual", residual), 0);
 }
 
+void BindQwenDepthwiseConvInputs(StaticGraph* graph) {
+    constexpr int64_t kChannels = 3;
+    std::vector<feather::BFloat16> state_values;
+    std::vector<feather::BFloat16> mixed_values;
+    std::vector<feather::BFloat16> weight_values;
+    state_values.reserve(static_cast<size_t>(kChannels * 3));
+    mixed_values.reserve(static_cast<size_t>(kChannels));
+    weight_values.reserve(static_cast<size_t>(kChannels * 4));
+    for (int64_t channel = 0; channel < kChannels; ++channel) {
+        for (int64_t offset = 0; offset < 3; ++offset) {
+            state_values.push_back(feather::BFloat16{feather::FloatToBFloat16(
+                0.125f * static_cast<float>(channel * 3 + offset - 4))});
+        }
+        mixed_values.push_back(
+            feather::BFloat16{feather::FloatToBFloat16(0.0625f * static_cast<float>(channel * 5 - 3))});
+        for (int64_t offset = 0; offset < 4; ++offset) {
+            weight_values.push_back(feather::BFloat16{feather::FloatToBFloat16(
+                0.03125f * static_cast<float>(channel * 7 + offset * 3 - 8))});
+        }
+    }
+
+    auto state = std::make_shared<Tensor>();
+    state->Assign<feather::BFloat16>(state_values, {1, kChannels, 3});
+    auto mixed = std::make_shared<Tensor>();
+    mixed->Assign<feather::BFloat16>(mixed_values, {1, kChannels, 1});
+    auto weight = std::make_shared<Tensor>();
+    weight->Assign<feather::BFloat16>(weight_values, {kChannels, 1, 1, 4});
+    auto reshape_shape = std::make_shared<Tensor>();
+    reshape_shape->Assign<int64_t>({1, kChannels, 1, 4}, {4});
+    ASSERT_EQ(graph->SetTensor("state", state), 0);
+    ASSERT_EQ(graph->SetTensor("mixed", mixed), 0);
+    ASSERT_EQ(graph->SetTensor("weight", weight), 0);
+    ASSERT_EQ(graph->SetTensor("reshape_shape", reshape_shape), 0);
+}
+
 void BindQwenGatedDeltaInputs(StaticGraph* graph) {
     auto state = std::make_shared<Tensor>();
     state->Assign<float>({
@@ -778,6 +928,43 @@ std::pair<std::vector<float>, std::vector<float>> RunQwenGatedDeltaGraph(DeviceT
     }
     return {{next_state->data<float>(), next_state->data<float>() + next_state->numel()},
             {core->data<float>(), core->data<float>() + core->numel()}};
+}
+
+std::pair<std::vector<uint16_t>, std::vector<uint16_t>> RunQwenDepthwiseConvGraph(DeviceType device,
+                                                                                     bool apply_fusion) {
+    StaticGraph graph;
+    graph.SetKernelDevice(device);
+    if (graph.SetModel(BuildQwenDepthwiseConvModelDesc()) != 0) return {};
+    BindQwenDepthwiseConvInputs(&graph);
+    if (graph.Build() != 0) return {};
+
+    auto pass_manager = std::make_shared<PassManager>();
+    if (apply_fusion) pass_manager->AddPass(std::make_unique<QwenDepthwiseConvFusionPass>());
+    graph.SetPassManager(pass_manager);
+    if (graph.ApplyPasses() != 0) return {};
+
+    feather::RuntimeGraph runtime;
+    feather::GraphLowering lowering;
+    if (lowering.Lower(graph, &runtime) != 0 || runtime.Run() != 0) return {};
+    const auto conv_out = runtime.GetTensor("conv_out");
+    const auto next_state = runtime.GetTensor("next_state");
+    if (conv_out == nullptr || next_state == nullptr || conv_out->data_type() != DataType::BF16 ||
+        next_state->data_type() != DataType::BF16) {
+        return {};
+    }
+
+    const auto* conv_data = conv_out->data<feather::BFloat16>();
+    const auto* state_data = next_state->data<feather::BFloat16>();
+    if (conv_data == nullptr || state_data == nullptr) return {};
+    std::vector<uint16_t> conv_values(static_cast<size_t>(conv_out->numel()));
+    std::vector<uint16_t> state_values(static_cast<size_t>(next_state->numel()));
+    for (int64_t index = 0; index < conv_out->numel(); ++index) {
+        conv_values[static_cast<size_t>(index)] = conv_data[index].bits;
+    }
+    for (int64_t index = 0; index < next_state->numel(); ++index) {
+        state_values[static_cast<size_t>(index)] = state_data[index].bits;
+    }
+    return {std::move(conv_values), std::move(state_values)};
 }
 
 void BindNoOpGraphInputs(StaticGraph* graph, const std::vector<int64_t>& dims) {
@@ -1070,6 +1257,54 @@ TEST(static_graph_pass_test, IdentityEliminationPassPreservesGraphOutputIdentity
     EXPECT_NE(graph.GetNode("identity0"), nullptr);
 }
 
+TEST(static_graph_pass_test, QwenStateOutputAliasPassRemovesOnlyExplicitX86StateRelay) {
+    StaticGraph graph;
+    graph.SetKernelDevice(DeviceType::X86);
+    ASSERT_EQ(graph.SetModel(BuildQwenStateOutputIdentityModelDesc()), 0);
+    auto state = std::make_shared<Tensor>(8);
+    state->Resize({1, 4});
+    state->set_data_type(DataType::BF16);
+    ASSERT_EQ(graph.SetTensor("cache_state", state), 0);
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<QwenStateOutputAliasPass>());
+    pass_manager->AddPass(std::make_unique<DeadNodeEliminationPass>());
+    graph.SetPassManager(pass_manager);
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+
+    EXPECT_EQ(graph.NodeSize(), 1U);
+    EXPECT_NE(graph.GetNode("state_producer"), nullptr);
+    EXPECT_EQ(graph.GetNode("state_output"), nullptr);
+    EXPECT_EQ(graph.GetProducer("next_cache_state"), "");
+    EXPECT_EQ(graph.GetTensor("next_cache_state"), graph.GetTensor("state_raw"));
+}
+
+#ifdef FEATHER_WITH_CUDA
+TEST(static_graph_pass_test, QwenStateOutputAliasPassRemovesExplicitCudaStateRelay) {
+    StaticGraph graph;
+    graph.SetKernelDevice(DeviceType::CUDA);
+    ASSERT_EQ(graph.SetModel(BuildQwenStateOutputIdentityModelDesc()), 0);
+    auto state = std::make_shared<Tensor>(8);
+    state->Resize({1, 4});
+    state->set_data_type(DataType::BF16);
+    ASSERT_EQ(graph.SetTensor("cache_state", state), 0);
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<QwenStateOutputAliasPass>());
+    pass_manager->AddPass(std::make_unique<DeadNodeEliminationPass>());
+    graph.SetPassManager(pass_manager);
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+
+    EXPECT_EQ(graph.NodeSize(), 1U);
+    EXPECT_NE(graph.GetNode("state_producer"), nullptr);
+    EXPECT_EQ(graph.GetNode("state_output"), nullptr);
+    EXPECT_EQ(graph.GetProducer("next_cache_state"), "");
+    EXPECT_EQ(graph.GetTensor("next_cache_state"), graph.GetTensor("state_raw"));
+}
+#endif
+
 TEST(static_graph_pass_test, MatMulAddFusionPassRewritesToGemm) {
     StaticGraph graph;
     ASSERT_EQ(graph.SetModel(BuildMatMulAddModelDesc(false)), 0);
@@ -1142,6 +1377,100 @@ TEST(static_graph_pass_test, QwenMatMulAddFusionPassSkipsNonQwenModel) {
     EXPECT_EQ(add->op_type, "Add");
 }
 
+TEST(static_graph_pass_test, QwenDepthwiseConvFusionPassRewritesStateConvOnX86) {
+    StaticGraph graph;
+    graph.SetKernelDevice(DeviceType::X86);
+    ASSERT_EQ(graph.SetModel(BuildQwenDepthwiseConvModelDesc()), 0);
+    BindQwenDepthwiseConvInputs(&graph);
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<QwenDepthwiseConvFusionPass>());
+    graph.SetPassManager(pass_manager);
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+
+    EXPECT_EQ(graph.NodeSize(), 1U);
+    const auto* conv = graph.GetNode("state_conv");
+    ASSERT_NE(conv, nullptr);
+    EXPECT_EQ(conv->op_type, "QwenDepthwiseConvState");
+    EXPECT_EQ(conv->inputs, (std::vector<std::string>{"state", "mixed", "weight"}));
+    EXPECT_EQ(conv->outputs, (std::vector<std::string>{"conv_out", "discarded_prefix", "next_state"}));
+    EXPECT_EQ(graph.GetNode("state_concat"), nullptr);
+    EXPECT_EQ(graph.GetNode("state_reshape"), nullptr);
+    EXPECT_EQ(graph.GetNode("state_split"), nullptr);
+}
+
+#ifdef FEATHER_WITH_CUDA
+TEST(static_graph_pass_test, QwenDepthwiseConvFusionPassLowersStateConvToCuda) {
+    StaticGraph graph;
+    graph.SetKernelDevice(DeviceType::CUDA);
+    ASSERT_EQ(graph.SetModel(BuildQwenDepthwiseConvModelDesc()), 0);
+    BindQwenDepthwiseConvInputs(&graph);
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<QwenDepthwiseConvFusionPass>());
+    graph.SetPassManager(pass_manager);
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+
+    ASSERT_EQ(graph.NodeSize(), 1U);
+    ASSERT_NE(graph.GetNode("state_conv"), nullptr);
+    EXPECT_EQ(graph.GetNode("state_conv")->op_type, "QwenDepthwiseConvState");
+
+    feather::RuntimeGraph runtime;
+    feather::GraphLowering lowering;
+    ASSERT_EQ(lowering.Lower(graph, &runtime), 0);
+    const auto* node = runtime.GetNode("state_conv");
+    ASSERT_NE(node, nullptr);
+    EXPECT_EQ(node->kernel_device, DeviceType::CUDA);
+}
+#endif
+
+TEST(static_graph_pass_test, QwenDepthwiseConvFusionPassPreservesConvAndNextState) {
+    const auto reference = RunQwenDepthwiseConvGraph(DeviceType::COMMON, false);
+    const auto fused = RunQwenDepthwiseConvGraph(DeviceType::X86, true);
+    ASSERT_FALSE(reference.first.empty());
+    ASSERT_FALSE(reference.second.empty());
+    EXPECT_EQ(fused.first, reference.first);
+    EXPECT_EQ(fused.second, reference.second);
+}
+
+TEST(static_graph_pass_test, QwenDepthwiseConvFusionPassSkipsCommonDevice) {
+    StaticGraph graph;
+    graph.SetKernelDevice(DeviceType::COMMON);
+    ASSERT_EQ(graph.SetModel(BuildQwenDepthwiseConvModelDesc()), 0);
+    BindQwenDepthwiseConvInputs(&graph);
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<QwenDepthwiseConvFusionPass>());
+    graph.SetPassManager(pass_manager);
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+
+    EXPECT_EQ(graph.NodeSize(), 4U);
+    ASSERT_NE(graph.GetNode("state_conv"), nullptr);
+    EXPECT_EQ(graph.GetNode("state_conv")->op_type, "Conv2D");
+}
+
+TEST(static_graph_pass_test, QwenDepthwiseConvFusionPassPreservesObservedPrefix) {
+    for (const auto prefix_is_graph_output : {false, true}) {
+        StaticGraph graph;
+        graph.SetKernelDevice(DeviceType::X86);
+        ASSERT_EQ(graph.SetModel(BuildQwenDepthwiseConvModelDesc(!prefix_is_graph_output, prefix_is_graph_output)), 0);
+        BindQwenDepthwiseConvInputs(&graph);
+        ASSERT_EQ(graph.Build(), 0);
+
+        auto pass_manager = std::make_shared<PassManager>();
+        pass_manager->AddPass(std::make_unique<QwenDepthwiseConvFusionPass>());
+        graph.SetPassManager(pass_manager);
+        ASSERT_EQ(graph.ApplyPasses(), 0);
+
+        ASSERT_NE(graph.GetNode("state_conv"), nullptr);
+        EXPECT_EQ(graph.GetNode("state_conv")->op_type, "Conv2D");
+        EXPECT_EQ(graph.NodeSize(), prefix_is_graph_output ? 4U : 5U);
+    }
+}
+
 TEST(static_graph_pass_test, QwenGatedDeltaFusionPassRewritesLinearStateAndOutputOnX86) {
     StaticGraph graph;
     graph.SetKernelDevice(DeviceType::X86);
@@ -1154,18 +1483,43 @@ TEST(static_graph_pass_test, QwenGatedDeltaFusionPassRewritesLinearStateAndOutpu
     graph.SetPassManager(pass_manager);
 
     ASSERT_EQ(graph.ApplyPasses(), 0);
-    EXPECT_EQ(graph.NodeSize(), 2U);
+    EXPECT_EQ(graph.NodeSize(), 1U);
     const auto* state = graph.GetNode("next_state_update");
     ASSERT_NE(state, nullptr);
-    EXPECT_EQ(state->op_type, "QwenGatedDeltaState");
-    EXPECT_EQ(state->inputs, (std::vector<std::string>{"state", "k", "v", "beta", "decay"}));
-    const auto* output = graph.GetNode("core");
-    ASSERT_NE(output, nullptr);
-    EXPECT_EQ(output->op_type, "QwenGatedDeltaOutput");
-    EXPECT_EQ(output->inputs, (std::vector<std::string>{"next_state", "q"}));
+    EXPECT_EQ(state->op_type, "QwenGatedDelta");
+    EXPECT_EQ(state->inputs, (std::vector<std::string>{"state", "k", "v", "beta", "decay", "q"}));
+    EXPECT_EQ(state->outputs, (std::vector<std::string>{"next_state", "core"}));
+    EXPECT_EQ(graph.GetNode("core"), nullptr);
+    EXPECT_EQ(graph.GetProducer("core"), "next_state_update");
     EXPECT_EQ(graph.GetNode("state_decay"), nullptr);
     EXPECT_EQ(graph.GetNode("output_full"), nullptr);
 }
+
+#ifdef FEATHER_WITH_CUDA
+TEST(static_graph_pass_test, QwenGatedDeltaFusionPassLowersStateAndOutputToCuda) {
+    StaticGraph graph;
+    graph.SetKernelDevice(DeviceType::CUDA);
+    ASSERT_EQ(graph.SetModel(BuildQwenGatedDeltaModelDesc()), 0);
+    BindQwenGatedDeltaInputs(&graph);
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto pass_manager = std::make_shared<PassManager>();
+    pass_manager->AddPass(std::make_unique<QwenGatedDeltaFusionPass>());
+    graph.SetPassManager(pass_manager);
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+
+    ASSERT_EQ(graph.NodeSize(), 1U);
+    ASSERT_NE(graph.GetNode("next_state_update"), nullptr);
+    EXPECT_EQ(graph.GetNode("next_state_update")->op_type, "QwenGatedDelta");
+
+    feather::RuntimeGraph runtime;
+    feather::GraphLowering lowering;
+    ASSERT_EQ(lowering.Lower(graph, &runtime), 0);
+    const auto* node = runtime.GetNode("next_state_update");
+    ASSERT_NE(node, nullptr);
+    EXPECT_EQ(node->kernel_device, DeviceType::CUDA);
+}
+#endif
 
 TEST(static_graph_pass_test, QwenGatedDeltaFusionPassPreservesStateAndCoreValues) {
     const auto reference = RunQwenGatedDeltaGraph(DeviceType::COMMON, false);
@@ -1236,13 +1590,13 @@ TEST(static_graph_pass_test, QwenGatedDeltaFusionPassSkipsGraphOutputIntermediat
 TEST(static_graph_pass_test, DefaultPassManagerIncludesGeneralFusionPasses) {
     auto pass_manager = feather::CreateDefaultPassManager();
     ASSERT_NE(pass_manager, nullptr);
-    EXPECT_EQ(pass_manager->PassCount(), 9U);
+    EXPECT_EQ(pass_manager->PassCount(), 12U);
 }
 
 TEST(static_graph_pass_test, YoloPassManagerAddsDecodeFusionOnTopOfDefaultPasses) {
     auto pass_manager = feather::CreateYoloPassManager();
     ASSERT_NE(pass_manager, nullptr);
-    EXPECT_EQ(pass_manager->PassCount(), 12U);
+    EXPECT_EQ(pass_manager->PassCount(), 15U);
 }
 
 TEST(static_graph_pass_test, ReshapeChainEliminationPassRemovesInnerReshape) {

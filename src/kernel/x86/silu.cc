@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "src/kernel/common/kernel_io.h"
+#include "util/bf16.h"
 #include "util/thread_pool_nv.h"
 #include "util/threading.h"
 #include "util/timer.h"
@@ -39,6 +40,17 @@ const std::array<uint16_t, 1u << 16>& GetSiluFp16Lut() {
         std::array<uint16_t, 1u << 16> table{};
         for (size_t i = 0; i < table.size(); ++i) {
             table[i] = FloatToHalf(SiluScalar(HalfToFloat(static_cast<uint16_t>(i))));
+        }
+        return table;
+    }();
+    return lut;
+}
+
+const std::array<uint16_t, 1u << 16>& GetSiluBf16Lut() {
+    static const std::array<uint16_t, 1u << 16> lut = []() {
+        std::array<uint16_t, 1u << 16> table{};
+        for (size_t i = 0; i < table.size(); ++i) {
+            table[i] = FloatToBFloat16(SiluScalar(BFloat16ToFloat(static_cast<uint16_t>(i))));
         }
         return table;
     }();
@@ -163,6 +175,40 @@ int32_t SiluKernel<DeviceType::X86, DataType::FP16>::compute() {
     return 0;
 }
 
+template <>
+int32_t SiluKernel<DeviceType::X86, DataType::BF16>::compute() {
+    AutoTimer timer("X86::SiLU::BF16");
+    auto* param = static_cast<feather::operators::UnaryParam*>(param_);
+    if (param == nullptr || param->input == nullptr || param->out == nullptr) {
+        return -1;
+    }
+    if (param->input->data_type() != DataType::BF16) {
+        return ComputeSiluFallback<DataType::BF16>(param);
+    }
+
+    const auto& lut = GetSiluBf16Lut();
+    const BFloat16* input = param->input->data<BFloat16>();
+    BFloat16* output = param->out->mutable_data<BFloat16>();
+    const int64_t numel = param->input->numel();
+    ParallelForSilu(numel, [&](int64_t begin, int64_t end) {
+        int64_t i = begin;
+        for (; i + 8 <= end; i += 8) {
+            output[i + 0].bits = lut[input[i + 0].bits];
+            output[i + 1].bits = lut[input[i + 1].bits];
+            output[i + 2].bits = lut[input[i + 2].bits];
+            output[i + 3].bits = lut[input[i + 3].bits];
+            output[i + 4].bits = lut[input[i + 4].bits];
+            output[i + 5].bits = lut[input[i + 5].bits];
+            output[i + 6].bits = lut[input[i + 6].bits];
+            output[i + 7].bits = lut[input[i + 7].bits];
+        }
+        for (; i < end; ++i) {
+            output[i].bits = lut[input[i].bits];
+        }
+    });
+    return 0;
+}
+
 void EnsureX86SiluKernelsRegistered() {
     static bool registered = []() {
         KernelDispatcher::instance().registerKernel(
@@ -171,6 +217,9 @@ void EnsureX86SiluKernelsRegistered() {
         KernelDispatcher::instance().registerKernel(
             DeviceType::X86, DataType::FP16, "SiLU",
             []() { return std::make_unique<SiluKernel<DeviceType::X86, DataType::FP16>>(); });
+        KernelDispatcher::instance().registerKernel(
+            DeviceType::X86, DataType::BF16, "SiLU",
+            []() { return std::make_unique<SiluKernel<DeviceType::X86, DataType::BF16>>(); });
         return true;
     }();
     (void)registered;

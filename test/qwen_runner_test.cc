@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -13,6 +14,7 @@
 #include "demo/qwen_demo.h"
 #include "demo/qwen_runner.h"
 #include "model/model_io.h"
+#include "util/bf16.h"
 
 namespace {
 
@@ -29,6 +31,18 @@ feather::model::ValueDesc MakeValue(const std::string& name, const std::vector<i
 std::shared_ptr<feather::Tensor> MakeFloatTensor(const std::vector<float>& values, const std::vector<int64_t>& dims) {
     auto tensor = std::make_shared<feather::Tensor>();
     tensor->Assign<float>(values, dims);
+    return tensor;
+}
+
+std::shared_ptr<feather::Tensor> MakeBf16Tensor(const std::vector<float>& values,
+                                                const std::vector<int64_t>& dims) {
+    std::vector<feather::BFloat16> storage;
+    storage.reserve(values.size());
+    for (const float value : values) {
+        storage.push_back(feather::BFloat16{feather::FloatToBFloat16(value)});
+    }
+    auto tensor = std::make_shared<feather::Tensor>();
+    tensor->Assign<feather::BFloat16>(storage, dims);
     return tensor;
 }
 
@@ -70,6 +84,99 @@ std::filesystem::path WriteAutoregressiveFixture() {
                                           0.0f, 0.0f, 5.0f, 0.0f},
                                          {4, 4});
     const auto path = std::filesystem::temp_directory_path() / "qwen_runner_fixture.fth";
+    feather::model::ModelWriter writer;
+    EXPECT_TRUE(writer.Save(path.string(), model, weights));
+    return path;
+}
+
+std::filesystem::path WriteStateTransitionFixture() {
+    feather::model::ModelDesc model;
+    model.name = "qwen_runner_state_transition_fixture";
+    model.version = 1;
+    model.graph.name = "decode";
+    model.graph.inputs = {"token_ids", "position_id", "attention_mask", "recurrent_state_0"};
+    model.graph.outputs = {"next_recurrent_state_0", "logits"};
+    model.graph.values = {
+        MakeValue("token_ids", {1, 1}, feather::DataType::INT64),
+        MakeValue("position_id", {1}, feather::DataType::INT64),
+        MakeValue("attention_mask", {1, 1, 1, 4}, feather::DataType::BF16),
+        MakeValue("recurrent_state_0", {1, 4}, feather::DataType::FP32),
+        MakeValue("transition", {4, 4}, feather::DataType::FP32, true),
+        MakeValue("bias", {4}, feather::DataType::FP32, true),
+        MakeValue("next_state_raw", {1, 4}, feather::DataType::FP32),
+        MakeValue("next_recurrent_state_0", {1, 4}, feather::DataType::FP32),
+        MakeValue("logits", {1, 1, 4}, feather::DataType::FP32),
+    };
+
+    feather::model::NodeDesc transition;
+    transition.name = "state_transition";
+    transition.op_type = "Gemm";
+    transition.inputs = {"recurrent_state_0", "transition", "bias"};
+    transition.outputs = {"next_state_raw"};
+
+    feather::model::NodeDesc state_output;
+    state_output.name = "next_state";
+    state_output.op_type = "Identity";
+    state_output.inputs = {"next_state_raw"};
+    state_output.outputs = {"next_recurrent_state_0"};
+
+    feather::model::NodeDesc logits;
+    logits.name = "state_logits";
+    logits.op_type = "Reshape";
+    logits.inputs = {"next_state_raw"};
+    logits.outputs = {"logits"};
+    logits.attributes["shape"] = std::vector<int64_t>{1, 1, 4};
+    model.graph.nodes = {transition, state_output, logits};
+
+    std::unordered_map<std::string, std::shared_ptr<feather::Tensor>> weights;
+    weights["transition"] = MakeFloatTensor({0.0f, 0.0f, 0.0f, 0.0f,
+                                               0.0f, -2.0f, 2.0f, 0.0f,
+                                               0.0f, 0.0f, 0.0f, 0.0f,
+                                               0.0f, 0.0f, 0.0f, 0.0f},
+                                              {4, 4});
+    weights["bias"] = MakeFloatTensor({0.0f, 10.0f, 0.0f, 0.0f}, {4});
+    const auto path = std::filesystem::temp_directory_path() / "qwen_runner_state_transition_fixture.fth";
+    feather::model::ModelWriter writer;
+    EXPECT_TRUE(writer.Save(path.string(), model, weights));
+    return path;
+}
+
+std::filesystem::path WriteBf16GreedyFixture() {
+    feather::model::ModelDesc model;
+    model.name = "qwen_runner_bf16_greedy_fixture";
+    model.version = 1;
+    model.graph.name = "decode";
+    model.graph.inputs = {"token_ids", "position_id", "attention_mask", "recurrent_state_0"};
+    model.graph.outputs = {"next_recurrent_state_0", "logits"};
+    model.graph.values = {
+        MakeValue("token_ids", {1, 1}, feather::DataType::INT64),
+        MakeValue("position_id", {1}, feather::DataType::INT64),
+        MakeValue("attention_mask", {1, 1, 1, 4}, feather::DataType::BF16),
+        MakeValue("recurrent_state_0", {1}, feather::DataType::FP32),
+        MakeValue("lookup", {2, 4}, feather::DataType::BF16, true),
+        MakeValue("logits", {1, 1, 4}, feather::DataType::BF16),
+        MakeValue("next_recurrent_state_0", {1}, feather::DataType::FP32),
+    };
+
+    feather::model::NodeDesc gather;
+    gather.name = "lookup_bf16_logits";
+    gather.op_type = "Gather";
+    gather.inputs = {"lookup", "token_ids"};
+    gather.outputs = {"logits"};
+    gather.attributes["axis"] = int64_t{0};
+
+    feather::model::NodeDesc state;
+    state.name = "next_state";
+    state.op_type = "Identity";
+    state.inputs = {"recurrent_state_0"};
+    state.outputs = {"next_recurrent_state_0"};
+    model.graph.nodes = {gather, state};
+
+    std::unordered_map<std::string, std::shared_ptr<feather::Tensor>> weights;
+    weights["lookup"] = MakeBf16Tensor({std::numeric_limits<float>::quiet_NaN(), 5.0f, 5.0f, 4.0f,
+                                         -1.0f, -2.0f, -3.0f, -4.0f},
+                                        {2, 4});
+    const auto path = std::filesystem::temp_directory_path() / "qwen_runner_bf16_greedy_fixture.fth";
     feather::model::ModelWriter writer;
     EXPECT_TRUE(writer.Save(path.string(), model, weights));
     return path;
@@ -168,6 +275,51 @@ TEST(qwen_runner_test, GreedilyGeneratesTokensAndPersistsExplicitState) {
     EXPECT_EQ(runner.TokensProcessed(), 0);
     ASSERT_EQ(runner.Generate({0}, 3, {2}, &generated), 0) << runner.LastError();
     EXPECT_EQ(generated, (std::vector<int64_t>{1, 3, 2}));
+}
+
+TEST(qwen_runner_test, PreservesPingPongStateWhenNextStateUsesIdentityView) {
+    const auto model_path = WriteStateTransitionFixture();
+    for (const auto backend : {feather::demo::QwenBackend::kCommon, feather::demo::QwenBackend::kX86}) {
+        feather::demo::QwenRunner runner;
+        ASSERT_EQ(runner.Load(model_path.string(), backend), 0) << runner.LastError();
+
+        std::vector<int64_t> generated;
+        ASSERT_EQ(runner.Generate({0}, 2, {}, &generated), 0) << runner.LastError();
+        // The second decode depends on the first state transition. With the
+        // Identity output buffer swapped directly, Gemm becomes in-place and
+        // picks token 0 instead of token 2.
+        EXPECT_EQ(generated, (std::vector<int64_t>{1, 2}));
+    }
+}
+
+#ifdef FEATHER_WITH_CUDA
+TEST(qwen_runner_test, CudaPreservesPingPongStateAndResetWhenNextStateUsesIdentityRelay) {
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
+    const auto model_path = WriteStateTransitionFixture();
+    feather::demo::QwenRunner runner;
+    ASSERT_EQ(runner.Load(model_path.string(), feather::demo::QwenBackend::kCuda), 0) << runner.LastError();
+
+    std::vector<int64_t> generated;
+    ASSERT_EQ(runner.Generate({0}, 2, {}, &generated), 0) << runner.LastError();
+    EXPECT_EQ(generated, (std::vector<int64_t>{1, 2}));
+
+    ASSERT_EQ(runner.Reset(), 0) << runner.LastError();
+    ASSERT_EQ(runner.Generate({0}, 2, {}, &generated), 0) << runner.LastError();
+    EXPECT_EQ(generated, (std::vector<int64_t>{1, 2}));
+}
+#endif
+
+TEST(qwen_runner_test, SelectsFirstFiniteMaximumFromBf16Logits) {
+    const auto model_path = WriteBf16GreedyFixture();
+    feather::demo::QwenRunner runner;
+    ASSERT_EQ(runner.Load(model_path.string(), feather::demo::QwenBackend::kCommon), 0) << runner.LastError();
+
+    std::vector<int64_t> generated;
+    ASSERT_EQ(runner.Generate({0}, 1, {}, &generated), 0) << runner.LastError();
+    EXPECT_EQ(generated, (std::vector<int64_t>{1}));
 }
 
 TEST(qwen_runner_test, LoadsRealDirectSafetensorsExportWithExplicitStateBindings) {

@@ -1,9 +1,11 @@
 #ifndef FEATHER_INFER_DATA_TENSOR_H
 #define FEATHER_INFER_DATA_TENSOR_H
 
+#include <atomic>
 #include <cstring>
 #include <cstdint>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "core/dim.h"
@@ -17,6 +19,11 @@ using feather::DataType;
 namespace feather {
 
 class Tensor {
+   private:
+    struct MutationState {
+        std::atomic<uint64_t> version{0};
+    };
+
    public:
     Tensor() {}
     explicit Tensor(std::shared_ptr<Buffer> buffer) : m_buffer(buffer) {}
@@ -40,6 +47,7 @@ class Tensor {
         CHECK(data.size() == m_dims.production());
         if (m_buffer == nullptr || m_buffer->size() < data_size) {
             m_buffer = std::make_shared<Buffer>(data_size);
+            ResetStorageMutationState();
         }
         auto *dst = mutable_data<T>();
         memcpy(dst, data.data(), data_size);
@@ -50,6 +58,7 @@ class Tensor {
         Resize(dim);
         if (m_buffer == nullptr || m_buffer->size() < dim.production() * sizeof(T)) {
             m_buffer = std::make_shared<Buffer>(dim.production() * sizeof(T));
+            ResetStorageMutationState();
         }
         auto *dst = mutable_data<T>();
         memcpy(dst, data, dim.production() * sizeof(T));
@@ -72,14 +81,14 @@ class Tensor {
     void set_layout(DataLayout layout) { m_layout = layout; }
     bool is_immutable() const { return m_immutable; }
     void set_immutable(bool immutable) { m_immutable = immutable; }
-    uint64_t mutation_version() const { return m_mutation_version; }
+    uint64_t mutation_version() const { return m_mutation_state->version.load(std::memory_order_relaxed); }
 
     template <typename T>
     T *mutable_data() {
         m_data_type = DataTypeTrait<T>::type();
         m_memory_size = m_dims.production() * sizeof(T);
         CHECK(m_memory_size <= m_buffer->size());
-        ++m_mutation_version;
+        MarkStorageMutated();
         return reinterpret_cast<T *>(static_cast<char *>(m_buffer->data()) + m_offset);
     }
 
@@ -88,7 +97,7 @@ class Tensor {
         m_data_type = DataTypeTrait<T>::type();
         m_memory_size = memory_size;
         CHECK(m_memory_size <= m_buffer->size());
-        ++m_mutation_version;
+        MarkStorageMutated();
         return reinterpret_cast<T *>(static_cast<char *>(m_buffer->data()) + m_offset);
     }
 
@@ -101,7 +110,7 @@ class Tensor {
     void clear() {
         m_buffer->deallocate();
         m_offset = 0;
-        ++m_mutation_version;
+        MarkStorageMutated();
     }
 
     size_t data_size() const { return this->dims().production(); }
@@ -114,6 +123,10 @@ class Tensor {
 
     // Other share data to this.
     void ShareDataWith(const Tensor &other);
+
+    // Exchanges the backing storage while preserving each tensor's shape and
+    // semantic metadata. Callers must ensure the tensors are shape-compatible.
+    void SwapStorage(Tensor& other);
 
     void ResetBuffer(std::shared_ptr<Buffer> buffer, size_t memory_size);
     void ResetBuffer(std::shared_ptr<Buffer> buffer, size_t memory_size, size_t offset);
@@ -152,6 +165,9 @@ class Tensor {
     }
 
    private:
+    void MarkStorageMutated();
+    void ResetStorageMutationState();
+
     DDim m_dims;
     DataType m_data_type{DataType::UNKNOWN};
     DataLayout m_layout{DataLayout::ND};
@@ -159,7 +175,7 @@ class Tensor {
     size_t m_memory_size{};
     size_t m_offset{};
     bool m_immutable{false};
-    uint64_t m_mutation_version{};
+    std::shared_ptr<MutationState> m_mutation_state = std::make_shared<MutationState>();
 };
 
 }  // namespace feather

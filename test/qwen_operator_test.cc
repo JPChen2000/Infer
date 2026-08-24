@@ -6,14 +6,21 @@
 #include <string>
 #include <vector>
 
+#ifdef FEATHER_WITH_CUDA
+#include <cuda_runtime.h>
+#endif
+
 #include "core/kernel.h"
 #include "core/operator.h"
 #include "core/tensor.h"
+#include "src/kernel/conv2d.h"
+#include "src/kernel/qwen_rms_norm.h"
 #include "src/operator/conv2d_op.h"
 #include "src/operator/cos_op.h"
 #include "src/operator/exp_op.h"
 #include "src/operator/neg_op.h"
 #include "src/operator/params.h"
+#include "src/operator/qwen_depthwise_conv_op.h"
 #include "src/operator/reduce_sum_op.h"
 #include "src/operator/sin_op.h"
 #include "src/operator/softplus_op.h"
@@ -30,6 +37,13 @@ using feather::OpBase;
 using feather::Tensor;
 using feather::operators::ReduceSumParam;
 using feather::operators::UnaryParam;
+
+#ifdef FEATHER_WITH_CUDA
+bool HasCudaDevice() {
+    int count = 0;
+    return cudaGetDeviceCount(&count) == cudaSuccess && count > 0;
+}
+#endif
 
 template <DataType dtype>
 struct Storage;
@@ -246,13 +260,170 @@ TEST(qwen_operator_test, RunsDepthwiseConv2DOnBF16) {
     }
 }
 
+TEST(qwen_operator_test, X86QwenBf16DepthwiseConv2DMatchesCommon) {
+    constexpr int64_t kChannels = 6144;
+    constexpr int64_t kKernelWidth = 4;
+    std::vector<BFloat16> input_values(static_cast<size_t>(kChannels * kKernelWidth));
+    std::vector<BFloat16> weight_values(static_cast<size_t>(kChannels * kKernelWidth));
+    std::vector<BFloat16> bias_values(static_cast<size_t>(kChannels));
+    for (int64_t channel = 0; channel < kChannels; ++channel) {
+        for (int64_t offset = 0; offset < kKernelWidth; ++offset) {
+            const size_t index = static_cast<size_t>(channel * kKernelWidth + offset);
+            input_values[index] = BFloat16{feather::FloatToBFloat16(
+                0.0625f * static_cast<float>((channel * 5 + offset * 3) % 29 - 14))};
+            weight_values[index] = BFloat16{feather::FloatToBFloat16(
+                0.03125f * static_cast<float>((channel * 7 + offset * 11) % 31 - 15))};
+        }
+        bias_values[static_cast<size_t>(channel)] =
+            BFloat16{feather::FloatToBFloat16(0.125f * static_cast<float>(channel % 9 - 4))};
+    }
+
+    auto input = std::make_shared<Tensor>();
+    input->Assign<BFloat16>(input_values, {1, kChannels, 1, kKernelWidth});
+    auto weight = std::make_shared<Tensor>();
+    weight->Assign<BFloat16>(weight_values, {kChannels, 1, 1, kKernelWidth});
+    auto bias = std::make_shared<Tensor>();
+    bias->Assign<BFloat16>(bias_values, {kChannels});
+    auto common_output = std::make_shared<Tensor>(std::vector<int64_t>{1, kChannels, 1, 1});
+    auto x86_output = std::make_shared<Tensor>(std::vector<int64_t>{1, kChannels, 1, 1});
+
+    feather::operators::Conv2dParam common_param{};
+    common_param.input = input;
+    common_param.w = weight;
+    common_param.bias = bias;
+    common_param.out = common_output;
+    common_param.stride_h = 1;
+    common_param.stride_w = 1;
+    common_param.pad_h = 0;
+    common_param.pad_w = 0;
+    common_param.dilation_h = 1;
+    common_param.dilation_w = 1;
+    common_param.group = kChannels;
+    auto x86_param = common_param;
+    x86_param.out = x86_output;
+
+    auto common_kernel = KernelDispatcher::instance().create(DeviceType::COMMON, DataType::BF16, "Conv2D");
+    ASSERT_NE(common_kernel, nullptr);
+    common_kernel->SetParam(&common_param);
+    ASSERT_EQ(common_kernel->compute(), 0);
+
+    auto x86_kernel = KernelDispatcher::instance().create(DeviceType::X86, DataType::BF16, "Conv2D");
+    ASSERT_NE(x86_kernel, nullptr);
+    EXPECT_EQ(x86_kernel->device(), DeviceType::X86);
+    EXPECT_NE((dynamic_cast<feather::kernel::Conv2DKernel<DeviceType::X86, DataType::BF16>*>(x86_kernel.get())),
+              nullptr);
+    x86_kernel->SetParam(&x86_param);
+    ASSERT_EQ(x86_kernel->compute(), 0);
+
+    ASSERT_EQ(common_output->data_type(), DataType::BF16);
+    ASSERT_EQ(x86_output->data_type(), DataType::BF16);
+    const auto* common_data = common_output->data<BFloat16>();
+    const auto* x86_data = x86_output->data<BFloat16>();
+    ASSERT_NE(common_data, nullptr);
+    ASSERT_NE(x86_data, nullptr);
+    for (int64_t channel = 0; channel < kChannels; ++channel) {
+        EXPECT_NEAR(feather::BFloat16ToFloat(x86_data[channel].bits),
+                    feather::BFloat16ToFloat(common_data[channel].bits), 0.02f)
+            << "channel=" << channel;
+    }
+}
+
+TEST(qwen_operator_test, X86QwenDepthwiseConvStateMatchesConvAndStateShift) {
+    constexpr int64_t kChannels = 19;
+    std::vector<BFloat16> state_values(static_cast<size_t>(kChannels * 3));
+    std::vector<BFloat16> mixed_values(static_cast<size_t>(kChannels));
+    std::vector<BFloat16> weight_values(static_cast<size_t>(kChannels * 4));
+    std::vector<BFloat16> joined_values(static_cast<size_t>(kChannels * 4));
+    for (int64_t channel = 0; channel < kChannels; ++channel) {
+        for (int64_t offset = 0; offset < 3; ++offset) {
+            const size_t state_index = static_cast<size_t>(channel * 3 + offset);
+            state_values[state_index] = BFloat16{feather::FloatToBFloat16(
+                0.0625f * static_cast<float>((channel * 7 + offset * 5) % 31 - 15))};
+            joined_values[static_cast<size_t>(channel * 4 + offset)] = state_values[state_index];
+        }
+        mixed_values[static_cast<size_t>(channel)] = BFloat16{feather::FloatToBFloat16(
+            0.03125f * static_cast<float>((channel * 11) % 29 - 14))};
+        joined_values[static_cast<size_t>(channel * 4 + 3)] = mixed_values[static_cast<size_t>(channel)];
+        for (int64_t offset = 0; offset < 4; ++offset) {
+            weight_values[static_cast<size_t>(channel * 4 + offset)] = BFloat16{feather::FloatToBFloat16(
+                0.046875f * static_cast<float>((channel * 13 + offset * 3) % 37 - 18))};
+        }
+    }
+
+    auto state = std::make_shared<Tensor>();
+    state->Assign<BFloat16>(state_values, {1, kChannels, 3});
+    auto mixed = std::make_shared<Tensor>();
+    mixed->Assign<BFloat16>(mixed_values, {1, kChannels, 1});
+    auto weight = std::make_shared<Tensor>();
+    weight->Assign<BFloat16>(weight_values, {kChannels, 1, 1, 4});
+    auto joined = std::make_shared<Tensor>();
+    joined->Assign<BFloat16>(joined_values, {1, kChannels, 1, 4});
+    auto reference_conv_out = std::make_shared<Tensor>(std::vector<int64_t>{1, kChannels, 1, 1});
+
+    feather::operators::Conv2dParam reference_param{};
+    reference_param.input = joined;
+    reference_param.w = weight;
+    reference_param.out = reference_conv_out;
+    reference_param.stride_h = 1;
+    reference_param.stride_w = 1;
+    reference_param.pad_h = 0;
+    reference_param.pad_w = 0;
+    reference_param.dilation_h = 1;
+    reference_param.dilation_w = 1;
+    reference_param.group = kChannels;
+    auto reference_kernel = KernelDispatcher::instance().create(DeviceType::COMMON, DataType::BF16, "Conv2D");
+    ASSERT_NE(reference_kernel, nullptr);
+    reference_kernel->SetParam(&reference_param);
+    ASSERT_EQ(reference_kernel->compute(), 0);
+
+    auto conv_out = std::make_shared<Tensor>(std::vector<int64_t>{1, kChannels, 1, 1});
+    auto discarded_prefix = std::make_shared<Tensor>(std::vector<int64_t>{1, kChannels, 1});
+    auto next_state = std::make_shared<Tensor>(std::vector<int64_t>{1, kChannels, 3});
+    feather::operators::QwenDepthwiseConvStateParam param{};
+    param.state = state;
+    param.mixed = mixed;
+    param.weight = weight;
+    param.conv_out = conv_out;
+    param.discarded_prefix = discarded_prefix;
+    param.next_state = next_state;
+    feather::operators::QwenDepthwiseConvStateOp op("qwen_depthwise_conv_state", param);
+    ASSERT_EQ(op.InferOutputShapes(), 0);
+    ASSERT_EQ(op.CheckShape(), 0);
+
+    feather::kernel::EnsureQwenDepthwiseConvStateKernelsRegistered();
+    auto kernel = KernelDispatcher::instance().create(DeviceType::X86, DataType::BF16, "QwenDepthwiseConvState");
+    ASSERT_NE(kernel, nullptr);
+    op.AttachKernel(std::move(kernel));
+    ASSERT_EQ(op.Run(), 0);
+
+    const auto* reference_data = reference_conv_out->data<BFloat16>();
+    const auto* conv_data = conv_out->data<BFloat16>();
+    const auto* discarded_data = discarded_prefix->data<BFloat16>();
+    const auto* next_state_data = next_state->data<BFloat16>();
+    ASSERT_NE(reference_data, nullptr);
+    ASSERT_NE(conv_data, nullptr);
+    ASSERT_NE(discarded_data, nullptr);
+    ASSERT_NE(next_state_data, nullptr);
+    for (int64_t channel = 0; channel < kChannels; ++channel) {
+        EXPECT_EQ(conv_data[channel].bits, reference_data[channel].bits) << "conv channel=" << channel;
+        EXPECT_EQ(discarded_data[channel].bits, state_values[static_cast<size_t>(channel * 3)].bits)
+            << "prefix channel=" << channel;
+        EXPECT_EQ(next_state_data[channel * 3].bits, state_values[static_cast<size_t>(channel * 3 + 1)].bits)
+            << "state channel=" << channel << " offset=0";
+        EXPECT_EQ(next_state_data[channel * 3 + 1].bits, state_values[static_cast<size_t>(channel * 3 + 2)].bits)
+            << "state channel=" << channel << " offset=1";
+        EXPECT_EQ(next_state_data[channel * 3 + 2].bits, mixed_values[static_cast<size_t>(channel)].bits)
+            << "state channel=" << channel << " offset=2";
+    }
+}
+
 #ifdef FEATHER_WITH_CUDA
 TEST(qwen_operator_test, RegistersQwenFloatAtomicsNativelyOnCuda) {
     const std::vector<const char*> operators = {
         "Add",       "Cast",      "Concat",    "Conv2D",    "Cos",       "Div",
         "Exp",       "Expand",    "Gather",    "Gemm",      "Identity",  "MatMul",
         "Mul",       "Neg",       "ReduceMean", "ReduceSum", "Reshape",   "Sigmoid",
-        "Sin",       "Softmax",   "Softplus",  "Split",     "Sqrt",      "Sub",
+        "Sin",       "SiLU",      "Softmax",   "Softplus",  "Split",     "Sqrt",      "Sub",
         "Transpose", "Unsqueeze",
     };
     for (const auto dtype : {DataType::FP32, DataType::FP16, DataType::BF16}) {
@@ -261,6 +432,156 @@ TEST(qwen_operator_test, RegistersQwenFloatAtomicsNativelyOnCuda) {
             ASSERT_NE(kernel, nullptr) << "missing CUDA kernel for " << op_type;
             EXPECT_EQ(kernel->device(), DeviceType::CUDA) << "CUDA fell back for " << op_type;
         }
+    }
+}
+
+TEST(qwen_operator_test, RegistersQwenFusedKernelsNativelyOnCuda) {
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+    struct KernelSpec {
+        DataType dtype;
+        const char* op_type;
+    };
+    const std::vector<KernelSpec> specs = {
+        {DataType::BF16, "QwenRmsNorm"},
+        {DataType::FP32, "QwenRmsNorm"},
+        {DataType::BF16, "QwenDepthwiseConvState"},
+        {DataType::FP32, "QwenGatedDeltaState"},
+        {DataType::FP32, "QwenGatedDeltaOutput"},
+        {DataType::FP32, "QwenGatedDelta"},
+        {DataType::BF16, "QwenGemmArgmax"},
+    };
+    for (const auto& spec : specs) {
+        auto kernel = KernelDispatcher::instance().create(DeviceType::CUDA, spec.dtype, spec.op_type);
+        ASSERT_NE(kernel, nullptr) << "missing CUDA kernel for " << spec.op_type;
+        EXPECT_EQ(kernel->device(), DeviceType::CUDA) << spec.op_type;
+        EXPECT_EQ(kernel->data_type(), spec.dtype) << spec.op_type;
+    }
+}
+
+TEST(qwen_operator_test, CudaQwenRmsNormMatchesCommonBf16WithWeightOffset) {
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+    auto input = std::make_shared<Tensor>();
+    input->Assign<BFloat16>({BFloat16{feather::FloatToBFloat16(1.0f)},
+                             BFloat16{feather::FloatToBFloat16(-2.0f)},
+                             BFloat16{feather::FloatToBFloat16(0.5f)},
+                             BFloat16{feather::FloatToBFloat16(3.0f)},
+                             BFloat16{feather::FloatToBFloat16(-1.5f)},
+                             BFloat16{feather::FloatToBFloat16(2.0f)},
+                             BFloat16{feather::FloatToBFloat16(0.25f)},
+                             BFloat16{feather::FloatToBFloat16(-0.75f)}},
+                            {2, 4});
+    auto weight = std::make_shared<Tensor>();
+    weight->Assign<BFloat16>({BFloat16{feather::FloatToBFloat16(0.5f)},
+                              BFloat16{feather::FloatToBFloat16(1.0f)},
+                              BFloat16{feather::FloatToBFloat16(-0.75f)},
+                              BFloat16{feather::FloatToBFloat16(2.0f)}},
+                             {4});
+    auto epsilon = std::make_shared<Tensor>();
+    epsilon->Assign<float>({1.0e-6f}, {1});
+    auto common_out = std::make_shared<Tensor>(std::vector<int64_t>{2, 4});
+    common_out->set_data_type(DataType::BF16);
+    auto cuda_out = std::make_shared<Tensor>(std::vector<int64_t>{2, 4});
+    cuda_out->set_data_type(DataType::BF16);
+
+    feather::operators::QwenRmsNormParam common_param{};
+    common_param.input = input;
+    common_param.weight = weight;
+    common_param.epsilon = epsilon;
+    common_param.out = common_out;
+    common_param.weight_offset = 0.5f;
+    auto common = KernelDispatcher::instance().create(DeviceType::COMMON, DataType::BF16, "QwenRmsNorm");
+    ASSERT_NE(common, nullptr);
+    common->SetParam(&common_param);
+    ASSERT_EQ(common->compute(), 0);
+
+    auto cuda_param = common_param;
+    cuda_param.out = cuda_out;
+    auto cuda = KernelDispatcher::instance().create(DeviceType::CUDA, DataType::BF16, "QwenRmsNorm");
+    ASSERT_NE(cuda, nullptr);
+    cuda->SetParam(&cuda_param);
+    ASSERT_EQ(cuda->compute(), 0);
+
+    for (int64_t index = 0; index < common_out->numel(); ++index) {
+        EXPECT_NEAR(feather::BFloat16ToFloat(cuda_out->data<BFloat16>()[index].bits),
+                    feather::BFloat16ToFloat(common_out->data<BFloat16>()[index].bits), 0.02f)
+            << "index=" << index;
+    }
+}
+
+TEST(qwen_operator_test, CudaQwenDepthwiseConvStateMatchesX86) {
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+    constexpr int64_t channels = 7;
+    std::vector<BFloat16> state_values(static_cast<size_t>(channels * 3));
+    std::vector<BFloat16> mixed_values(static_cast<size_t>(channels));
+    std::vector<BFloat16> weight_values(static_cast<size_t>(channels * 4));
+    for (int64_t channel = 0; channel < channels; ++channel) {
+        for (int64_t offset = 0; offset < 3; ++offset) {
+            state_values[static_cast<size_t>(channel * 3 + offset)] =
+                BFloat16{feather::FloatToBFloat16(0.0625f * static_cast<float>((channel + offset * 3) % 11 - 5))};
+        }
+        mixed_values[static_cast<size_t>(channel)] =
+            BFloat16{feather::FloatToBFloat16(0.03125f * static_cast<float>((channel * 5) % 13 - 6))};
+        for (int64_t offset = 0; offset < 4; ++offset) {
+            weight_values[static_cast<size_t>(channel * 4 + offset)] =
+                BFloat16{feather::FloatToBFloat16(0.046875f * static_cast<float>((channel * 7 + offset) % 17 - 8))};
+        }
+    }
+    auto state = std::make_shared<Tensor>();
+    state->Assign<BFloat16>(state_values, {1, channels, 3});
+    auto mixed = std::make_shared<Tensor>();
+    mixed->Assign<BFloat16>(mixed_values, {1, channels, 1});
+    auto weight = std::make_shared<Tensor>();
+    weight->Assign<BFloat16>(weight_values, {channels, 1, 1, 4});
+
+    auto make_output = [](const std::vector<int64_t>& dims) {
+        auto tensor = std::make_shared<Tensor>(dims);
+        tensor->set_data_type(DataType::BF16);
+        return tensor;
+    };
+    auto x86_conv = make_output({1, channels, 1, 1});
+    auto x86_prefix = make_output({1, channels, 1});
+    auto x86_next = make_output({1, channels, 3});
+    auto cuda_conv = make_output({1, channels, 1, 1});
+    auto cuda_prefix = make_output({1, channels, 1});
+    auto cuda_next = make_output({1, channels, 3});
+
+    feather::operators::QwenDepthwiseConvStateParam x86_param{};
+    x86_param.state = state;
+    x86_param.mixed = mixed;
+    x86_param.weight = weight;
+    x86_param.conv_out = x86_conv;
+    x86_param.discarded_prefix = x86_prefix;
+    x86_param.next_state = x86_next;
+    auto x86 = KernelDispatcher::instance().create(DeviceType::X86, DataType::BF16, "QwenDepthwiseConvState");
+    ASSERT_NE(x86, nullptr);
+    x86->SetParam(&x86_param);
+    ASSERT_EQ(x86->compute(), 0);
+
+    auto cuda_param = x86_param;
+    cuda_param.conv_out = cuda_conv;
+    cuda_param.discarded_prefix = cuda_prefix;
+    cuda_param.next_state = cuda_next;
+    auto cuda = KernelDispatcher::instance().create(DeviceType::CUDA, DataType::BF16, "QwenDepthwiseConvState");
+    ASSERT_NE(cuda, nullptr);
+    cuda->SetParam(&cuda_param);
+    ASSERT_EQ(cuda->compute(), 0);
+
+    for (int64_t channel = 0; channel < channels; ++channel) {
+        EXPECT_NEAR(feather::BFloat16ToFloat(cuda_conv->data<BFloat16>()[channel].bits),
+                    feather::BFloat16ToFloat(x86_conv->data<BFloat16>()[channel].bits), 0.02f)
+            << "conv channel=" << channel;
+        EXPECT_EQ(cuda_prefix->data<BFloat16>()[channel].bits, x86_prefix->data<BFloat16>()[channel].bits)
+            << "prefix channel=" << channel;
+    }
+    for (int64_t index = 0; index < cuda_next->numel(); ++index) {
+        EXPECT_EQ(cuda_next->data<BFloat16>()[index].bits, x86_next->data<BFloat16>()[index].bits)
+            << "state index=" << index;
     }
 }
 #endif

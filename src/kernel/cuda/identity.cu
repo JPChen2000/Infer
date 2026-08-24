@@ -30,7 +30,9 @@ int RunIdentity(feather::operators::UnaryParam* param, const char* timer_name) {
     if (param == nullptr || param->input == nullptr || param->out == nullptr) {
         return -1;
     }
-    return cuda_detail::RunDeviceCopy<T>(param->input.get(), param->out.get());
+    // Identity keeps independent host Tensor storage while sharing the CUDA
+    // allocation with its input. This removes a decode-time device-to-device copy.
+    return cuda_detail::RunDeviceAlias<T>(param->input.get(), param->out.get());
 }
 
 }  // namespace

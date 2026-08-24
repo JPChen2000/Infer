@@ -21,6 +21,10 @@ int32_t ComputeIdentityFallback(feather::operators::UnaryParam* param) {
 
     const size_t bytes = static_cast<size_t>(param->input->numel()) * DataTypeBytes(dtype);
     param->out->set_data_type(dtype);
+    if (param->input->IsInitialized() && param->out->IsInitialized() &&
+        param->input->raw_data() == param->out->raw_data()) {
+        return 0;
+    }
     std::memcpy(param->out->raw_data(), param->input->raw_data(), bytes);
     return 0;
 }
@@ -61,6 +65,10 @@ int32_t ComputeIdentityRaw(feather::operators::UnaryParam* param, DataType dtype
     }
 
     param->out->set_data_type(dtype);
+    if (param->input->IsInitialized() && param->out->IsInitialized() &&
+        param->input->raw_data() == param->out->raw_data()) {
+        return 0;
+    }
     CopyRawBlock(param->input->data<T>(), param->out->mutable_data<T>(), param->input->numel());
     return 0;
 }

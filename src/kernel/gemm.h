@@ -21,9 +21,10 @@ template <>
 class GemmKernel<DeviceType::X86, DataType::BF16> : public KernelBase {
    public:
     int32_t Prepare() override;
-    int32_t compute() override;
+   int32_t compute() override;
 
    private:
+    x86::PackedBf16Rhs packed_rhs_;
     x86::PackedBf16TransposedRhs packed_transposed_rhs_;
     x86::Bf16LinearWorkspace workspace_;
 };

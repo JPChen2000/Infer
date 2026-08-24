@@ -42,6 +42,9 @@ int AcquireTensorDevice(const Tensor* tensor, size_t bytes, const void* host_dat
 int AcquireOutputTensorDevice(Tensor* tensor, size_t bytes, void** device_ptr);
 int SyncTensorToHost(Tensor* tensor, size_t bytes, void* host_data);
 int SyncTensorToHostIfNeeded(Tensor* tensor, size_t bytes, void* host_data);
+int AliasTensorDeviceStorage(const Tensor* input, Tensor* output, size_t bytes);
+int SwapTensorDeviceStorage(Tensor* input, Tensor* output);
+int AppendTensorStateOnDevice(Tensor* input, const Tensor* output, int axis);
 cublasHandle_t CublasHandle();
 #ifdef FEATHER_WITH_CUDNN
 cudnnHandle_t CudnnHandle();

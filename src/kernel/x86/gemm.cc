@@ -12,7 +12,14 @@ namespace kernel {
 
 namespace {
 
-constexpr int64_t kBf16LogitsPackMinimumOutput = 32768;
+constexpr int64_t kBf16PackedRhsMinimumMacs = 1 << 18;
+
+bool ShouldUsePackedBf16Rhs(const feather::operators::GemmParam* param, int64_t m, int64_t k, int64_t n) {
+    if (param == nullptr || param->b == nullptr || !param->b->is_immutable() || m != 1 || k <= 0 || n < 64) {
+        return false;
+    }
+    return k >= kBf16PackedRhsMinimumMacs / n;
+}
 
 bool IsVectorBias(const Tensor* bias, int64_t n) {
     if (bias == nullptr || !bias->IsInitialized() || bias->dims().empty() ||
@@ -69,24 +76,27 @@ int32_t GemmKernel<DeviceType::X86, DataType::BF16>::Prepare() {
     auto* param = static_cast<feather::operators::GemmParam*>(param_);
     if (param == nullptr || param->a == nullptr || param->b == nullptr || param->out == nullptr ||
         !param->a->IsInitialized() || !param->b->IsInitialized() || param->a->data_type() != DataType::BF16 ||
-        param->b->data_type() != DataType::BF16 || !param->trans_b ||
-        param->trans_a || param->a->dims().size() < 2 || param->b->dims().size() != 2 ||
-        !param->b->is_immutable()) {
+        param->b->data_type() != DataType::BF16 || param->trans_a || param->a->dims().size() < 2 ||
+        param->b->dims().size() != 2) {
         return 0;
     }
     const int64_t k = param->a->dims()[param->a->dims().size() - 1];
-    const int64_t n = param->b->dims()[0];
-    if (k <= 0 || param->a->numel() <= 0 || param->a->numel() % k != 0 ||
-        n < kBf16LogitsPackMinimumOutput || param->b->dims()[1] != k) {
+    const int64_t n = param->trans_b ? param->b->dims()[0] : param->b->dims()[1];
+    const int64_t b_k = param->trans_b ? param->b->dims()[1] : param->b->dims()[0];
+    if (k <= 0 || param->a->numel() <= 0 || param->a->numel() % k != 0 || k != b_k) {
         return 0;
     }
     const int64_t m = param->a->numel() / k;
-    if (m != 1) {
+    if (!ShouldUsePackedBf16Rhs(param, m, k, n)) {
         return 0;
     }
     // Packing is an optimization. If allocation fails, compute() will use the
     // direct transposed-RHS path instead of making graph finalization fail.
-    (void)packed_transposed_rhs_.Pack(param->b->data<uint16_t>(), k, n, param->b->mutation_version());
+    if (param->trans_b) {
+        (void)packed_transposed_rhs_.Pack(param->b->data<uint16_t>(), k, n, param->b->mutation_version());
+    } else {
+        (void)packed_rhs_.Pack(param->b->data<uint16_t>(), k, n, param->b->mutation_version());
+    }
     return 0;
 }
 
@@ -185,18 +195,11 @@ int32_t GemmKernel<DeviceType::X86, DataType::BF16>::compute() {
         : (IsVectorBias(param->bias.get(), n) ? x86::LinearBiasType::kVector : x86::LinearBiasType::kMatrix);
     auto* out = static_cast<uint16_t*>(param->out->raw_data());
     if (param->trans_b) {
-        const x86::PackedBf16TransposedRhs* packed_rhs = nullptr;
-        const bool packed_ok = m == 1 && n >= kBf16LogitsPackMinimumOutput && param->b->is_immutable() &&
-                               packed_transposed_rhs_.Pack(param->b->data<uint16_t>(), k, n,
-                                                           param->b->mutation_version());
-        if (packed_ok) {
-            packed_rhs = &packed_transposed_rhs_;
-        }
-        if (packed_rhs != nullptr &&
-            packed_rhs->Matches(param->b->data<uint16_t>(), k, n, param->b->mutation_version())) {
+        if (ShouldUsePackedBf16Rhs(param, m, k, n) &&
+            packed_transposed_rhs_.Matches(param->b->data<uint16_t>(), k, n, param->b->mutation_version())) {
             return x86::ComputeLinearRowMajorX86Bf16PackedTransposedRhs(
-                param->a->data<uint16_t>(), param->b->data<uint16_t>(), *packed_rhs, bias, m, k, n, bias_type,
-                param->alpha, param->beta, out, &workspace_, param->b->mutation_version());
+                param->a->data<uint16_t>(), param->b->data<uint16_t>(), packed_transposed_rhs_, bias, m, k, n,
+                bias_type, param->alpha, param->beta, out, &workspace_, param->b->mutation_version());
         }
         return x86::ComputeLinearRowMajorX86Bf16TransposedRhs(param->a->data<uint16_t>(), param->b->data<uint16_t>(),
                                                               bias, m, k, n, bias_type, param->alpha, param->beta, out,
@@ -204,6 +207,12 @@ int32_t GemmKernel<DeviceType::X86, DataType::BF16>::compute() {
     }
     if (param->alpha != 1.0f || param->beta != 1.0f) {
         return ComputeGeneralGemm<DataType::BF16>(param);
+    }
+    if (ShouldUsePackedBf16Rhs(param, m, k, n) &&
+        packed_rhs_.Matches(param->b->data<uint16_t>(), k, n, param->b->mutation_version())) {
+        return x86::ComputeLinearRowMajorX86Bf16PackedRhs(
+            param->a->data<uint16_t>(), param->b->data<uint16_t>(), packed_rhs_, bias, m, k, n, bias_type, out,
+            &workspace_, param->b->mutation_version());
     }
     return x86::ComputeLinearRowMajorX86Bf16(param->a->data<uint16_t>(), param->b->data<uint16_t>(), bias, m, k, n,
                                              bias_type, out, &workspace_);

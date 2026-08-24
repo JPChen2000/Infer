@@ -16,6 +16,10 @@
 #include "util/bf16.h"
 #include "util/threading.h"
 
+#ifdef FEATHER_WITH_OPENMP
+#include <omp.h>
+#endif
+
 namespace {
 
 using feather::BFloat16ToFloat;
@@ -117,12 +121,50 @@ TEST(x86_linear_bf16_test, MatMulHandlesVectorBlocksAndColumnTail) {
     }
 }
 
+TEST(x86_linear_bf16_test, WideVectorStorePreservesNegativeBf16Results) {
+    const int64_t m = 1;
+    const int64_t k = 1;
+    const int64_t n = 32;
+    const std::vector<uint16_t> lhs = ToBf16({1.0f});
+    std::vector<float> rhs_values(static_cast<size_t>(n));
+    for (int64_t col = 0; col < n; ++col) {
+        rhs_values[static_cast<size_t>(col)] = -static_cast<float>(col + 1);
+    }
+    const std::vector<uint16_t> rhs = ToBf16(rhs_values);
+    std::vector<uint16_t> out(static_cast<size_t>(n), 0);
+
+    ASSERT_EQ(ComputeLinearRowMajorX86Bf16(lhs.data(), rhs.data(), nullptr, m, k, n, LinearBiasType::kNone,
+                                           out.data()),
+              0);
+    for (int64_t col = 0; col < n; ++col) {
+        EXPECT_FLOAT_EQ(BFloat16ToFloat(out[static_cast<size_t>(col)]), -static_cast<float>(col + 1));
+    }
+}
+
 TEST(x86_linear_bf16_test, WorkerPolicyUsesAllDefaultThreadsForLogitsAndKeepsSmallGemmSerial) {
-    EXPECT_EQ(Bf16LinearWorkerCount(1, 1024, 248320), feather::DefaultThreadCount());
+    EXPECT_EQ(Bf16LinearWorkerCount(1, 1024, 248320), std::min<size_t>(feather::DefaultThreadCount(), 4));
     EXPECT_EQ(Bf16LinearWorkerCount(1, 1024, 16), 1U);
 
     ScopedEnvironmentVariable worker_limit("FEATHER_X86_BF16_THREADS", "4");
     EXPECT_EQ(Bf16LinearWorkerCount(1, 1024, 248320), 4U);
+
+    ScopedEnvironmentVariable oversized_worker_limit("FEATHER_X86_BF16_THREADS", "64");
+    EXPECT_EQ(Bf16LinearWorkerCount(1, 1024, 248320), feather::DefaultThreadCount());
+}
+
+TEST(x86_linear_bf16_test, WorkerPolicyHonorsOpenMpThreadLimit) {
+#ifdef FEATHER_WITH_OPENMP
+    ScopedEnvironmentVariable worker_limit("FEATHER_X86_BF16_THREADS", "8");
+    const int previous_dynamic = omp_get_dynamic();
+    const int previous_threads = omp_get_max_threads();
+    omp_set_dynamic(0);
+    omp_set_num_threads(1);
+    EXPECT_EQ(Bf16LinearWorkerCount(1, 1024, 248320), 1U);
+    omp_set_num_threads(previous_threads);
+    omp_set_dynamic(previous_dynamic);
+#else
+    GTEST_SKIP() << "OpenMP is disabled for this build";
+#endif
 }
 
 TEST(x86_linear_bf16_test, Bf16OutputColumnParallelismBuildsWithOpenMP) {
@@ -276,6 +318,37 @@ TEST(x86_linear_bf16_test, WideSingleRowMatchesReference) {
     }
 }
 
+TEST(x86_linear_bf16_test, PackedSingleRowDirectPathMatchesReference) {
+    const int64_t m = 1;
+    const int64_t k = 65;
+    const int64_t n = 128;
+    std::vector<float> lhs(static_cast<size_t>(k));
+    std::vector<float> rhs(static_cast<size_t>(k * n));
+    for (int64_t index = 0; index < k; ++index) {
+        lhs[static_cast<size_t>(index)] = 0.25f + static_cast<float>(index % 7) * 0.125f;
+    }
+    for (int64_t index = 0; index < k * n; ++index) {
+        rhs[static_cast<size_t>(index)] = -0.5f + static_cast<float>(index % 11) * 0.0625f;
+    }
+
+    const auto lhs_bf16 = ToBf16(lhs);
+    const auto rhs_bf16 = ToBf16(rhs);
+    feather::kernel::x86::PackedBf16Rhs packed_rhs;
+    ASSERT_TRUE(packed_rhs.Pack(rhs_bf16.data(), k, n));
+
+    std::vector<uint16_t> output(static_cast<size_t>(m * n), 0);
+    ASSERT_EQ(feather::kernel::x86::ComputeLinearRowMajorX86Bf16PackedRhsSingleThread(
+                  lhs_bf16.data(), rhs_bf16.data(), packed_rhs, nullptr, m, k, n,
+                  feather::kernel::x86::LinearBiasType::kNone, output.data()),
+              0);
+
+    const auto reference = ReferenceMatMul(lhs, rhs, m, k, n);
+    for (int64_t index = 0; index < n; ++index) {
+        EXPECT_NEAR(feather::BFloat16ToFloat(output[static_cast<size_t>(index)]),
+                    reference[static_cast<size_t>(index)], 0.15f);
+    }
+}
+
 TEST(x86_linear_bf16_test, PackedRhsMatchesWideProjectionWithBias) {
     const int64_t m = 1;
     const int64_t k = 13;
@@ -380,6 +453,42 @@ TEST(x86_linear_bf16_test, PackedTransposedRhsMatchesWideProjectionWithBiasAndSc
     for (int64_t col = 0; col < n; ++col) {
         EXPECT_NEAR(BFloat16ToFloat(packed_out[static_cast<size_t>(col)]),
                     BFloat16ToFloat(reference_out[static_cast<size_t>(col)]), 0.02f);
+    }
+}
+
+TEST(x86_linear_bf16_test, PackedTransposedSingleRowDirectPathMatchesReference) {
+    constexpr int64_t m = 1;
+    constexpr int64_t k = 65;
+    constexpr int64_t n = 128;
+    std::vector<float> lhs(static_cast<size_t>(k));
+    std::vector<float> rhs_transposed(static_cast<size_t>(n * k));
+    for (int64_t index = 0; index < k; ++index) {
+        lhs[static_cast<size_t>(index)] = 0.25f + static_cast<float>(index % 7) * 0.125f;
+    }
+    for (int64_t row = 0; row < n; ++row) {
+        for (int64_t index = 0; index < k; ++index) {
+            rhs_transposed[static_cast<size_t>(row * k + index)] =
+                -0.5f + static_cast<float>((row * 11 + index) % 13) * 0.0625f;
+        }
+    }
+
+    const auto lhs_bf16 = ToBf16(lhs);
+    const auto rhs_bf16 = ToBf16(rhs_transposed);
+    PackedBf16TransposedRhs packed_rhs;
+    ASSERT_TRUE(packed_rhs.Pack(rhs_bf16.data(), k, n));
+
+    std::vector<uint16_t> output(static_cast<size_t>(n), 0);
+    ASSERT_EQ(feather::kernel::x86::ComputeLinearRowMajorX86Bf16PackedTransposedRhsSingleThread(
+                  lhs_bf16.data(), rhs_bf16.data(), packed_rhs, nullptr, m, k, n, LinearBiasType::kNone, 1.0f,
+                  0.0f, output.data()),
+              0);
+
+    for (int64_t row = 0; row < n; ++row) {
+        float expected = 0.0f;
+        for (int64_t index = 0; index < k; ++index) {
+            expected += lhs[static_cast<size_t>(index)] * rhs_transposed[static_cast<size_t>(row * k + index)];
+        }
+        EXPECT_NEAR(BFloat16ToFloat(output[static_cast<size_t>(row)]), expected, 0.15f);
     }
 }
 

@@ -80,6 +80,33 @@ TEST(softmax_transpose_op_test, TransposeRunsOnX86) {
     }
 }
 
+TEST(softmax_transpose_op_test, TransposeOfSingletonAxesUsesHostView) {
+    auto input = std::make_shared<Tensor>();
+    input->Assign<float>({1, 2, 3, 4, 5, 6}, {1, 1, 2, 3});
+    auto out = std::make_shared<Tensor>(std::vector<int64_t>{1, 2, 1, 3});
+
+    TransposeParam param{};
+    param.input = input;
+    param.out = out;
+    param.perm = {0, 2, 1, 3};
+
+    std::shared_ptr<OpBase> op = std::make_shared<feather::operators::TransposeOp>("transpose_singleton_axis", param);
+    ASSERT_EQ(op->CheckShape(), 0);
+    ASSERT_EQ(op->InferOutputShapes(), 0);
+    EXPECT_EQ(out->dims().data(), std::vector<int64_t>({1, 2, 1, 3}));
+    EXPECT_EQ(out->raw_data(), input->raw_data());
+
+    auto kernel = KernelDispatcher::instance().create(DeviceType::X86, DataType::FP32, "Transpose");
+    ASSERT_NE(kernel, nullptr);
+    op->AttachKernel(std::move(kernel));
+    ASSERT_EQ(op->Run(), 0);
+
+    const std::vector<float> expected = {1, 2, 3, 4, 5, 6};
+    for (size_t index = 0; index < expected.size(); ++index) {
+        EXPECT_FLOAT_EQ(out->data<float>()[index], expected[index]);
+    }
+}
+
 TEST(softmax_transpose_op_test, SoftmaxSupportsAxis0OnX86) {
     auto input = std::make_shared<Tensor>();
     input->Assign<float>({1, 2, 3, 4, 5, 6}, {2, 3});

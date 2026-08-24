@@ -4,8 +4,11 @@
 #include "pass/identity_elimination_pass.h"
 #include "pass/matmul_add_fusion_pass.h"
 #include "pass/qwen_gated_delta_fusion_pass.h"
+#include "pass/qwen_depthwise_conv_fusion_pass.h"
 #include "pass/qwen_matmul_add_fusion_pass.h"
+#include "pass/qwen_gemm_argmax_fusion_pass.h"
 #include "pass/qwen_rms_norm_fusion_pass.h"
+#include "pass/qwen_state_output_alias_pass.h"
 #include "pass/no_op_elimination_pass.h"
 #include "pass/resize_concat_fusion_pass.h"
 #include "pass/reshape_chain_elimination_pass.h"
@@ -55,12 +58,15 @@ std::shared_ptr<PassManager> CreateDefaultPassManager() {
     manager->AddPass(std::make_unique<SigmoidMulFusionPass>());
     manager->AddPass(std::make_unique<MatMulAddFusionPass>());
     manager->AddPass(std::make_unique<QwenMatMulAddFusionPass>());
+    manager->AddPass(std::make_unique<QwenGemmArgmaxFusionPass>());
     manager->AddPass(std::make_unique<QwenGatedDeltaFusionPass>());
+    manager->AddPass(std::make_unique<QwenDepthwiseConvFusionPass>());
     manager->AddPass(std::make_unique<QwenRmsNormFusionPass>());
     manager->AddPass(std::make_unique<IdentityEliminationPass>());
     manager->AddPass(std::make_unique<ReshapeChainEliminationPass>());
     manager->AddPass(std::make_unique<NoOpEliminationPass>());
     manager->AddPass(std::make_unique<DeadNodeEliminationPass>());
+    manager->AddPass(std::make_unique<QwenStateOutputAliasPass>());
     return manager;
 }
 

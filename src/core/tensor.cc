@@ -1,9 +1,31 @@
 #include <iostream>
+#include <atomic>
 #include "core/tensor.h"
 #include "util/logger.h"
 
 
 namespace feather {
+namespace {
+
+uint64_t NextMutationVersion() {
+  static std::atomic<uint64_t> next_version{1};
+  return next_version.fetch_add(1, std::memory_order_relaxed);
+}
+
+}  // namespace
+
+void Tensor::MarkStorageMutated() {
+  if (m_mutation_state == nullptr) {
+    m_mutation_state = std::make_shared<MutationState>();
+  }
+  m_mutation_state->version.store(NextMutationVersion(), std::memory_order_relaxed);
+}
+
+void Tensor::ResetStorageMutationState() {
+  m_mutation_state = std::make_shared<MutationState>();
+  MarkStorageMutated();
+}
+
 void Tensor::ShareDataWith(const Tensor &other) {
   m_buffer = other.m_buffer;
   m_dims = other.m_dims;
@@ -12,14 +34,26 @@ void Tensor::ShareDataWith(const Tensor &other) {
   m_memory_size = other.m_memory_size;
   m_immutable = other.m_immutable;
   m_offset = other.m_offset;
-  m_mutation_version = other.m_mutation_version;
+  m_mutation_state = other.m_mutation_state;
+  if (m_mutation_state == nullptr) {
+    ResetStorageMutationState();
+  }
+}
+
+void Tensor::SwapStorage(Tensor& other) {
+  std::swap(m_buffer, other.m_buffer);
+  std::swap(m_memory_size, other.m_memory_size);
+  std::swap(m_offset, other.m_offset);
+  std::swap(m_mutation_state, other.m_mutation_state);
+  MarkStorageMutated();
+  other.MarkStorageMutated();
 }
 
 
 void *Tensor::mutable_data(size_t memory_size) {
   m_memory_size = memory_size;
   CHECK(memory_size <= m_buffer->size());
-  ++m_mutation_version;
+  MarkStorageMutated();
   return static_cast<char *>(m_buffer->data()) + m_offset;
 }
 
@@ -31,7 +65,7 @@ void Tensor::ResetBuffer(std::shared_ptr<Buffer> buffer,
   m_buffer = buffer;
   m_memory_size = memory_size;
   m_offset = 0;
-  ++m_mutation_version;
+  ResetStorageMutationState();
 }
 
 void Tensor::ResetBuffer(std::shared_ptr<Buffer> buffer,
@@ -42,7 +76,7 @@ void Tensor::ResetBuffer(std::shared_ptr<Buffer> buffer,
   m_buffer = buffer;
   m_memory_size = memory_size;
   m_offset = offset;
-  ++m_mutation_version;
+  ResetStorageMutationState();
 }
 
 } // namespace feather

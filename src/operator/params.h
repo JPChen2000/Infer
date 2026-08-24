@@ -41,6 +41,18 @@ struct Conv2dParam : ParamBase {
     int32_t group{1};
 };
 
+// Qwen's linear-attention convolution consumes a three-token BF16 state and
+// one new projected token. It also produces the shifted state for the next
+// decode step.
+struct QwenDepthwiseConvStateParam : ParamBase {
+    std::shared_ptr<Tensor> state;
+    std::shared_ptr<Tensor> mixed;
+    std::shared_ptr<Tensor> weight;
+    std::shared_ptr<Tensor> conv_out;
+    std::shared_ptr<Tensor> discarded_prefix;
+    std::shared_ptr<Tensor> next_state;
+};
+
 struct BatchNormParam : ParamBase {
     std::shared_ptr<Tensor> input;
     std::shared_ptr<Tensor> scale;
@@ -68,6 +80,15 @@ struct MatMulParam : ParamBase {
     std::shared_ptr<Tensor> out;
 };
 
+// Fused Qwen lm-head projection and greedy token selection. The weight is
+// stored as [vocabulary, hidden] and the activation is a single [1, hidden]
+// row. The output is one INT64 token id instead of a materialized logits row.
+struct QwenGemmArgmaxParam : ParamBase {
+    std::shared_ptr<Tensor> a;
+    std::shared_ptr<Tensor> b;
+    std::shared_ptr<Tensor> out;
+};
+
 struct QwenGatedDeltaStateParam : ParamBase {
     std::shared_ptr<Tensor> state;
     std::shared_ptr<Tensor> k;
@@ -80,6 +101,17 @@ struct QwenGatedDeltaStateParam : ParamBase {
 struct QwenGatedDeltaOutputParam : ParamBase {
     std::shared_ptr<Tensor> state;
     std::shared_ptr<Tensor> q;
+    std::shared_ptr<Tensor> out;
+};
+
+struct QwenGatedDeltaParam : ParamBase {
+    std::shared_ptr<Tensor> state;
+    std::shared_ptr<Tensor> k;
+    std::shared_ptr<Tensor> v;
+    std::shared_ptr<Tensor> beta;
+    std::shared_ptr<Tensor> decay;
+    std::shared_ptr<Tensor> q;
+    std::shared_ptr<Tensor> next_state;
     std::shared_ptr<Tensor> out;
 };
 

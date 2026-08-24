@@ -31,6 +31,10 @@ int32_t ComputeIdentityKernel(feather::operators::UnaryParam* param) {
 
     const size_t bytes = static_cast<size_t>(param->input->numel()) * DataTypeBytes(dtype);
     param->out->set_data_type(dtype);
+    if (param->input->IsInitialized() && param->out->IsInitialized() &&
+        param->input->raw_data() == param->out->raw_data()) {
+        return 0;
+    }
     std::memcpy(param->out->raw_data(), param->input->raw_data(), bytes);
     return 0;
 }

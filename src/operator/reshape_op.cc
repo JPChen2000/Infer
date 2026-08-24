@@ -158,6 +158,20 @@ int32_t ReshapeOp::InferOutputShapes() {
     if (!ResolveTargetShape(param_.input, param_.shape, param_.target_shape, &target_shape)) {
         return -1;
     }
+
+    // A host reshape is a metadata-only view. Keeping the input storage avoids
+    // copying every Qwen activation through shape-only nodes during decode.
+    // CUDA keeps separate host storage but shares the device allocation in its
+    // view kernel, so output lifetime remains independent of host metadata.
+    if (ActiveKernelDevice() != DeviceType::CUDA) {
+        param_.out->ShareDataWith(*param_.input);
+        param_.out->Resize(target_shape);
+        param_.out->set_data_type(param_.input->data_type());
+        param_.out->set_layout(param_.input->layout());
+        SyncIO();
+        return 0;
+    }
+
     const size_t required_bytes =
         static_cast<size_t>(param_.input->numel()) *
         DataTypeBytes(ResolveExecutionDataType({param_.input, param_.out}, DataType::FP32));

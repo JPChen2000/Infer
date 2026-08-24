@@ -16,6 +16,42 @@ std::vector<int64_t> ComputeStrides(const std::vector<int64_t>& dims) {
     return strides;
 }
 
+bool IsPhysicalNoOpPermutation(const feather::operators::TransposeParam* param) {
+    if (param == nullptr || param->input == nullptr) {
+        return false;
+    }
+
+    const auto& input_dims = param->input->dims().data();
+    if (param->perm.size() != input_dims.size()) {
+        return false;
+    }
+
+    std::vector<bool> seen(input_dims.size(), false);
+    size_t next_non_singleton_axis = 0;
+    for (const int64_t source_axis : param->perm) {
+        if (source_axis < 0 || source_axis >= static_cast<int64_t>(input_dims.size())) {
+            return false;
+        }
+        const size_t axis = static_cast<size_t>(source_axis);
+        if (seen[axis]) {
+            return false;
+        }
+        seen[axis] = true;
+        if (input_dims[axis] == 1) {
+            continue;
+        }
+
+        while (next_non_singleton_axis < input_dims.size() && input_dims[next_non_singleton_axis] == 1) {
+            ++next_non_singleton_axis;
+        }
+        if (next_non_singleton_axis == input_dims.size() || axis != next_non_singleton_axis) {
+            return false;
+        }
+        ++next_non_singleton_axis;
+    }
+    return true;
+}
+
 bool g_transpose_kernels_registered = []() {
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP32, "Transpose",
                                                 []() { return std::make_unique<TransposeKernel<DeviceType::COMMON, DataType::FP32>>(); });
@@ -37,12 +73,17 @@ int32_t ComputeTransposeKernel(feather::operators::TransposeParam* param) {
     const auto& in_dims = param->input->dims().data();
     const auto& out_dims = param->out->dims().data();
 
+    param->out->set_data_type(dtype);
+    if (IsPhysicalNoOpPermutation(param) && param->input->IsInitialized() && param->out->IsInitialized() &&
+        param->input->raw_data() == param->out->raw_data()) {
+        return 0;
+    }
+
     const auto out_strides = ComputeStrides(out_dims);
     const auto in_strides = ComputeStrides(in_dims);
     std::vector<int64_t> out_coords(out_dims.size(), 0);
     std::vector<int64_t> in_coords(in_dims.size(), 0);
 
-    param->out->set_data_type(dtype);
     for (int64_t linear = 0; linear < param->out->numel(); ++linear) {
         int64_t remaining = linear;
         for (size_t axis = 0; axis < out_dims.size(); ++axis) {

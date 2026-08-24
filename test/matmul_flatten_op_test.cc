@@ -52,6 +52,28 @@ TEST(matmul_flatten_op_test, MatMulRunsOnX86) {
     }
 }
 
+TEST(matmul_flatten_op_test, MatMulReusesStaticShapeInferenceAcrossRuns) {
+    auto lhs = std::make_shared<Tensor>();
+    lhs->Assign<float>({1, 2, 3, 4}, {2, 2});
+    auto rhs = std::make_shared<Tensor>();
+    rhs->Assign<float>({1, 2, 3, 4}, {2, 2});
+    auto out = std::make_shared<Tensor>(std::vector<int64_t>{2, 2});
+
+    MatMulParam param{};
+    param.a = lhs;
+    param.b = rhs;
+    param.out = out;
+    feather::operators::MatMulOp op("static_shape_matmul", param);
+    ASSERT_EQ(op.InferOutputShapes(), 0);
+    auto kernel = KernelDispatcher::instance().create(DeviceType::X86, DataType::FP32, "MatMul");
+    ASSERT_NE(kernel, nullptr);
+    op.AttachKernel(std::move(kernel));
+
+    ASSERT_EQ(op.Run(), 0);
+    ASSERT_EQ(op.Run(), 0);
+    EXPECT_EQ(op.shape_inference_count(), 1);
+}
+
 TEST(matmul_flatten_op_test, BatchedMatMulResizesExistingOutputForAllDimensions) {
     auto lhs = std::make_shared<Tensor>();
     lhs->Assign<float>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,

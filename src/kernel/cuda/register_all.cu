@@ -46,6 +46,10 @@ void EnsureCudaExpandKernelsRegistered();
 void EnsureCudaWhereKernelsRegistered();
 void EnsureCudaTransposeKernelsRegistered();
 void EnsureCudaYoloDecodeKernelsRegistered();
+void EnsureCudaQwenRmsNormKernelsRegistered();
+void EnsureCudaQwenDepthwiseConvStateKernelsRegistered();
+void EnsureCudaQwenGatedDeltaKernelsRegistered();
+void EnsureCudaQwenGemmArgmaxKernelsRegistered();
 
 void EnsureCudaKernelsRegistered() {
     EnsureCudaAddKernelsRegistered();
@@ -91,6 +95,10 @@ void EnsureCudaKernelsRegistered() {
     EnsureCudaWhereKernelsRegistered();
     EnsureCudaTransposeKernelsRegistered();
     EnsureCudaYoloDecodeKernelsRegistered();
+    EnsureCudaQwenRmsNormKernelsRegistered();
+    EnsureCudaQwenDepthwiseConvStateKernelsRegistered();
+    EnsureCudaQwenGatedDeltaKernelsRegistered();
+    EnsureCudaQwenGemmArgmaxKernelsRegistered();
 }
 
 }  // namespace kernel

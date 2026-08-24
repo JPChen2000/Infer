@@ -3,16 +3,23 @@
 #include <immintrin.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <future>
+#include <thread>
 #include <vector>
 
 #include "src/kernel/common/kernel_io.h"
 #include "src/operator/params.h"
 #include "src/kernel/x86/direct_conv_fp32.h"
 #include "src/kernel/x86/pointwise_conv_fp32.h"
+#include "util/bf16.h"
 #include "util/thread_pool_nv.h"
 #include "util/threading.h"
 #include "util/timer.h"
+
+#if defined(FEATHER_WITH_OPENMP)
+#include <omp.h>
+#endif
 
 namespace feather {
 namespace kernel {
@@ -92,6 +99,102 @@ bool CanUseNhwcToNchwFastConv2DPath(const feather::operators::Conv2dParam* param
     return param->input->dims().size() == 4 && param->w->dims().size() == 4 &&
            NormalizeDataLayout(param->input->layout()) == DataLayout::NHWC && param->group == 1 &&
            param->dilation_h == 1 && param->dilation_w == 1;
+}
+
+constexpr int64_t kQwenBf16DepthwiseKernelWidth = 4;
+constexpr int64_t kQwenBf16DepthwiseParallelMinimumChannels = 2048;
+constexpr size_t kQwenDefaultWorkerLimit = 4;
+
+bool CanUseQwenBf16DepthwiseConv2D(const feather::operators::Conv2dParam* param) {
+    if (param == nullptr || param->input == nullptr || param->w == nullptr || param->out == nullptr ||
+        !param->input->IsInitialized() || !param->w->IsInitialized() || !param->out->IsInitialized() ||
+        param->input->data_type() != DataType::BF16 || param->w->data_type() != DataType::BF16 ||
+        param->input->dims().size() != 4 || param->w->dims().size() != 4 || param->out->dims().size() != 4 ||
+        NormalizeDataLayout(param->input->layout()) != DataLayout::NCHW || param->stride_h != 1 ||
+        param->stride_w != 1 || param->pad_h != 0 || param->pad_w != 0 || param->dilation_h != 1 ||
+        param->dilation_w != 1) {
+        return false;
+    }
+
+    const auto& input_dims = param->input->dims();
+    const auto& weight_dims = param->w->dims();
+    const auto& output_dims = param->out->dims();
+    const int64_t channels = input_dims[1];
+    if (input_dims[0] != 1 || channels <= 0 || input_dims[2] != 1 ||
+        input_dims[3] != kQwenBf16DepthwiseKernelWidth || param->group != channels || weight_dims[0] != channels ||
+        weight_dims[1] != 1 || weight_dims[2] != 1 || weight_dims[3] != kQwenBf16DepthwiseKernelWidth ||
+        output_dims[0] != 1 || output_dims[1] != channels || output_dims[2] != 1 || output_dims[3] != 1) {
+        return false;
+    }
+    return param->bias == nullptr || !param->bias->IsInitialized() ||
+           (param->bias->data_type() == DataType::BF16 && param->bias->numel() == channels);
+}
+
+size_t QwenBf16DepthwiseWorkerCount(int64_t channels) {
+    if (channels < kQwenBf16DepthwiseParallelMinimumChannels) {
+        return 1;
+    }
+
+    size_t worker_limit = std::min(DefaultThreadCount(), kQwenDefaultWorkerLimit);
+    const char* configured_limit = std::getenv("FEATHER_X86_BF16_THREADS");
+    if (configured_limit != nullptr && configured_limit[0] != '\0') {
+        char* end = nullptr;
+        const unsigned long parsed_limit = std::strtoul(configured_limit, &end, 10);
+        if (end != configured_limit && *end == '\0' && parsed_limit > 0) {
+            const size_t hardware_limit = std::thread::hardware_concurrency();
+            worker_limit = std::min(hardware_limit == 0 ? DefaultThreadCount() : hardware_limit,
+                                    static_cast<size_t>(parsed_limit));
+        }
+    }
+#if defined(FEATHER_WITH_OPENMP)
+    const int openmp_limit = omp_get_max_threads();
+    if (openmp_limit > 0) {
+        worker_limit = std::min(worker_limit, static_cast<size_t>(openmp_limit));
+    }
+#endif
+    return std::min(worker_limit, static_cast<size_t>(channels));
+}
+
+inline uint16_t ComputeQwenBf16DepthwiseChannel(const uint16_t* input, const uint16_t* weight,
+                                                 const uint16_t* bias, int64_t channel) {
+    const int64_t offset = channel * kQwenBf16DepthwiseKernelWidth;
+    float value = bias == nullptr ? 0.0f : BFloat16ToFloat(bias[channel]);
+    value += BFloat16ToFloat(input[offset]) * BFloat16ToFloat(weight[offset]);
+    value += BFloat16ToFloat(input[offset + 1]) * BFloat16ToFloat(weight[offset + 1]);
+    value += BFloat16ToFloat(input[offset + 2]) * BFloat16ToFloat(weight[offset + 2]);
+    value += BFloat16ToFloat(input[offset + 3]) * BFloat16ToFloat(weight[offset + 3]);
+    return FloatToBFloat16(value);
+}
+
+int32_t ComputeQwenBf16DepthwiseConv2D(const feather::operators::Conv2dParam* param) {
+    const int64_t channels = param->input->dims()[1];
+    const uint16_t* input = param->input->data<uint16_t>();
+    const uint16_t* weight = param->w->data<uint16_t>();
+    const uint16_t* bias =
+        param->bias != nullptr && param->bias->IsInitialized() ? param->bias->data<uint16_t>() : nullptr;
+    auto* output = static_cast<uint16_t*>(param->out->raw_data());
+
+    const size_t worker_count = QwenBf16DepthwiseWorkerCount(channels);
+#if !defined(FEATHER_WITH_OPENMP)
+    (void)worker_count;
+#endif
+#if defined(FEATHER_WITH_OPENMP)
+    // Decode executes graph nodes serially. Do not create a nested team when a
+    // caller chooses to run a larger region under OpenMP.
+    if (worker_count > 1 && !omp_in_parallel()) {
+        const int omp_worker_count = static_cast<int>(worker_count);
+#pragma omp parallel for schedule(static) num_threads(omp_worker_count)
+        for (int64_t channel = 0; channel < channels; ++channel) {
+            output[channel] = ComputeQwenBf16DepthwiseChannel(input, weight, bias, channel);
+        }
+        return 0;
+    }
+#endif
+
+    for (int64_t channel = 0; channel < channels; ++channel) {
+        output[channel] = ComputeQwenBf16DepthwiseChannel(input, weight, bias, channel);
+    }
+    return 0;
 }
 
 template <typename T>
@@ -1656,6 +1759,21 @@ int32_t Conv2DKernel<DeviceType::X86, DataType::FP16>::compute() {
     return ComputeConv2DFallback<DataType::FP16>(param);
 }
 
+template <>
+int32_t Conv2DKernel<DeviceType::X86, DataType::BF16>::compute() {
+    AutoTimer timer("X86::Conv2D::BF16");
+    auto* param = static_cast<feather::operators::Conv2dParam*>(param_);
+    if (param == nullptr || param->input == nullptr || param->w == nullptr || param->out == nullptr) {
+        return -1;
+    }
+
+    param->out->set_data_type(DataType::BF16);
+    if (CanUseQwenBf16DepthwiseConv2D(param)) {
+        return ComputeQwenBf16DepthwiseConv2D(param);
+    }
+    return ComputeConv2DFallback<DataType::BF16>(param);
+}
+
 void EnsureX86Conv2DKernelsRegistered() {
     static bool registered = []() {
         KernelDispatcher::instance().registerKernel(
@@ -1664,6 +1782,9 @@ void EnsureX86Conv2DKernelsRegistered() {
         KernelDispatcher::instance().registerKernel(
             DeviceType::X86, DataType::FP16, "Conv2D",
             []() { return std::make_unique<Conv2DKernel<DeviceType::X86, DataType::FP16>>(); });
+        KernelDispatcher::instance().registerKernel(
+            DeviceType::X86, DataType::BF16, "Conv2D",
+            []() { return std::make_unique<Conv2DKernel<DeviceType::X86, DataType::BF16>>(); });
         return true;
     }();
     (void)registered;

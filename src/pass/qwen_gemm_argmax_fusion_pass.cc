@@ -1,0 +1,96 @@
+#include "pass/qwen_gemm_argmax_fusion_pass.h"
+
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <string>
+
+#include "core/static_graph.h"
+
+namespace feather {
+namespace {
+
+const std::string kPassName = "QwenGemmArgmaxFusionPass";
+
+bool IsQwenModel(const StaticGraph& graph) {
+    std::string name = graph.model().name + " " + graph.model().graph.name;
+    std::transform(name.begin(), name.end(), name.begin(),
+                   [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+    return name.find("qwen") != std::string::npos;
+}
+
+const model::NodeDesc* FindModelNode(const StaticGraph& graph, const std::string& name) {
+    for (const auto& node : graph.model().graph.nodes) {
+        if (node.name == name) {
+            return &node;
+        }
+    }
+    return nullptr;
+}
+
+bool IsIntAttribute(const model::NodeDesc& node, const std::string& key, int64_t expected, bool absent_is_default) {
+    const auto it = node.attributes.find(key);
+    if (it == node.attributes.end()) {
+        return absent_is_default;
+    }
+    const auto* value = std::get_if<int64_t>(&it->second);
+    return value != nullptr && *value == expected;
+}
+
+bool IsFloatAttribute(const model::NodeDesc& node, const std::string& key, float expected, bool absent_is_default) {
+    const auto it = node.attributes.find(key);
+    if (it == node.attributes.end()) {
+        return absent_is_default;
+    }
+    const auto* value = std::get_if<float>(&it->second);
+    return value != nullptr && std::fabs(*value - expected) <= 1.0e-6f;
+}
+
+bool IsFinalQwenLogitsGemm(const StaticGraph& graph, const StaticNode& node) {
+    if (node.removed || node.op_type != "Gemm" || node.inputs.size() != 2 || node.outputs.size() != 1 ||
+        node.outputs[0] != "logits" || !graph.IsGraphOutputValue("logits") || !graph.GetUsers("logits").empty()) {
+        return false;
+    }
+    const auto* model_node = FindModelNode(graph, node.name);
+    if (model_node == nullptr || !IsIntAttribute(*model_node, "transA", 0, true) ||
+        !IsIntAttribute(*model_node, "transB", 1, false) || !IsFloatAttribute(*model_node, "alpha", 1.0f, true) ||
+        !IsFloatAttribute(*model_node, "beta", 1.0f, true)) {
+        return false;
+    }
+    const auto a = graph.GetTensor(node.inputs[0]);
+    const auto b = graph.GetTensor(node.inputs[1]);
+    const auto out = graph.GetTensor(node.outputs[0]);
+    if (a == nullptr || b == nullptr || out == nullptr || a->data_type() != DataType::BF16 ||
+        b->data_type() != DataType::BF16 || a->dims().size() < 2 || b->dims().size() != 2 ||
+        a->dims()[a->dims().size() - 1] != b->dims()[1] ||
+        a->numel() != a->dims()[a->dims().size() - 1] || b->dims()[0] <= 0 || !b->is_immutable()) {
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+const std::string& QwenGemmArgmaxFusionPass::name() const { return kPassName; }
+
+int32_t QwenGemmArgmaxFusionPass::Run(StaticGraph* graph) {
+    if (graph == nullptr) {
+        return -1;
+    }
+    if (!IsQwenModel(*graph) ||
+        (graph->KernelDevice() != DeviceType::X86 && graph->KernelDevice() != DeviceType::CUDA)) {
+        return 0;
+    }
+    for (const auto& node : graph->nodes()) {
+        if (!IsFinalQwenLogitsGemm(*graph, node)) {
+            continue;
+        }
+        if (!graph->SetValueDataType("logits", DataType::INT64) ||
+            !graph->ReplaceNodeOp(node.name, "QwenGemmArgmax", {node.inputs[0], node.inputs[1]})) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+}  // namespace feather

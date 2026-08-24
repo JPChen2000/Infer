@@ -94,6 +94,31 @@ TEST(gemm_op_test, GemmRunsOnX86) {
     }
 }
 
+TEST(gemm_op_test, GemmReusesStaticShapeInferenceAcrossRuns) {
+    auto lhs = std::make_shared<Tensor>();
+    lhs->Assign<float>({1, 2, 3, 4}, {2, 2});
+    auto rhs = std::make_shared<Tensor>();
+    rhs->Assign<float>({1, 2, 3, 4}, {2, 2});
+    auto bias = std::make_shared<Tensor>();
+    bias->Assign<float>({1, 1}, {1, 2});
+    auto out = std::make_shared<Tensor>(std::vector<int64_t>{2, 2});
+
+    GemmParam param{};
+    param.a = lhs;
+    param.b = rhs;
+    param.bias = bias;
+    param.out = out;
+    feather::operators::GemmOp op("static_shape_gemm", param);
+    ASSERT_EQ(op.InferOutputShapes(), 0);
+    auto kernel = KernelDispatcher::instance().create(DeviceType::X86, DataType::FP32, "Gemm");
+    ASSERT_NE(kernel, nullptr);
+    op.AttachKernel(std::move(kernel));
+
+    ASSERT_EQ(op.Run(), 0);
+    ASSERT_EQ(op.Run(), 0);
+    EXPECT_EQ(op.shape_inference_count(), 1);
+}
+
 TEST(gemm_op_test, CommonFp16KernelRunsCorrectly) {
     auto lhs = std::make_shared<Tensor>();
     lhs->Assign<uint16_t>({feather::FloatToHalf(1.0f), feather::FloatToHalf(2.0f), feather::FloatToHalf(3.0f),

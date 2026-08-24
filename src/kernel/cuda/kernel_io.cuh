@@ -266,6 +266,27 @@ int RunDeviceCopy(Tensor* input, Tensor* out) {
     return CopyDeviceToTensor(&output_device, out);
 }
 
+template <typename T>
+int RunDeviceAlias(Tensor* input, Tensor* out) {
+    if (input == nullptr || out == nullptr || !input->IsInitialized() || !out->IsInitialized() ||
+        input->numel() != out->numel()) {
+        return -1;
+    }
+    out->set_data_type(DataTypeTrait<T>::type());
+    DeviceBuffer<T> input_device;
+    if (CopyTensorToDevice(input, &input_device) != 0) {
+        return -1;
+    }
+    const size_t bytes = input_device.count() * sizeof(T);
+    if (AliasTensorDeviceStorage(input, out, bytes) != 0) {
+        return -1;
+    }
+    if (!DeferredHostSyncEnabled()) {
+        return SyncTensorToHost(out, bytes, out->raw_data());
+    }
+    return 0;
+}
+
 __device__ inline float ReadDevice(const float* data, int64_t idx) {
     return data[idx];
 }

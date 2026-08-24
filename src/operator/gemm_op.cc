@@ -102,6 +102,29 @@ void GemmOp::SyncIO() {
     SetOutputs({param_.out});
 }
 
+bool GemmOp::ShapeCacheMatches() const {
+    const bool bias_initialized = param_.bias != nullptr && param_.bias->IsInitialized();
+    if (!shape_cache_valid_ || CheckShape() != 0 || param_.a->dims().data() != cached_a_dims_ ||
+        param_.b->dims().data() != cached_b_dims_ ||
+        (bias_initialized != cached_bias_initialized_) ||
+        (bias_initialized && param_.bias->dims().data() != cached_bias_dims_) ||
+        param_.out->dims().data() != cached_output_dims_ || !param_.out->IsInitialized()) {
+        return false;
+    }
+    const auto dtype = ResolveExecutionDataType({param_.a, param_.b, param_.bias, param_.out}, DataType::FP32);
+    const auto required_bytes = static_cast<size_t>(param_.out->numel()) * DataTypeBytes(dtype);
+    return param_.out->memory_size() >= required_bytes;
+}
+
+void GemmOp::UpdateShapeCache() {
+    cached_a_dims_ = param_.a->dims().data();
+    cached_b_dims_ = param_.b->dims().data();
+    cached_bias_initialized_ = param_.bias != nullptr && param_.bias->IsInitialized();
+    cached_bias_dims_ = cached_bias_initialized_ ? param_.bias->dims().data() : std::vector<int64_t>{};
+    cached_output_dims_ = param_.out->dims().data();
+    shape_cache_valid_ = true;
+}
+
 int32_t GemmOp::CheckShape() const {
     if (param_.a == nullptr || param_.b == nullptr || param_.out == nullptr) {
         return -1;
@@ -135,6 +158,8 @@ int32_t GemmOp::CheckShape() const {
 }
 
 int32_t GemmOp::InferOutputShapes() {
+    ++shape_inference_count_;
+    shape_cache_valid_ = false;
     if (CheckShape() != 0) {
         return -1;
     }
@@ -149,11 +174,12 @@ int32_t GemmOp::InferOutputShapes() {
         param_.out->Resize(out_shape);
     }
     SyncIO();
+    UpdateShapeCache();
     return 0;
 }
 
 int32_t GemmOp::Run() {
-    if (InferOutputShapes() != 0) {
+    if (!ShapeCacheMatches() && InferOutputShapes() != 0) {
         return -1;
     }
     if (kernel_ == nullptr) {

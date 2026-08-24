@@ -22,6 +22,42 @@ std::vector<int64_t> ComputeStrides(const std::vector<int64_t>& dims) {
     return strides;
 }
 
+bool IsPhysicalNoOpPermutation(const feather::operators::TransposeParam* param) {
+    if (param == nullptr || param->input == nullptr) {
+        return false;
+    }
+
+    const auto& input_dims = param->input->dims().data();
+    if (param->perm.size() != input_dims.size()) {
+        return false;
+    }
+
+    std::vector<bool> seen(input_dims.size(), false);
+    size_t next_non_singleton_axis = 0;
+    for (const int64_t source_axis : param->perm) {
+        if (source_axis < 0 || source_axis >= static_cast<int64_t>(input_dims.size())) {
+            return false;
+        }
+        const size_t axis = static_cast<size_t>(source_axis);
+        if (seen[axis]) {
+            return false;
+        }
+        seen[axis] = true;
+        if (input_dims[axis] == 1) {
+            continue;
+        }
+
+        while (next_non_singleton_axis < input_dims.size() && input_dims[next_non_singleton_axis] == 1) {
+            ++next_non_singleton_axis;
+        }
+        if (next_non_singleton_axis == input_dims.size() || axis != next_non_singleton_axis) {
+            return false;
+        }
+        ++next_non_singleton_axis;
+    }
+    return true;
+}
+
 template <DataType dtype>
 int32_t ComputeTransposeFallback(feather::operators::TransposeParam* param) {
     if (param == nullptr || param->input == nullptr || param->out == nullptr) {
@@ -94,6 +130,79 @@ bool IsYolov5HeadTranspose(const feather::operators::TransposeParam* param) {
 template <typename T>
 void Transpose2DTiled(const T* input, T* output, int64_t rows, int64_t cols) {
     constexpr int64_t tile = 8;
+
+    if constexpr (sizeof(T) == sizeof(uint16_t)) {
+        int64_t row_block = 0;
+        for (; row_block + tile <= rows; row_block += tile) {
+            int64_t col_block = 0;
+            for (; col_block + tile <= cols; col_block += tile) {
+                const T* row0 = input + row_block * cols + col_block;
+                const T* row1 = row0 + cols;
+                const T* row2 = row1 + cols;
+                const T* row3 = row2 + cols;
+                const T* row4 = row3 + cols;
+                const T* row5 = row4 + cols;
+                const T* row6 = row5 + cols;
+                const T* row7 = row6 + cols;
+
+                const __m128i r0 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(row0));
+                const __m128i r1 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(row1));
+                const __m128i r2 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(row2));
+                const __m128i r3 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(row3));
+                const __m128i r4 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(row4));
+                const __m128i r5 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(row5));
+                const __m128i r6 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(row6));
+                const __m128i r7 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(row7));
+
+                const __m128i a0 = _mm_unpacklo_epi16(r0, r1);
+                const __m128i a1 = _mm_unpackhi_epi16(r0, r1);
+                const __m128i a2 = _mm_unpacklo_epi16(r2, r3);
+                const __m128i a3 = _mm_unpackhi_epi16(r2, r3);
+                const __m128i a4 = _mm_unpacklo_epi16(r4, r5);
+                const __m128i a5 = _mm_unpackhi_epi16(r4, r5);
+                const __m128i a6 = _mm_unpacklo_epi16(r6, r7);
+                const __m128i a7 = _mm_unpackhi_epi16(r6, r7);
+
+                const __m128i b0 = _mm_unpacklo_epi32(a0, a2);
+                const __m128i b1 = _mm_unpackhi_epi32(a0, a2);
+                const __m128i b2 = _mm_unpacklo_epi32(a1, a3);
+                const __m128i b3 = _mm_unpackhi_epi32(a1, a3);
+                const __m128i b4 = _mm_unpacklo_epi32(a4, a6);
+                const __m128i b5 = _mm_unpackhi_epi32(a4, a6);
+                const __m128i b6 = _mm_unpacklo_epi32(a5, a7);
+                const __m128i b7 = _mm_unpackhi_epi32(a5, a7);
+
+                T* output0 = output + col_block * rows + row_block;
+                T* output1 = output0 + rows;
+                T* output2 = output1 + rows;
+                T* output3 = output2 + rows;
+                T* output4 = output3 + rows;
+                T* output5 = output4 + rows;
+                T* output6 = output5 + rows;
+                T* output7 = output6 + rows;
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(output0), _mm_unpacklo_epi64(b0, b4));
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(output1), _mm_unpackhi_epi64(b0, b4));
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(output2), _mm_unpacklo_epi64(b1, b5));
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(output3), _mm_unpackhi_epi64(b1, b5));
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(output4), _mm_unpacklo_epi64(b2, b6));
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(output5), _mm_unpackhi_epi64(b2, b6));
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(output6), _mm_unpacklo_epi64(b3, b7));
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(output7), _mm_unpackhi_epi64(b3, b7));
+            }
+            for (; col_block < cols; ++col_block) {
+                for (int64_t row = row_block; row < row_block + tile; ++row) {
+                    output[col_block * rows + row] = input[row * cols + col_block];
+                }
+            }
+        }
+        for (; row_block < rows; ++row_block) {
+            for (int64_t col = 0; col < cols; ++col) {
+                output[col * rows + row_block] = input[row_block * cols + col];
+            }
+        }
+        return;
+    }
+
     for (int64_t row_block = 0; row_block < rows; row_block += tile) {
         for (int64_t col_block = 0; col_block < cols; col_block += tile) {
             const int64_t row_end = std::min(row_block + tile, rows);
@@ -176,8 +285,12 @@ int32_t ComputeTransposeRaw(feather::operators::TransposeParam* param, DataType 
 
     const auto& in_dims = param->input->dims().data();
     const auto& out_dims = param->out->dims().data();
-    const T* input = param->input->data<T>();
     param->out->set_data_type(dtype);
+    if (IsPhysicalNoOpPermutation(param) && param->input->IsInitialized() && param->out->IsInitialized() &&
+        param->input->raw_data() == param->out->raw_data()) {
+        return 0;
+    }
+    const T* input = param->input->data<T>();
     T* output = static_cast<T*>(param->out->raw_data());
 
     if (Is2DTranspose(param)) {

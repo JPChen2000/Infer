@@ -123,8 +123,11 @@ set(SRC "src/core/memory.cc"
     "src/pass/identity_elimination_pass.cc"
     "src/pass/matmul_add_fusion_pass.cc"
     "src/pass/qwen_gated_delta_fusion_pass.cc"
+    "src/pass/qwen_depthwise_conv_fusion_pass.cc"
     "src/pass/qwen_matmul_add_fusion_pass.cc"
+    "src/pass/qwen_gemm_argmax_fusion_pass.cc"
     "src/pass/qwen_rms_norm_fusion_pass.cc"
+    "src/pass/qwen_state_output_alias_pass.cc"
     "src/pass/no_op_elimination_pass.cc"
     "src/pass/resize_concat_fusion_pass.cc"
     "src/pass/reshape_chain_elimination_pass.cc"
@@ -179,6 +182,8 @@ set(SRC "src/core/memory.cc"
     "src/operator/expand_op.cc"
     "src/operator/where_op.cc"
     "src/operator/qwen_gated_delta_op.cc"
+    "src/operator/qwen_gemm_argmax_op.cc"
+    "src/operator/qwen_depthwise_conv_op.cc"
     "src/operator/qwen_rms_norm_op.cc"
     "src/operator/yolo_decode_op.cc"
     "src/kernel/common/add.cc"
@@ -222,6 +227,7 @@ set(SRC "src/core/memory.cc"
     "src/kernel/common/expand.cc"
     "src/kernel/common/where.cc"
     "src/kernel/common/qwen_gated_delta.cc"
+    "src/kernel/common/qwen_gemm_argmax.cc"
     "src/kernel/common/qwen_rms_norm.cc"
     "src/kernel/common/sqrt.cc"
     "src/kernel/common/sub.cc"
@@ -260,6 +266,8 @@ set(SRC "src/core/memory.cc"
     "src/kernel/x86/softmax.cc"
     "src/kernel/x86/transpose.cc"
     "src/kernel/x86/qwen_gated_delta.cc"
+    "src/kernel/x86/qwen_gemm_argmax.cc"
+    "src/kernel/x86/qwen_depthwise_conv.cc"
     "src/kernel/x86/qwen_rms_norm.cc"
     "src/kernel/x86/yolo_decode.cc"
     "src/demo/classification_demo.cc"
@@ -317,7 +325,11 @@ set(CUDA_SRC
     "src/kernel/cuda/sqrt.cu"
     "src/kernel/cuda/sub.cu"
     "src/kernel/cuda/tanh.cu"
-    "src/kernel/cuda/yolo_decode.cu")
+    "src/kernel/cuda/yolo_decode.cu"
+    "src/kernel/cuda/qwen_rms_norm.cu"
+    "src/kernel/cuda/qwen_depthwise_conv.cu"
+    "src/kernel/cuda/qwen_gated_delta.cu"
+    "src/kernel/cuda/qwen_gemm_argmax.cu")
 
 if (FEATHER_WITH_CUDA)
     list(APPEND SRC ${CUDA_SRC})
@@ -396,6 +408,7 @@ set_source_files_properties(
     src/kernel/x86/softmax.cc
     src/kernel/x86/transpose.cc
     src/kernel/x86/qwen_gated_delta.cc
+    src/kernel/x86/qwen_depthwise_conv.cc
     src/kernel/x86/qwen_rms_norm.cc
     src/kernel/x86/yolo_decode.cc
     PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-mf16c")

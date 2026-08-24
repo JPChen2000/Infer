@@ -92,6 +92,7 @@ TEST(qwen_direct_export_test, LowersEveryQwenDecodeNodeToCuda) {
         ASSERT_EQ(graph.SetTensor(input_name, MakeDeclaredTensor(it->tensor)), 0) << input_name;
     }
     ASSERT_EQ(graph.Build(), 0);
+    ASSERT_EQ(graph.ApplyPasses(), 0);
 
     feather::RuntimeGraph runtime_graph;
     feather::GraphLowering lowering;

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <numeric>
@@ -83,17 +84,73 @@ bool HasName(const std::vector<std::string>& names, const std::string& name) {
     return std::find(names.begin(), names.end(), name) != names.end();
 }
 
-float ReadLogit(const Tensor& tensor, int64_t index) {
-    switch (tensor.data_type()) {
-        case DataType::FP32:
-            return tensor.data<float>()[index];
-        case DataType::FP16:
-            return HalfToFloat(tensor.data<uint16_t>()[index]);
-        case DataType::BF16:
-            return BFloat16ToFloat(tensor.data<BFloat16>()[index].bits);
-        default:
-            return -std::numeric_limits<float>::infinity();
+bool IsBf16NaN(uint16_t bits) {
+    return (bits & 0x7f80u) == 0x7f80u && (bits & 0x007fu) != 0;
+}
+
+bool IsFp16NaN(uint16_t bits) {
+    return (bits & 0x7c00u) == 0x7c00u && (bits & 0x03ffu) != 0;
+}
+
+template <typename IsNaN, typename IsZero, typename SortableKey>
+int64_t SelectGreedy16(const uint16_t* values, int64_t count, IsNaN is_nan, IsZero is_zero,
+                       SortableKey sortable_key) {
+    int64_t best = -1;
+    uint16_t best_bits = 0;
+    for (int64_t index = 0; index < count; ++index) {
+        const uint16_t bits = values[index];
+        if (is_nan(bits)) {
+            continue;
+        }
+        if (best < 0) {
+            best = index;
+            best_bits = bits;
+            continue;
+        }
+        // IEEE treats both signed zeroes as equal. Keep the first index just
+        // like the scalar `value > best_value` comparison does.
+        if (is_zero(bits) && is_zero(best_bits)) {
+            continue;
+        }
+        if (sortable_key(bits) > sortable_key(best_bits)) {
+            best = index;
+            best_bits = bits;
+        }
     }
+    return best < 0 ? 0 : best;
+}
+
+int64_t SelectGreedyFp32(const float* values, int64_t count) {
+    int64_t best = -1;
+    float best_value = 0.0f;
+    for (int64_t index = 0; index < count; ++index) {
+        const float value = values[index];
+        if (std::isnan(value)) {
+            continue;
+        }
+        if (best < 0 || value > best_value) {
+            best = index;
+            best_value = value;
+        }
+    }
+    return best < 0 ? 0 : best;
+}
+
+int64_t SelectGreedyFp16(const uint16_t* values, int64_t count) {
+    return SelectGreedy16(values, count, IsFp16NaN, [](uint16_t bits) { return (bits & 0x7fffu) == 0; },
+                          [](uint16_t bits) {
+                              return (bits & 0x8000u) != 0 ? static_cast<uint16_t>(~bits)
+                                                           : static_cast<uint16_t>(bits ^ 0x8000u);
+                          });
+}
+
+int64_t SelectGreedyBf16(const BFloat16* values, int64_t count) {
+    return SelectGreedy16(
+        reinterpret_cast<const uint16_t*>(values), count, IsBf16NaN,
+        [](uint16_t bits) { return (bits & 0x7fffu) == 0; }, [](uint16_t bits) {
+            return (bits & 0x8000u) != 0 ? static_cast<uint16_t>(~bits)
+                                         : static_cast<uint16_t>(bits ^ 0x8000u);
+        });
 }
 
 }  // namespace
@@ -273,6 +330,28 @@ int32_t QwenRunner::Reset() {
         last_error_ = "Qwen runner is not loaded";
         return -1;
     }
+#ifdef FEATHER_WITH_CUDA
+    if (backend_device_ == DeviceType::CUDA) {
+        for (const auto& binding : states_) {
+            auto input = runtime_graph_.GetTensor(binding.input_name);
+            auto output = runtime_graph_.GetTensor(binding.output_name);
+            if (input != nullptr) {
+                kernel::cuda_detail::MarkTensorDevicePersistent(input.get(), true);
+            }
+            if (output != nullptr) {
+                kernel::cuda_detail::MarkTensorDevicePersistent(output.get(), true);
+            }
+            const auto producer_name = static_graph_.GetProducer(binding.output_name);
+            const auto* producer = runtime_graph_.GetNode(producer_name);
+            if (producer != nullptr && producer->op_type == "Identity" && producer->inputs.size() == 1) {
+                auto identity_input = runtime_graph_.GetTensor(producer->inputs[0]);
+                if (identity_input != nullptr) {
+                    kernel::cuda_detail::MarkTensorDevicePersistent(identity_input.get(), true);
+                }
+            }
+        }
+    }
+#endif
     for (const auto& input_name : loader_.model().graph.inputs) {
         auto tensor = runtime_graph_.GetTensor(input_name);
         if (tensor == nullptr || !tensor->IsInitialized()) {
@@ -338,11 +417,64 @@ int32_t QwenRunner::CopyState(const StateBinding& binding) {
             last_error_ = "Qwen state shape changed unexpectedly: " + binding.input_name;
             return -1;
         }
+#ifdef FEATHER_WITH_CUDA
+        if (backend_device_ != DeviceType::CUDA) {
+#else
+        {
+#endif
+            // Host Identity nodes are storage views. When a next-state graph
+            // output is such a view, swapping the output itself would leave
+            // the Identity input aliasing the following token's state input.
+            // Swap its source buffer instead so producer and consumer remain
+            // on opposite sides of the recurrent ping-pong pair.
+            const auto producer_name = static_graph_.GetProducer(binding.output_name);
+            const auto* producer = runtime_graph_.GetNode(producer_name);
+            if (producer != nullptr && producer->op_type == "Identity" && producer->inputs.size() == 1) {
+                auto identity_input = runtime_graph_.GetTensor(producer->inputs[0]);
+                if (identity_input != nullptr && identity_input->IsInitialized() &&
+                    identity_input->data_type() == input->data_type() && identity_input->dims() == input->dims() &&
+                    TensorBytes(*identity_input) == TensorBytes(*input)) {
+                    // An Identity of the state itself is already persistent;
+                    // self-swapping it is unnecessary.
+                    if (identity_input.get() == input.get() || identity_input->raw_data() == input->raw_data()) {
+                        return 0;
+                    }
+                    input->SwapStorage(*identity_input);
+                    return 0;
+                }
+            }
+            // Recurrent and convolution states have a same-shaped next-state
+            // tensor. Ping-pong the two buffers so the following token reads
+            // the new state without copying it back into the graph input.
+            input->SwapStorage(*output);
+            return 0;
+        }
+#ifdef FEATHER_WITH_CUDA
+        const auto producer_name = static_graph_.GetProducer(binding.output_name);
+        const auto* producer = runtime_graph_.GetNode(producer_name);
+        if (backend_device_ == DeviceType::CUDA) {
+            std::shared_ptr<Tensor> swap_target = output;
+            if (producer != nullptr && producer->op_type == "Identity" && producer->inputs.size() == 1) {
+                auto identity_input = runtime_graph_.GetTensor(producer->inputs[0]);
+                if (identity_input != nullptr && identity_input->IsInitialized() &&
+                    identity_input->data_type() == input->data_type() && identity_input->dims() == input->dims() &&
+                    TensorBytes(*identity_input) == TensorBytes(*input)) {
+                    if (identity_input.get() == input.get()) {
+                        return 0;
+                    }
+                    swap_target = identity_input;
+                }
+            }
+            if (kernel::cuda_detail::SwapTensorDeviceStorage(input.get(), swap_target.get()) != 0) {
+                last_error_ = "Qwen CUDA state device swap failed: " + binding.input_name;
+                return -1;
+            }
+            return 0;
+        }
+#endif
         std::memcpy(input->raw_data(), output->raw_data(), TensorBytes(*input));
 #ifdef FEATHER_WITH_CUDA
-        if (backend_device_ == DeviceType::CUDA) {
-            kernel::cuda_detail::InvalidateTensorDevice(input.get());
-        }
+        if (backend_device_ == DeviceType::CUDA) kernel::cuda_detail::InvalidateTensorDevice(input.get());
 #endif
         return 0;
     }
@@ -354,6 +486,15 @@ int32_t QwenRunner::CopyState(const StateBinding& binding) {
         last_error_ = "Qwen cache state shape is invalid: " + binding.input_name;
         return -1;
     }
+#ifdef FEATHER_WITH_CUDA
+    if (backend_device_ == DeviceType::CUDA) {
+        if (kernel::cuda_detail::AppendTensorStateOnDevice(input.get(), output.get(), binding.cache_axis) != 0) {
+            last_error_ = "Qwen CUDA cache state append failed: " + binding.input_name;
+            return -1;
+        }
+        return 0;
+    }
+#endif
     int64_t outer = 1;
     int64_t inner = 1;
     for (size_t index = 0; index < axis; ++index) outer *= input_dims[index];
@@ -388,21 +529,21 @@ int32_t QwenRunner::UpdateStates() {
 
 int64_t QwenRunner::SelectGreedyToken() const {
     const auto logits = runtime_graph_.GetTensor(logits_output_name_);
-    if (logits == nullptr || logits->numel() <= 0 ||
-        (logits->data_type() != DataType::FP32 && logits->data_type() != DataType::FP16 &&
-         logits->data_type() != DataType::BF16)) {
+    if (logits == nullptr || logits->numel() <= 0) {
         return -1;
     }
-    int64_t best = 0;
-    float best_value = ReadLogit(*logits, 0);
-    for (int64_t index = 1; index < logits->numel(); ++index) {
-        const float value = ReadLogit(*logits, index);
-        if (value > best_value) {
-            best_value = value;
-            best = index;
-        }
+    switch (logits->data_type()) {
+        case DataType::FP32:
+            return SelectGreedyFp32(logits->data<float>(), logits->numel());
+        case DataType::FP16:
+            return SelectGreedyFp16(logits->data<uint16_t>(), logits->numel());
+        case DataType::BF16:
+            return SelectGreedyBf16(logits->data<BFloat16>(), logits->numel());
+        case DataType::INT64:
+            return logits->numel() == 1 ? logits->data<int64_t>()[0] : -1;
+        default:
+            return -1;
     }
-    return best;
 }
 
 int32_t QwenRunner::RunToken(int64_t token_id, int64_t* next_token_id) {
@@ -422,14 +563,6 @@ int32_t QwenRunner::RunToken(int64_t token_id, int64_t* next_token_id) {
         }
         if (run_status == 0) {
             run_status = SyncTensorFromCuda(runtime_graph_.GetTensor(logits_output_name_));
-        }
-        if (run_status == 0) {
-            for (const auto& binding : states_) {
-                if (SyncTensorFromCuda(runtime_graph_.GetTensor(binding.output_name)) != 0) {
-                    run_status = -1;
-                    break;
-                }
-            }
         }
     } else
 #endif

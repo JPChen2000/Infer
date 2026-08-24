@@ -36,6 +36,23 @@ TEST(runtime_profile_test, ProfileSummaryAccumulatesNodeTiming) {
     EXPECT_DOUBLE_EQ(summaries[0].max_ms, 2.5);
 }
 
+TEST(runtime_profile_test, ReenablingProfilingStartsAFreshNodeIndex) {
+    RuntimeGraph graph;
+    graph.SetProfilingEnabled(true);
+    graph.RecordNodeProfile("old_node", "Add", 1.0);
+
+    graph.SetProfilingEnabled(false);
+    graph.SetProfilingEnabled(true);
+    graph.RecordNodeProfile("new_node", "Mul", 2.0);
+
+    const auto summaries = graph.ProfileSummaries();
+    ASSERT_EQ(summaries.size(), 1u);
+    EXPECT_EQ(summaries[0].node_name, "new_node");
+    EXPECT_EQ(summaries[0].op_type, "Mul");
+    EXPECT_EQ(summaries[0].call_count, 1);
+    EXPECT_DOUBLE_EQ(summaries[0].total_ms, 2.0);
+}
+
 TEST(runtime_profile_test, ProfileSummaryIsSafeForParallelNodeRecording) {
     RuntimeGraph graph;
     graph.SetProfilingEnabled(true);

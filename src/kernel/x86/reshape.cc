@@ -18,8 +18,12 @@ int32_t ComputeReshapeFallback(feather::operators::ReshapeParam* param) {
         return -1;
     }
 
-    const size_t bytes = static_cast<size_t>(param->input->numel()) * DataTypeBytes(dtype);
     param->out->set_data_type(dtype);
+    if (param->input->IsInitialized() && param->out->IsInitialized() &&
+        param->input->raw_data() == param->out->raw_data()) {
+        return 0;
+    }
+    const size_t bytes = static_cast<size_t>(param->input->numel()) * DataTypeBytes(dtype);
     std::memcpy(param->out->raw_data(), param->input->raw_data(), bytes);
     return 0;
 }
@@ -60,6 +64,10 @@ int32_t ComputeReshapeRaw(feather::operators::ReshapeParam* param, DataType dtyp
     }
 
     param->out->set_data_type(dtype);
+    if (param->input->IsInitialized() && param->out->IsInitialized() &&
+        param->input->raw_data() == param->out->raw_data()) {
+        return 0;
+    }
     const int64_t numel = param->input->numel();
     CopyRawBlock(param->input->data<T>(), param->out->mutable_data<T>(), numel);
     return 0;

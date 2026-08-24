@@ -56,6 +56,24 @@ void MatMulOp::SyncIO() {
     SetOutputs({param_.out});
 }
 
+bool MatMulOp::ShapeCacheMatches() const {
+    if (!shape_cache_valid_ || CheckShape() != 0 || param_.a->dims().data() != cached_a_dims_ ||
+        param_.b->dims().data() != cached_b_dims_ || param_.out->dims().data() != cached_output_dims_ ||
+        !param_.out->IsInitialized()) {
+        return false;
+    }
+    const auto dtype = ResolveExecutionDataType({param_.a, param_.b, param_.out}, DataType::FP32);
+    const auto required_bytes = static_cast<size_t>(param_.out->numel()) * DataTypeBytes(dtype);
+    return param_.out->memory_size() >= required_bytes;
+}
+
+void MatMulOp::UpdateShapeCache() {
+    cached_a_dims_ = param_.a->dims().data();
+    cached_b_dims_ = param_.b->dims().data();
+    cached_output_dims_ = param_.out->dims().data();
+    shape_cache_valid_ = true;
+}
+
 int32_t MatMulOp::CheckShape() const {
     if (param_.a == nullptr || param_.b == nullptr || param_.out == nullptr) {
         return -1;
@@ -67,6 +85,8 @@ int32_t MatMulOp::CheckShape() const {
 }
 
 int32_t MatMulOp::InferOutputShapes() {
+    ++shape_inference_count_;
+    shape_cache_valid_ = false;
     if (CheckShape() != 0) {
         return -1;
     }
@@ -103,6 +123,7 @@ int32_t MatMulOp::InferOutputShapes() {
         param_.out->Resize(out_shape);
     }
     SyncIO();
+    UpdateShapeCache();
     return 0;
 }
 
@@ -114,7 +135,7 @@ void MatMulOp::AttachKernel(std::unique_ptr<KernelBase> kernel) {
 }
 
 int32_t MatMulOp::Run() {
-    if (InferOutputShapes() != 0 || kernel_ == nullptr) {
+    if ((!ShapeCacheMatches() && InferOutputShapes() != 0) || kernel_ == nullptr) {
         return -1;
     }
     return kernel_->compute();

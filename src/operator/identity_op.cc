@@ -70,6 +70,17 @@ int32_t IdentityOp::InferOutputShapes() {
         return -1;
     }
 
+    // Identity has view semantics on host backends. CUDA keeps separate host
+    // Tensor storage but shares the device allocation in its view kernel.
+    if (ActiveKernelDevice() != DeviceType::CUDA) {
+        param_.out->ShareDataWith(*param_.input);
+        param_.out->Resize(param_.input->dims().data());
+        param_.out->set_data_type(param_.input->data_type());
+        param_.out->set_layout(param_.input->layout());
+        SyncIO();
+        return 0;
+    }
+
     const auto& out_shape = param_.input->dims().data();
     const size_t required_bytes =
         static_cast<size_t>(param_.input->numel()) *

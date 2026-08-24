@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "core/operator.h"
 #include "src/kernel/gemm.h"
@@ -28,12 +29,22 @@ class GemmOp : public OpBase {
     std::unique_ptr<KernelBase> DetachKernel() override { return std::move(kernel_); }
     bool HasKernel() const override { return kernel_ != nullptr; }
     int32_t Run() override;
+    int shape_inference_count() const { return shape_inference_count_; }
 
    private:
     void SyncIO();
+    bool ShapeCacheMatches() const;
+    void UpdateShapeCache();
 
     GemmParam param_;
     std::unique_ptr<KernelBase> kernel_;
+    int shape_inference_count_{0};
+    bool shape_cache_valid_{false};
+    std::vector<int64_t> cached_a_dims_;
+    std::vector<int64_t> cached_b_dims_;
+    std::vector<int64_t> cached_bias_dims_;
+    std::vector<int64_t> cached_output_dims_;
+    bool cached_bias_initialized_{false};
 };
 
 }  // namespace operators

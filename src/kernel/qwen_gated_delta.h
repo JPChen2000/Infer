@@ -9,6 +9,9 @@ namespace kernel {
 
 void EnsureCommonQwenGatedDeltaKernelsRegistered();
 void EnsureX86QwenGatedDeltaKernelsRegistered();
+#ifdef FEATHER_WITH_CUDA
+void EnsureCudaQwenGatedDeltaKernelsRegistered();
+#endif
 void EnsureQwenGatedDeltaKernelsRegistered();
 
 template <DeviceType dev, DataType dtype>
@@ -19,6 +22,12 @@ class QwenGatedDeltaStateKernel : public KernelBase {
 
 template <DeviceType dev, DataType dtype>
 class QwenGatedDeltaOutputKernel : public KernelBase {
+   public:
+    int32_t compute() override;
+};
+
+template <DeviceType dev, DataType dtype>
+class QwenGatedDeltaKernel : public KernelBase {
    public:
     int32_t compute() override;
 };

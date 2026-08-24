@@ -45,6 +45,8 @@
 #include "src/kernel/expand.h"
 #include "src/kernel/where.h"
 #include "src/kernel/qwen_gated_delta.h"
+#include "src/kernel/qwen_gemm_argmax.h"
+#include "src/kernel/qwen_depthwise_conv.h"
 #include "src/kernel/qwen_rms_norm.h"
 #include "src/kernel/yolo_decode.h"
 
@@ -101,6 +103,8 @@ void EnsureBuiltinKernelsRegistered() {
     EnsureExpandKernelsRegistered();
     EnsureWhereKernelsRegistered();
     EnsureQwenGatedDeltaKernelsRegistered();
+    EnsureQwenGemmArgmaxKernelsRegistered();
+    EnsureQwenDepthwiseConvStateKernelsRegistered();
     EnsureQwenRmsNormKernelsRegistered();
     EnsureYoloDecodeKernelsRegistered();
 #ifdef FEATHER_WITH_CUDA

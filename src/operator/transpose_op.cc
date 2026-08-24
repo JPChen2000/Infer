@@ -36,6 +36,31 @@ bool IsValidPermutation(const std::vector<int64_t>& perm, size_t rank) {
     return true;
 }
 
+bool IsContiguousViewPermutation(const std::vector<int64_t>& input_dims, const std::vector<int64_t>& perm) {
+    if (!IsValidPermutation(perm, input_dims.size())) {
+        return false;
+    }
+
+    // Moving singleton axes does not change the order of any stored element.
+    // Keep the non-singleton axes in their original order and this transpose is
+    // a metadata-only contiguous view.
+    size_t next_non_singleton_axis = 0;
+    for (const int64_t source_axis : perm) {
+        const size_t axis = static_cast<size_t>(source_axis);
+        if (input_dims[axis] == 1) {
+            continue;
+        }
+        while (next_non_singleton_axis < input_dims.size() && input_dims[next_non_singleton_axis] == 1) {
+            ++next_non_singleton_axis;
+        }
+        if (next_non_singleton_axis == input_dims.size() || axis != next_non_singleton_axis) {
+            return false;
+        }
+        ++next_non_singleton_axis;
+    }
+    return true;
+}
+
 std::unique_ptr<KernelBase> CreateTransposeKernel() {
     kernel::EnsureTransposeKernelsRegistered();
     return CreateHostKernelForTensor("Transpose", {});
@@ -105,6 +130,17 @@ int32_t TransposeOp::InferOutputShapes() {
     for (size_t i = 0; i < param_.perm.size(); ++i) {
         out_shape[i] = param_.input->dims()[param_.perm[i]];
     }
+
+    if (ActiveKernelDevice() != DeviceType::CUDA &&
+        IsContiguousViewPermutation(param_.input->dims().data(), param_.perm)) {
+        param_.out->ShareDataWith(*param_.input);
+        param_.out->Resize(out_shape);
+        param_.out->set_data_type(param_.input->data_type());
+        param_.out->set_layout(param_.input->layout());
+        SyncIO();
+        return 0;
+    }
+
     const size_t required_bytes =
         static_cast<size_t>(param_.input->numel()) *
         DataTypeBytes(ResolveExecutionDataType({param_.input, param_.out}, DataType::FP32));
@@ -127,6 +163,10 @@ void TransposeOp::AttachKernel(std::unique_ptr<KernelBase> kernel) {
 int32_t TransposeOp::Run() {
     if (InferOutputShapes() != 0 || kernel_ == nullptr) {
         return -1;
+    }
+    if (IsContiguousViewPermutation(param_.input->dims().data(), param_.perm) && param_.input->IsInitialized() &&
+        param_.out->IsInitialized() && param_.input->raw_data() == param_.out->raw_data()) {
+        return 0;
     }
     return kernel_->compute();
 }
