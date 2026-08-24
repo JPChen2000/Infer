@@ -28,6 +28,7 @@ int32_t SynchronizeRuntimeNodeForProfiling(const RuntimeNode& node) {
     return 0;
 }
 
+#ifdef FEATHER_WITH_CUDA
 size_t TensorByteSizeForNode(const Tensor& tensor, const RuntimeNode& node) {
     auto dtype = tensor.data_type();
     if (dtype == DataType::UNKNOWN && node.kernel != nullptr) {
@@ -39,6 +40,7 @@ size_t TensorByteSizeForNode(const Tensor& tensor, const RuntimeNode& node) {
     }
     return static_cast<size_t>(std::max<int64_t>(0, tensor.numel())) * element_bytes;
 }
+#endif
 
 }  // namespace
 
