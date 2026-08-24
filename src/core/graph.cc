@@ -134,6 +134,8 @@ void RuntimeGraph::Clear() {
     nodes_.clear();
     tensors_.clear();
     node_index_by_name_.clear();
+    value_id_by_name_.clear();
+    value_name_by_id_.clear();
     remaining_uses_.clear();
     output_names_.clear();
     output_tensor_ptrs_.clear();
@@ -170,8 +172,36 @@ int32_t RuntimeGraph::Run() {
 }
 
 void RuntimeGraph::AddNode(RuntimeNode node) {
+    if (node.input_ids.empty()) {
+        node.input_ids.reserve(node.inputs.size());
+        for (const auto& name : node.inputs) {
+            node.input_ids.push_back(GetOrCreateValueId(name));
+        }
+    }
+    if (node.output_ids.empty()) {
+        node.output_ids.reserve(node.outputs.size());
+        for (const auto& name : node.outputs) {
+            node.output_ids.push_back(GetOrCreateValueId(name));
+        }
+    }
     node_index_by_name_[node.name] = nodes_.size();
     nodes_.push_back(std::move(node));
+}
+
+ValueId RuntimeGraph::GetOrCreateValueId(const std::string& name) {
+    auto it = value_id_by_name_.find(name);
+    if (it != value_id_by_name_.end()) {
+        return it->second;
+    }
+    const auto id = static_cast<ValueId>(value_name_by_id_.size());
+    value_id_by_name_.emplace(name, id);
+    value_name_by_id_.push_back(name);
+    return id;
+}
+
+ValueId RuntimeGraph::GetValueId(const std::string& name) const {
+    auto it = value_id_by_name_.find(name);
+    return it == value_id_by_name_.end() ? kInvalidValueId : it->second;
 }
 
 int32_t RuntimeGraph::Finalize() {
@@ -222,16 +252,16 @@ int32_t RuntimeGraph::BuildDependencies() {
         node.pending_dependencies = 0;
     }
 
-    std::unordered_map<std::string, size_t> producer_by_value;
+    std::unordered_map<ValueId, size_t> producer_by_value;
     for (size_t i = 0; i < nodes_.size(); ++i) {
-        for (const auto& output_name : nodes_[i].outputs) {
-            producer_by_value[output_name] = i;
+        for (const auto value_id : nodes_[i].output_ids) {
+            producer_by_value[value_id] = i;
         }
     }
 
     for (size_t i = 0; i < nodes_.size(); ++i) {
-        for (const auto& input_name : nodes_[i].inputs) {
-            auto producer_it = producer_by_value.find(input_name);
+        for (const auto value_id : nodes_[i].input_ids) {
+            auto producer_it = producer_by_value.find(value_id);
             if (producer_it == producer_by_value.end()) {
                 continue;
             }

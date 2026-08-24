@@ -15,6 +15,9 @@
 
 namespace feather {
 
+using ValueId = uint32_t;
+constexpr ValueId kInvalidValueId = static_cast<ValueId>(-1);
+
 struct RuntimeProfileSummary {
     std::string node_name;
     std::string op_type;
@@ -35,6 +38,8 @@ struct RuntimeNode {
     std::string op_type;
     std::vector<std::string> inputs;
     std::vector<std::string> outputs;
+    std::vector<ValueId> input_ids;
+    std::vector<ValueId> output_ids;
     std::shared_ptr<OpBase> owner;
     std::unique_ptr<KernelBase> kernel;
     DeviceType kernel_device{DeviceType::UNKNOWN};
@@ -68,6 +73,8 @@ class RuntimeGraph {
 
     void Clear();
     void AddNode(RuntimeNode node);
+    ValueId GetOrCreateValueId(const std::string& name);
+    ValueId GetValueId(const std::string& name) const;
     int32_t Finalize();
     size_t NodeSize() const;
     size_t WorkerCount() const;
@@ -87,6 +94,8 @@ class RuntimeGraph {
     std::unordered_map<std::string, std::shared_ptr<Tensor>> tensors_;
     std::vector<RuntimeNode> nodes_;
     std::unordered_map<std::string, size_t> node_index_by_name_;
+    std::unordered_map<std::string, ValueId> value_id_by_name_;
+    std::vector<std::string> value_name_by_id_;
     std::unordered_map<std::string, size_t> remaining_uses_;
     std::unordered_set<std::string> output_names_;
     std::unordered_set<const Tensor*> output_tensor_ptrs_;
