@@ -96,7 +96,7 @@ class RuntimeGraph {
     std::unordered_map<std::string, size_t> node_index_by_name_;
     std::unordered_map<std::string, ValueId> value_id_by_name_;
     std::vector<std::string> value_name_by_id_;
-    std::unordered_map<std::string, size_t> remaining_uses_;
+    std::unordered_map<ValueId, size_t> remaining_uses_;
     std::unordered_set<std::string> output_names_;
     std::unordered_set<const Tensor*> output_tensor_ptrs_;
     size_t worker_count_{1};

@@ -290,8 +290,8 @@ void RuntimeGraph::ResetPendingDependencies() {
 void RuntimeGraph::ResetRemainingUses() {
     remaining_uses_.clear();
     for (const auto& node : nodes_) {
-        for (const auto& input_name : node.inputs) {
-            ++remaining_uses_[input_name];
+        for (const auto value_id : node.input_ids) {
+            ++remaining_uses_[value_id];
         }
     }
 }
@@ -328,8 +328,8 @@ void RuntimeGraph::RefreshOutputTensorPointers() {
 
 void RuntimeGraph::ReleaseUnusedInputs(const RuntimeNode& node) {
 #ifdef FEATHER_WITH_CUDA
-    for (const auto& input_name : node.inputs) {
-        auto it = remaining_uses_.find(input_name);
+    for (const auto value_id : node.input_ids) {
+        auto it = remaining_uses_.find(value_id);
         if (it == remaining_uses_.end()) {
             continue;
         }
@@ -340,8 +340,12 @@ void RuntimeGraph::ReleaseUnusedInputs(const RuntimeNode& node) {
         if (it->second != 0) {
             continue;
         }
-        auto tensor = GetTensor(input_name);
-        if (ShouldKeepTensorDevice(input_name, tensor)) {
+        if (value_id >= value_name_by_id_.size()) {
+            continue;
+        }
+        const auto& value_name = value_name_by_id_[value_id];
+        auto tensor = GetTensor(value_name);
+        if (ShouldKeepTensorDevice(value_name, tensor)) {
             continue;
         }
         if (tensor != nullptr) {
