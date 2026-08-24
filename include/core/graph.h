@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "core/operator.h"
+#include "core/status.h"
 #include "util/thread_pool_nv.h"
 
 namespace feather {
@@ -50,6 +51,7 @@ class RuntimeGraph {
     RuntimeGraph();
 
     int32_t Check() const;
+    Status CheckStatus() const;
     int32_t Run();
     int32_t SetTensor(const std::string& name, std::shared_ptr<Tensor> tensor);
     std::shared_ptr<Tensor> GetTensor(const std::string& name) const;

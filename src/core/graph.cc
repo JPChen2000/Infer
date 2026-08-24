@@ -145,12 +145,16 @@ void RuntimeGraph::Clear() {
 }
 
 int32_t RuntimeGraph::Check() const {
+    return CheckStatus().ok() ? 0 : -1;
+}
+
+Status RuntimeGraph::CheckStatus() const {
     for (const auto& node : nodes_) {
         if (node.owner == nullptr || node.kernel == nullptr) {
-            return -1;
+            return Status::Error(StatusCode::kBuildFailed, "runtime node has no kernel: " + node.name);
         }
     }
-    return 0;
+    return Status::Ok();
 }
 
 int32_t RuntimeGraph::Run() {
