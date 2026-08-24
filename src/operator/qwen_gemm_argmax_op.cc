@@ -8,7 +8,7 @@ namespace feather {
 namespace operators {
 namespace {
 
-std::shared_ptr<OpBase> BuildQwenGemmArgmaxOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildQwenGemmArgmaxOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 2 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -24,7 +24,7 @@ std::shared_ptr<OpBase> BuildQwenGemmArgmaxOp(const model::NodeDesc& node, Opera
         return nullptr;
     }
     kernel::EnsureQwenGemmArgmaxKernelsRegistered();
-    auto kernel = CreateHostKernelForTensor("QwenGemmArgmax", {param.a, param.b, param.out}, DataType::BF16);
+    auto kernel = CreateKernelForTensor(context.device, "QwenGemmArgmax", {param.a, param.b, param.out}, DataType::BF16);
     if (kernel == nullptr) {
         return nullptr;
     }

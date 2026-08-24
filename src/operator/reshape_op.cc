@@ -23,9 +23,9 @@ std::vector<int64_t> GetShapeAttribute(const std::unordered_map<std::string, mod
     return {};
 }
 
-std::unique_ptr<KernelBase> CreateReshapeKernel() {
+std::unique_ptr<KernelBase> CreateReshapeKernel(const OperatorRegistry::BuildContext& context) {
     kernel::EnsureReshapeKernelsRegistered();
-    return CreateHostKernelForTensor("Reshape", {});
+    return CreateKernelForTensor(context.device, "Reshape", {});
 }
 
 bool ResolveTargetShape(const std::shared_ptr<Tensor>& input, const std::shared_ptr<Tensor>& shape_tensor,
@@ -88,7 +88,7 @@ bool ResolveTargetShape(const std::shared_ptr<Tensor>& input, const std::shared_
     return target_numel == input->numel();
 }
 
-std::shared_ptr<OpBase> BuildReshapeOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildReshapeOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if ((node.inputs.size() != 1 && node.inputs.size() != 2) || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -108,7 +108,7 @@ std::shared_ptr<OpBase> BuildReshapeOp(const model::NodeDesc& node, OperatorRegi
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) {
         return nullptr;
     }
-    auto kernel = CreateHostKernelForTensor("Reshape", {param.input, param.out});
+    auto kernel = CreateKernelForTensor(context.device, "Reshape", {param.input, param.out});
     if (kernel == nullptr) {
         return nullptr;
     }

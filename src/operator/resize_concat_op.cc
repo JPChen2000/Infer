@@ -36,7 +36,7 @@ std::vector<float> GetFloatVectorAttribute(const std::unordered_map<std::string,
     return {};
 }
 
-std::shared_ptr<OpBase> BuildResizeConcatOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildResizeConcatOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 2 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -57,7 +57,7 @@ std::shared_ptr<OpBase> BuildResizeConcatOp(const model::NodeDesc& node, Operato
         return nullptr;
     }
     auto kernel =
-        CreateHostKernelForTensor("ResizeConcat", {param.resize_input, param.concat_input, param.out});
+        CreateKernelForTensor(context.device, "ResizeConcat", {param.resize_input, param.concat_input, param.out});
     if (kernel == nullptr) {
         return nullptr;
     }

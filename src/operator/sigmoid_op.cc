@@ -10,12 +10,12 @@ namespace operators {
 
 namespace {
 
-std::unique_ptr<KernelBase> CreateSigmoidKernel() {
+std::unique_ptr<KernelBase> CreateSigmoidKernel(const OperatorRegistry::BuildContext& context) {
     kernel::EnsureSigmoidKernelsRegistered();
-    return CreateHostKernelForTensor("Sigmoid", {});
+    return CreateKernelForTensor(context.device, "Sigmoid", {});
 }
 
-std::shared_ptr<OpBase> BuildSigmoidOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildSigmoidOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 1 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -31,7 +31,7 @@ std::shared_ptr<OpBase> BuildSigmoidOp(const model::NodeDesc& node, OperatorRegi
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) {
         return nullptr;
     }
-    auto kernel = CreateHostKernelForTensor("Sigmoid", {param.input, param.out});
+    auto kernel = CreateKernelForTensor(context.device, "Sigmoid", {param.input, param.out});
     if (kernel == nullptr) {
         return nullptr;
     }

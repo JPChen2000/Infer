@@ -8,7 +8,7 @@ namespace operators {
 
 namespace {
 
-std::shared_ptr<OpBase> BuildWhereOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildWhereOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 3 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -24,7 +24,7 @@ std::shared_ptr<OpBase> BuildWhereOp(const model::NodeDesc& node, OperatorRegist
         return nullptr;
     }
     kernel::EnsureWhereKernelsRegistered();
-    auto kernel = CreateHostKernelForTensor("Where", {param.x}, DataType::FP32);
+    auto kernel = CreateKernelForTensor(context.device, "Where", {param.x}, DataType::FP32);
     if (kernel == nullptr) {
         return nullptr;
     }

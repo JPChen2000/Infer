@@ -61,12 +61,12 @@ bool IsContiguousViewPermutation(const std::vector<int64_t>& input_dims, const s
     return true;
 }
 
-std::unique_ptr<KernelBase> CreateTransposeKernel() {
+std::unique_ptr<KernelBase> CreateTransposeKernel(const OperatorRegistry::BuildContext& context) {
     kernel::EnsureTransposeKernelsRegistered();
-    return CreateHostKernelForTensor("Transpose", {});
+    return CreateKernelForTensor(context.device, "Transpose", {});
 }
 
-std::shared_ptr<OpBase> BuildTransposeOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildTransposeOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 1 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -80,7 +80,7 @@ std::shared_ptr<OpBase> BuildTransposeOp(const model::NodeDesc& node, OperatorRe
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) {
         return nullptr;
     }
-    auto kernel = CreateHostKernelForTensor("Transpose", {param.input, param.out});
+    auto kernel = CreateKernelForTensor(context.device, "Transpose", {param.input, param.out});
     if (kernel == nullptr) {
         return nullptr;
     }

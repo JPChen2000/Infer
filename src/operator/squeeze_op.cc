@@ -8,7 +8,7 @@ namespace operators {
 
 namespace {
 
-std::shared_ptr<OpBase> BuildSqueezeOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildSqueezeOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if ((node.inputs.size() != 1 && node.inputs.size() != 2) || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -30,7 +30,7 @@ std::shared_ptr<OpBase> BuildSqueezeOp(const model::NodeDesc& node, OperatorRegi
         return nullptr;
     }
     kernel::EnsureSqueezeKernelsRegistered();
-    auto kernel = CreateHostKernelForTensor("Squeeze", {param.input, param.out}, DataType::FP32);
+    auto kernel = CreateKernelForTensor(context.device, "Squeeze", {param.input, param.out}, DataType::FP32);
     if (kernel == nullptr) {
         return nullptr;
     }

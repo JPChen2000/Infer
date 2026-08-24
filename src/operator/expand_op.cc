@@ -27,7 +27,7 @@ bool InferExpandedShape(const std::vector<int64_t>& input_shape, const std::vect
     return true;
 }
 
-std::shared_ptr<OpBase> BuildExpandOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildExpandOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 2 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -42,7 +42,7 @@ std::shared_ptr<OpBase> BuildExpandOp(const model::NodeDesc& node, OperatorRegis
         return nullptr;
     }
     kernel::EnsureExpandKernelsRegistered();
-    auto kernel = CreateHostKernelForTensor("Expand", {param.input}, DataType::FP32);
+    auto kernel = CreateKernelForTensor(context.device, "Expand", {param.input}, DataType::FP32);
     if (kernel == nullptr) {
         return nullptr;
     }

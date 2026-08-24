@@ -52,7 +52,7 @@ bool ResizeOutput(std::shared_ptr<Tensor>* output, const std::vector<int64_t>& s
 }
 
 std::shared_ptr<OpBase> BuildQwenDepthwiseConvStateOp(const model::NodeDesc& node,
-                                                       OperatorRegistry::TensorMap& tensors) {
+                                                       OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 3 || node.outputs.size() != 3) {
         return nullptr;
     }
@@ -70,7 +70,7 @@ std::shared_ptr<OpBase> BuildQwenDepthwiseConvStateOp(const model::NodeDesc& nod
         return nullptr;
     }
     kernel::EnsureQwenDepthwiseConvStateKernelsRegistered();
-    auto kernel = CreateHostKernelForTensor("QwenDepthwiseConvState",
+    auto kernel = CreateKernelForTensor(context.device, "QwenDepthwiseConvState",
                                             {param.state, param.mixed, param.weight, param.conv_out}, DataType::BF16);
     if (kernel == nullptr) {
         return nullptr;

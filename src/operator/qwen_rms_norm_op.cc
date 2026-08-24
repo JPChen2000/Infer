@@ -28,7 +28,7 @@ float ReadWeightOffset(const model::NodeDesc& node) {
     return 0.0f;
 }
 
-std::shared_ptr<OpBase> BuildQwenRmsNormOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildQwenRmsNormOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 3 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -43,7 +43,7 @@ std::shared_ptr<OpBase> BuildQwenRmsNormOp(const model::NodeDesc& node, Operator
         return nullptr;
     }
     kernel::EnsureQwenRmsNormKernelsRegistered();
-    auto kernel = CreateHostKernelForTensor("QwenRmsNorm", {param.input, param.out}, DataType::FP32);
+    auto kernel = CreateKernelForTensor(context.device, "QwenRmsNorm", {param.input, param.out}, DataType::FP32);
     if (kernel == nullptr) {
         return nullptr;
     }

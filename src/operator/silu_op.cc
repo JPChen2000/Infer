@@ -10,7 +10,7 @@ namespace operators {
 
 namespace {
 
-std::shared_ptr<OpBase> BuildSiluOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildSiluOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 1 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -26,7 +26,7 @@ std::shared_ptr<OpBase> BuildSiluOp(const model::NodeDesc& node, OperatorRegistr
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) {
         return nullptr;
     }
-    auto kernel = CreateHostKernelForTensor("SiLU", {param.input, param.out});
+    auto kernel = CreateKernelForTensor(context.device, "SiLU", {param.input, param.out});
     if (kernel == nullptr) {
         return nullptr;
     }

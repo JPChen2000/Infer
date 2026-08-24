@@ -23,12 +23,12 @@ int32_t GetIntAttribute(const std::unordered_map<std::string, model::AttributeVa
     return default_value;
 }
 
-std::unique_ptr<KernelBase> CreateSoftmaxKernel() {
+std::unique_ptr<KernelBase> CreateSoftmaxKernel(const OperatorRegistry::BuildContext& context) {
     kernel::EnsureSoftmaxKernelsRegistered();
-    return CreateHostKernelForTensor("Softmax", {}, DataType::FP32);
+    return CreateKernelForTensor(context.device, "Softmax", {}, DataType::FP32);
 }
 
-std::shared_ptr<OpBase> BuildSoftmaxOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildSoftmaxOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 1 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -42,7 +42,7 @@ std::shared_ptr<OpBase> BuildSoftmaxOp(const model::NodeDesc& node, OperatorRegi
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) {
         return nullptr;
     }
-    auto kernel = CreateHostKernelForTensor("Softmax", {param.input, param.out}, DataType::FP32);
+    auto kernel = CreateKernelForTensor(context.device, "Softmax", {param.input, param.out}, DataType::FP32);
     if (kernel == nullptr) {
         return nullptr;
     }

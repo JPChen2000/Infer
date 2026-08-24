@@ -11,12 +11,12 @@ namespace operators {
 
 namespace {
 
-std::unique_ptr<KernelBase> CreateGlobalAveragePoolKernel() {
+std::unique_ptr<KernelBase> CreateGlobalAveragePoolKernel(const OperatorRegistry::BuildContext& context) {
     kernel::EnsureGlobalAveragePoolKernelsRegistered();
-    return CreateHostKernelForTensor("GlobalAveragePool", {}, DataType::FP32);
+    return CreateKernelForTensor(context.device, "GlobalAveragePool", {}, DataType::FP32);
 }
 
-std::shared_ptr<OpBase> BuildGlobalAveragePoolOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildGlobalAveragePoolOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 1 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -32,7 +32,7 @@ std::shared_ptr<OpBase> BuildGlobalAveragePoolOp(const model::NodeDesc& node, Op
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) {
         return nullptr;
     }
-    auto kernel = CreateHostKernelForTensor("GlobalAveragePool", {param.input, param.out});
+    auto kernel = CreateKernelForTensor(context.device, "GlobalAveragePool", {param.input, param.out});
     if (kernel == nullptr) {
         return nullptr;
     }

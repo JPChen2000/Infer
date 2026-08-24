@@ -10,12 +10,12 @@ namespace operators {
 
 namespace {
 
-std::unique_ptr<KernelBase> CreateReluKernel() {
+std::unique_ptr<KernelBase> CreateReluKernel(const OperatorRegistry::BuildContext& context) {
     kernel::EnsureReluKernelsRegistered();
-    return CreateHostKernelForTensor("ReLU", {});
+    return CreateKernelForTensor(context.device, "ReLU", {});
 }
 
-std::shared_ptr<OpBase> BuildReluOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildReluOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 1 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -31,7 +31,7 @@ std::shared_ptr<OpBase> BuildReluOp(const model::NodeDesc& node, OperatorRegistr
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) {
         return nullptr;
     }
-    auto kernel = CreateHostKernelForTensor("ReLU", {param.input, param.out});
+    auto kernel = CreateKernelForTensor(context.device, "ReLU", {param.input, param.out});
     if (kernel == nullptr) {
         return nullptr;
     }

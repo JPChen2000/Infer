@@ -83,12 +83,12 @@ std::vector<int64_t> InferSplitOutputShape(const SplitParam& param, size_t outpu
     return out_shape;
 }
 
-std::unique_ptr<KernelBase> CreateSplitKernel() {
+std::unique_ptr<KernelBase> CreateSplitKernel(const OperatorRegistry::BuildContext& context) {
     kernel::EnsureSplitKernelsRegistered();
-    return CreateHostKernelForTensor("Split", {});
+    return CreateKernelForTensor(context.device, "Split", {});
 }
 
-std::shared_ptr<OpBase> BuildSplitOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildSplitOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if ((node.inputs.size() != 1 && node.inputs.size() != 2) || node.outputs.size() < 2) {
         return nullptr;
     }
@@ -108,7 +108,7 @@ std::shared_ptr<OpBase> BuildSplitOp(const model::NodeDesc& node, OperatorRegist
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) {
         return nullptr;
     }
-    auto kernel = CreateHostKernelForTensor("Split", {param.input});
+    auto kernel = CreateKernelForTensor(context.device, "Split", {param.input});
     if (kernel == nullptr) {
         return nullptr;
     }

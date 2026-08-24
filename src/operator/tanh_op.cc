@@ -10,7 +10,7 @@ namespace operators {
 
 namespace {
 
-std::shared_ptr<OpBase> BuildTanhOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildTanhOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 1 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -23,7 +23,7 @@ std::shared_ptr<OpBase> BuildTanhOp(const model::NodeDesc& node, OperatorRegistr
         return nullptr;
     }
     kernel::EnsureTanhKernelsRegistered();
-    auto kernel = CreateHostKernelForTensor("Tanh", {param.input, op->outputs().front()}, DataType::FP32);
+    auto kernel = CreateKernelForTensor(context.device, "Tanh", {param.input, op->outputs().front()}, DataType::FP32);
     if (kernel == nullptr) {
         return nullptr;
     }

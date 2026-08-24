@@ -26,7 +26,7 @@ std::vector<float> GetFloatVectorAttribute(const std::unordered_map<std::string,
     return {};
 }
 
-std::shared_ptr<OpBase> BuildResizeOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildResizeOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.empty() || node.inputs.size() > 4 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -57,7 +57,7 @@ std::shared_ptr<OpBase> BuildResizeOp(const model::NodeDesc& node, OperatorRegis
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) {
         return nullptr;
     }
-    auto kernel = CreateHostKernelForTensor("Resize", {param.input, param.out});
+    auto kernel = CreateKernelForTensor(context.device, "Resize", {param.input, param.out});
     if (kernel == nullptr) {
         return nullptr;
     }

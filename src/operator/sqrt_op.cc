@@ -10,7 +10,7 @@ namespace operators {
 
 namespace {
 
-std::shared_ptr<OpBase> BuildSqrtOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildSqrtOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 1 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -23,7 +23,7 @@ std::shared_ptr<OpBase> BuildSqrtOp(const model::NodeDesc& node, OperatorRegistr
         return nullptr;
     }
     kernel::EnsureSqrtKernelsRegistered();
-    auto kernel = CreateHostKernelForTensor("Sqrt", {param.input, op->outputs().front()}, DataType::FP32);
+    auto kernel = CreateKernelForTensor(context.device, "Sqrt", {param.input, op->outputs().front()}, DataType::FP32);
     if (kernel == nullptr) {
         return nullptr;
     }

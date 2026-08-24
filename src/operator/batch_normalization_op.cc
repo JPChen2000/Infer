@@ -36,12 +36,12 @@ float GetFloatAttribute(const std::unordered_map<std::string, model::AttributeVa
     return default_value;
 }
 
-std::unique_ptr<KernelBase> CreateBatchNormalizationKernel() {
+std::unique_ptr<KernelBase> CreateBatchNormalizationKernel(const OperatorRegistry::BuildContext& context) {
     kernel::EnsureBatchNormalizationKernelsRegistered();
-    return CreateHostKernelForTensor("BatchNormalization", {}, DataType::FP32);
+    return CreateKernelForTensor(context.device, "BatchNormalization", {}, DataType::FP32);
 }
 
-std::shared_ptr<OpBase> BuildBatchNormalizationOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildBatchNormalizationOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 5 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -63,7 +63,7 @@ std::shared_ptr<OpBase> BuildBatchNormalizationOp(const model::NodeDesc& node, O
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) {
         return nullptr;
     }
-    auto kernel = CreateHostKernelForTensor("BatchNormalization", {param.input, param.scale, param.bias, param.mean, param.var, param.out});
+    auto kernel = CreateKernelForTensor(context.device, "BatchNormalization", {param.input, param.scale, param.bias, param.mean, param.var, param.out});
     if (kernel == nullptr) {
         return nullptr;
     }

@@ -12,12 +12,12 @@ namespace operators {
 
 namespace {
 
-std::unique_ptr<KernelBase> CreateFcKernel() {
+std::unique_ptr<KernelBase> CreateFcKernel(const OperatorRegistry::BuildContext& context) {
     kernel::EnsureFcKernelsRegistered();
-    return CreateHostKernelForTensor("FC", {}, DataType::FP32);
+    return CreateKernelForTensor(context.device, "FC", {}, DataType::FP32);
 }
 
-std::shared_ptr<OpBase> BuildFcOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildFcOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() < 2 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -35,7 +35,7 @@ std::shared_ptr<OpBase> BuildFcOp(const model::NodeDesc& node, OperatorRegistry:
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) {
         return nullptr;
     }
-    auto kernel = CreateHostKernelForTensor("FC", {param.input, param.w, param.bias, param.out}, DataType::FP32);
+    auto kernel = CreateKernelForTensor(context.device, "FC", {param.input, param.w, param.bias, param.out}, DataType::FP32);
     if (kernel == nullptr) {
         return nullptr;
     }

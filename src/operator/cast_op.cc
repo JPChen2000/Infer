@@ -42,7 +42,7 @@ bool ResolveCastDataType(int64_t onnx_type, DataType* data_type) {
     }
 }
 
-std::shared_ptr<OpBase> BuildCastOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildCastOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 1 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -64,11 +64,11 @@ std::shared_ptr<OpBase> BuildCastOp(const model::NodeDesc& node, OperatorRegistr
     const bool floating_cast = param.input != nullptr && tensor_op_detail::IsFloatingPointDataType(param.input->data_type()) &&
                                tensor_op_detail::IsFloatingPointDataType(param.to);
     const bool cuda_integer_to_float =
-        ActiveKernelDevice() == DeviceType::CUDA && param.input != nullptr &&
+        context.device == DeviceType::CUDA && param.input != nullptr &&
         (param.input->data_type() == DataType::INT32 || param.input->data_type() == DataType::INT64) &&
         tensor_op_detail::IsFloatingPointDataType(param.to);
     if (floating_cast || cuda_integer_to_float) {
-        kernel = CreateHostKernelForTensor("Cast", {param.input}, DataType::FP32);
+        kernel = CreateKernelForTensor(context.device, "Cast", {param.input}, DataType::FP32);
     } else {
         kernel = CreateKernelForTensor(DeviceType::COMMON, "Cast", {}, DataType::FP32);
     }

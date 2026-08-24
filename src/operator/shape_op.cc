@@ -11,7 +11,7 @@ namespace operators {
 
 namespace {
 
-std::shared_ptr<OpBase> BuildShapeOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildShapeOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 1 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -27,7 +27,7 @@ std::shared_ptr<OpBase> BuildShapeOp(const model::NodeDesc& node, OperatorRegist
         return nullptr;
     }
     kernel::EnsureShapeKernelsRegistered();
-    auto kernel = CreateHostKernelForTensor("Shape", {param.out}, DataType::INT64);
+    auto kernel = CreateKernelForTensor(context.device, "Shape", {param.out}, DataType::INT64);
     if (kernel == nullptr) {
         return nullptr;
     }

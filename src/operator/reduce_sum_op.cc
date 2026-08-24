@@ -22,7 +22,7 @@ std::vector<int64_t> ResolveAxes(const ReduceSumParam& param) {
     return axes;
 }
 
-std::shared_ptr<OpBase> BuildReduceSumOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildReduceSumOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 1 || node.outputs.size() != 1) return nullptr;
     ReduceSumParam param{};
     param.input = tensors[node.inputs[0]];
@@ -32,7 +32,7 @@ std::shared_ptr<OpBase> BuildReduceSumOp(const model::NodeDesc& node, OperatorRe
     auto op = std::make_shared<ReduceSumOp>(node.name.empty() ? "reduce_sum" : node.name, param);
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) return nullptr;
     kernel::EnsureReduceSumKernelsRegistered();
-    auto kernel = CreateHostKernelForTensor("ReduceSum", {param.input, op->outputs().front()}, DataType::FP32);
+    auto kernel = CreateKernelForTensor(context.device, "ReduceSum", {param.input, op->outputs().front()}, DataType::FP32);
     if (kernel == nullptr) return nullptr;
     op->AttachKernel(std::move(kernel));
     return op;

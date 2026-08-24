@@ -10,12 +10,12 @@ namespace operators {
 
 namespace {
 
-std::unique_ptr<KernelBase> CreateIdentityKernel() {
+std::unique_ptr<KernelBase> CreateIdentityKernel(const OperatorRegistry::BuildContext& context) {
     kernel::EnsureIdentityKernelsRegistered();
-    return CreateHostKernelForTensor("Identity", {});
+    return CreateKernelForTensor(context.device, "Identity", {});
 }
 
-std::shared_ptr<OpBase> BuildIdentityOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildIdentityOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 1 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -28,7 +28,7 @@ std::shared_ptr<OpBase> BuildIdentityOp(const model::NodeDesc& node, OperatorReg
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) {
         return nullptr;
     }
-    auto kernel = CreateHostKernelForTensor("Identity", {param.input, param.out});
+    auto kernel = CreateKernelForTensor(context.device, "Identity", {param.input, param.out});
     if (kernel == nullptr) {
         return nullptr;
     }

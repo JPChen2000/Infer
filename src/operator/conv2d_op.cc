@@ -30,12 +30,12 @@ int32_t GetIntAttribute(const std::unordered_map<std::string, model::AttributeVa
     return default_value;
 }
 
-std::unique_ptr<KernelBase> CreateConv2DKernel() {
+std::unique_ptr<KernelBase> CreateConv2DKernel(const OperatorRegistry::BuildContext& context) {
     kernel::EnsureConv2DKernelsRegistered();
-    return CreateHostKernelForTensor("Conv2D", {});
+    return CreateKernelForTensor(context.device, "Conv2D", {});
 }
 
-std::shared_ptr<OpBase> BuildConv2DOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildConv2DOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() < 2 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -60,7 +60,7 @@ std::shared_ptr<OpBase> BuildConv2DOp(const model::NodeDesc& node, OperatorRegis
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) {
         return nullptr;
     }
-    auto kernel = CreateHostKernelForTensor("Conv2D", {param.input, param.w, param.bias, param.out});
+    auto kernel = CreateKernelForTensor(context.device, "Conv2D", {param.input, param.w, param.bias, param.out});
     if (kernel == nullptr) {
         return nullptr;
     }

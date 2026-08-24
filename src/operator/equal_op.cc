@@ -8,7 +8,7 @@ namespace operators {
 
 namespace {
 
-std::shared_ptr<OpBase> BuildEqualOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildEqualOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 2 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -23,7 +23,7 @@ std::shared_ptr<OpBase> BuildEqualOp(const model::NodeDesc& node, OperatorRegist
         return nullptr;
     }
     kernel::EnsureEqualKernelsRegistered();
-    auto kernel = CreateHostKernelForTensor("Equal", {param.lhs, param.rhs}, DataType::FP32);
+    auto kernel = CreateKernelForTensor(context.device, "Equal", {param.lhs, param.rhs}, DataType::FP32);
     if (kernel == nullptr) {
         return nullptr;
     }

@@ -49,7 +49,7 @@ bool IsVectorBias(const Tensor* bias, int64_t n) {
     return bias->numel() == n;
 }
 
-std::shared_ptr<OpBase> BuildGemmOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildGemmOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() < 2 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -72,7 +72,7 @@ std::shared_ptr<OpBase> BuildGemmOp(const model::NodeDesc& node, OperatorRegistr
         return nullptr;
     }
     kernel::EnsureGemmKernelsRegistered();
-    auto kernel = CreateHostKernelForTensor("Gemm", {param.a, param.b, param.bias, param.out}, DataType::FP32);
+    auto kernel = CreateKernelForTensor(context.device, "Gemm", {param.a, param.b, param.bias, param.out}, DataType::FP32);
     if (kernel == nullptr) {
         return nullptr;
     }

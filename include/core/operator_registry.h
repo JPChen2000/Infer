@@ -19,12 +19,18 @@ void EnsureBuiltinOperatorsRegistered();
 class OperatorRegistry {
    public:
     using TensorMap = std::unordered_map<std::string, std::shared_ptr<Tensor>>;
-    using Builder = std::function<std::shared_ptr<OpBase>(const model::NodeDesc&, TensorMap&)>;
+    struct BuildContext {
+        DeviceType device{GetHostRuntimeDevice()};
+        DataType data_type{DataType::UNKNOWN};
+        DataLayout layout{DataLayout::ND};
+    };
+    using Builder = std::function<std::shared_ptr<OpBase>(const model::NodeDesc&, TensorMap&, const BuildContext&)>;
 
     static OperatorRegistry& instance();
 
     void Register(const std::string& op_type, Builder builder);
     std::shared_ptr<OpBase> Create(const model::NodeDesc& node, TensorMap& tensors) const;
+    std::shared_ptr<OpBase> Create(const model::NodeDesc& node, TensorMap& tensors, const BuildContext& context) const;
 
    private:
     std::unordered_map<std::string, Builder> registry_;

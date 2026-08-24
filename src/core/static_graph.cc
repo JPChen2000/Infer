@@ -161,9 +161,8 @@ int32_t StaticGraph::Build() {
         }
     }
 
-    KernelDeviceScope kernel_device_scope(kernel_device_);
     for (const auto& node : model_.graph.nodes) {
-        auto op = OperatorRegistry::instance().Create(node, tensors_);
+        auto op = OperatorRegistry::instance().Create(node, tensors_, OperatorRegistry::BuildContext{kernel_device_});
         if (op == nullptr) {
             std::cerr << "StaticGraph::Build failed to create node=" << node.name << " op=" << node.op_type << '\n';
             return -1;
@@ -431,8 +430,7 @@ bool StaticGraph::ReplaceNodeDesc(const model::NodeDesc& desc) {
             return false;
         }
     }
-    KernelDeviceScope kernel_device_scope(kernel_device_);
-    auto op = OperatorRegistry::instance().Create(desc, tensors_);
+    auto op = OperatorRegistry::instance().Create(desc, tensors_, OperatorRegistry::BuildContext{kernel_device_});
     if (op == nullptr || op->outputs().size() != static_node.outputs.size()) {
         return false;
     }
@@ -501,8 +499,7 @@ bool StaticGraph::ReplaceNodeDescAndAbsorbNode(const model::NodeDesc& desc,
         return false;
     }
 
-    KernelDeviceScope kernel_device_scope(kernel_device_);
-    auto op = OperatorRegistry::instance().Create(desc, tensors_);
+    auto op = OperatorRegistry::instance().Create(desc, tensors_, OperatorRegistry::BuildContext{kernel_device_});
     if (op == nullptr || op->outputs().size() != desc.outputs.size()) {
         return false;
     }
@@ -588,8 +585,7 @@ bool StaticGraph::RebuildNode(size_t node_index) {
         break;
     }
 
-    KernelDeviceScope kernel_device_scope(kernel_device_);
-    auto op = OperatorRegistry::instance().Create(desc, tensors_);
+    auto op = OperatorRegistry::instance().Create(desc, tensors_, OperatorRegistry::BuildContext{kernel_device_});
     if (op == nullptr) {
         return false;
     }

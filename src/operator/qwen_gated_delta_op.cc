@@ -24,7 +24,7 @@ bool IsHeadVector(const Tensor* tensor, int64_t heads, int64_t width) {
     return tensor != nullptr && tensor->numel() == heads * width;
 }
 
-std::shared_ptr<OpBase> BuildState(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildState(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 5 || node.outputs.size() != 1) return nullptr;
     QwenGatedDeltaStateParam param{};
     param.state = tensors[node.inputs[0]];
@@ -35,14 +35,14 @@ std::shared_ptr<OpBase> BuildState(const model::NodeDesc& node, OperatorRegistry
     param.out = tensors[node.outputs[0]];
     auto op = std::make_shared<QwenGatedDeltaStateOp>(node.name.empty() ? "qwen_gated_delta_state" : node.name, param);
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) return nullptr;
-    auto kernel = CreateHostKernelForTensor("QwenGatedDeltaState", {param.state, param.k, param.v, param.beta,
+    auto kernel = CreateKernelForTensor(context.device, "QwenGatedDeltaState", {param.state, param.k, param.v, param.beta,
                                                                       param.decay, param.out}, DataType::FP32);
     if (kernel == nullptr) return nullptr;
     op->AttachKernel(std::move(kernel));
     return op;
 }
 
-std::shared_ptr<OpBase> BuildOutput(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildOutput(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 2 || node.outputs.size() != 1) return nullptr;
     QwenGatedDeltaOutputParam param{};
     param.state = tensors[node.inputs[0]];
@@ -50,13 +50,13 @@ std::shared_ptr<OpBase> BuildOutput(const model::NodeDesc& node, OperatorRegistr
     param.out = tensors[node.outputs[0]];
     auto op = std::make_shared<QwenGatedDeltaOutputOp>(node.name.empty() ? "qwen_gated_delta_output" : node.name, param);
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) return nullptr;
-    auto kernel = CreateHostKernelForTensor("QwenGatedDeltaOutput", {param.state, param.q, param.out}, DataType::FP32);
+    auto kernel = CreateKernelForTensor(context.device, "QwenGatedDeltaOutput", {param.state, param.q, param.out}, DataType::FP32);
     if (kernel == nullptr) return nullptr;
     op->AttachKernel(std::move(kernel));
     return op;
 }
 
-std::shared_ptr<OpBase> BuildCombined(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildCombined(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 6 || node.outputs.size() != 2) return nullptr;
     QwenGatedDeltaParam param{};
     param.state = tensors[node.inputs[0]];
@@ -69,7 +69,7 @@ std::shared_ptr<OpBase> BuildCombined(const model::NodeDesc& node, OperatorRegis
     param.out = tensors[node.outputs[1]];
     auto op = std::make_shared<QwenGatedDeltaOp>(node.name.empty() ? "qwen_gated_delta" : node.name, param);
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) return nullptr;
-    auto kernel = CreateHostKernelForTensor("QwenGatedDelta",
+    auto kernel = CreateKernelForTensor(context.device, "QwenGatedDelta",
                                             {param.state, param.k, param.v, param.beta, param.decay, param.q,
                                              param.next_state, param.out},
                                             DataType::FP32);

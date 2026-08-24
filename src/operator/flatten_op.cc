@@ -23,12 +23,12 @@ int32_t GetIntAttribute(const std::unordered_map<std::string, model::AttributeVa
     return default_value;
 }
 
-std::unique_ptr<KernelBase> CreateFlattenKernel() {
+std::unique_ptr<KernelBase> CreateFlattenKernel(const OperatorRegistry::BuildContext& context) {
     kernel::EnsureFlattenKernelsRegistered();
-    return CreateHostKernelForTensor("Flatten", {});
+    return CreateKernelForTensor(context.device, "Flatten", {});
 }
 
-std::shared_ptr<OpBase> BuildFlattenOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildFlattenOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 1 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -42,7 +42,7 @@ std::shared_ptr<OpBase> BuildFlattenOp(const model::NodeDesc& node, OperatorRegi
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) {
         return nullptr;
     }
-    auto kernel = CreateHostKernelForTensor("Flatten", {param.input, param.out});
+    auto kernel = CreateKernelForTensor(context.device, "Flatten", {param.input, param.out});
     if (kernel == nullptr) {
         return nullptr;
     }

@@ -9,7 +9,7 @@ namespace feather {
 namespace operators {
 namespace {
 
-std::shared_ptr<OpBase> BuildSoftplusOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildSoftplusOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 1 || node.outputs.size() != 1) return nullptr;
     UnaryParam param{};
     param.input = tensors[node.inputs[0]];
@@ -17,7 +17,7 @@ std::shared_ptr<OpBase> BuildSoftplusOp(const model::NodeDesc& node, OperatorReg
     auto op = std::make_shared<SoftplusOp>(node.name.empty() ? "softplus" : node.name, param);
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) return nullptr;
     kernel::EnsureSoftplusKernelsRegistered();
-    auto kernel = CreateHostKernelForTensor("Softplus", {param.input, op->outputs().front()}, DataType::FP32);
+    auto kernel = CreateKernelForTensor(context.device, "Softplus", {param.input, op->outputs().front()}, DataType::FP32);
     if (kernel == nullptr) return nullptr;
     op->AttachKernel(std::move(kernel));
     return op;

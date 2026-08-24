@@ -9,7 +9,7 @@ namespace feather {
 namespace operators {
 namespace {
 
-std::shared_ptr<OpBase> BuildExpOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildExpOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 1 || node.outputs.size() != 1) return nullptr;
     UnaryParam param{};
     param.input = tensors[node.inputs[0]];
@@ -17,7 +17,7 @@ std::shared_ptr<OpBase> BuildExpOp(const model::NodeDesc& node, OperatorRegistry
     auto op = std::make_shared<ExpOp>(node.name.empty() ? "exp" : node.name, param);
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) return nullptr;
     kernel::EnsureExpKernelsRegistered();
-    auto kernel = CreateHostKernelForTensor("Exp", {param.input, op->outputs().front()}, DataType::FP32);
+    auto kernel = CreateKernelForTensor(context.device, "Exp", {param.input, op->outputs().front()}, DataType::FP32);
     if (kernel == nullptr) return nullptr;
     op->AttachKernel(std::move(kernel));
     return op;

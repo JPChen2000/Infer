@@ -76,7 +76,7 @@ void AttachPoolKernel(std::unique_ptr<KernelBase>& slot, PoolParam* param, std::
     }
 }
 
-PoolParam BuildPoolParam(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+PoolParam BuildPoolParam(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     PoolParam param{};
     param.input = tensors[node.inputs[0]];
     param.out = tensors[node.outputs[0]];
@@ -89,21 +89,21 @@ PoolParam BuildPoolParam(const model::NodeDesc& node, OperatorRegistry::TensorMa
     return param;
 }
 
-std::unique_ptr<KernelBase> CreateAvgPoolKernel() {
+std::unique_ptr<KernelBase> CreateAvgPoolKernel(const OperatorRegistry::BuildContext& context) {
     kernel::EnsurePoolKernelsRegistered();
-    return CreateHostKernelForTensor("AvgPool", {});
+    return CreateKernelForTensor(context.device, "AvgPool", {});
 }
 
-std::unique_ptr<KernelBase> CreateMaxPoolKernel() {
+std::unique_ptr<KernelBase> CreateMaxPoolKernel(const OperatorRegistry::BuildContext& context) {
     kernel::EnsurePoolKernelsRegistered();
-    return CreateHostKernelForTensor("MaxPool", {});
+    return CreateKernelForTensor(context.device, "MaxPool", {});
 }
 
-std::shared_ptr<OpBase> BuildAvgPoolOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildAvgPoolOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 1 || node.outputs.size() != 1) {
         return nullptr;
     }
-    PoolParam param = BuildPoolParam(node, tensors);
+    PoolParam param = BuildPoolParam(node, tensors, context);
     if (param.input == nullptr || param.out == nullptr) {
         return nullptr;
     }
@@ -111,7 +111,7 @@ std::shared_ptr<OpBase> BuildAvgPoolOp(const model::NodeDesc& node, OperatorRegi
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) {
         return nullptr;
     }
-    auto kernel = CreateHostKernelForTensor("AvgPool", {param.input, param.out});
+    auto kernel = CreateKernelForTensor(context.device, "AvgPool", {param.input, param.out});
     if (kernel == nullptr) {
         return nullptr;
     }
@@ -119,11 +119,11 @@ std::shared_ptr<OpBase> BuildAvgPoolOp(const model::NodeDesc& node, OperatorRegi
     return op;
 }
 
-std::shared_ptr<OpBase> BuildMaxPoolOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildMaxPoolOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 1 || node.outputs.size() != 1) {
         return nullptr;
     }
-    PoolParam param = BuildPoolParam(node, tensors);
+    PoolParam param = BuildPoolParam(node, tensors, context);
     if (param.input == nullptr || param.out == nullptr) {
         return nullptr;
     }
@@ -131,7 +131,7 @@ std::shared_ptr<OpBase> BuildMaxPoolOp(const model::NodeDesc& node, OperatorRegi
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) {
         return nullptr;
     }
-    auto kernel = CreateHostKernelForTensor("MaxPool", {param.input, param.out});
+    auto kernel = CreateKernelForTensor(context.device, "MaxPool", {param.input, param.out});
     if (kernel == nullptr) {
         return nullptr;
     }

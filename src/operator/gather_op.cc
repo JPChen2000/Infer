@@ -11,7 +11,7 @@ namespace operators {
 
 namespace {
 
-std::shared_ptr<OpBase> BuildGatherOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildGatherOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 2 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -27,7 +27,7 @@ std::shared_ptr<OpBase> BuildGatherOp(const model::NodeDesc& node, OperatorRegis
         return nullptr;
     }
     kernel::EnsureGatherKernelsRegistered();
-    auto kernel = CreateHostKernelForTensor("Gather", {param.data}, DataType::FP32);
+    auto kernel = CreateKernelForTensor(context.device, "Gather", {param.data}, DataType::FP32);
     if (kernel == nullptr) {
         return nullptr;
     }

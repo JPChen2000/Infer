@@ -20,7 +20,7 @@ bool IsScalarTensor(const std::shared_ptr<Tensor>& tensor) {
     return tensor != nullptr && tensor->IsInitialized() && tensor->numel() == 1;
 }
 
-std::shared_ptr<OpBase> BuildYoloDecodeOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors) {
+std::shared_ptr<OpBase> BuildYoloDecodeOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 6 || node.outputs.size() != 1) {
         return nullptr;
     }
@@ -43,7 +43,7 @@ std::shared_ptr<OpBase> BuildYoloDecodeOp(const model::NodeDesc& node, OperatorR
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) {
         return nullptr;
     }
-    auto kernel = CreateHostKernelForTensor(
+    auto kernel = CreateKernelForTensor(context.device, 
         "YoloDecode",
         {param.input, param.xy_scale, param.grid, param.stride, param.wh_scale, param.anchor_grid, param.out});
     if (kernel == nullptr) {
