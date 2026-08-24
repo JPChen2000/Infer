@@ -12,11 +12,6 @@ namespace operators {
 
 namespace {
 
-std::unique_ptr<KernelBase> CreateFcKernel(const OperatorRegistry::BuildContext& context) {
-    kernel::EnsureFcKernelsRegistered();
-    return CreateKernelForTensor(context.device, "FC", {}, DataType::FP32);
-}
-
 std::shared_ptr<OpBase> BuildFcOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() < 2 || node.outputs.size() != 1) {
         return nullptr;

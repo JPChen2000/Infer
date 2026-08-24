@@ -10,11 +10,6 @@ namespace operators {
 
 namespace {
 
-std::unique_ptr<KernelBase> CreateReluKernel(const OperatorRegistry::BuildContext& context) {
-    kernel::EnsureReluKernelsRegistered();
-    return CreateKernelForTensor(context.device, "ReLU", {});
-}
-
 std::shared_ptr<OpBase> BuildReluOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 1 || node.outputs.size() != 1) {
         return nullptr;

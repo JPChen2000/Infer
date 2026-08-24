@@ -26,11 +26,6 @@ float GetFloatAttribute(const std::unordered_map<std::string, model::AttributeVa
     return default_value;
 }
 
-std::unique_ptr<KernelBase> CreatePowKernel(const OperatorRegistry::BuildContext& context) {
-    kernel::EnsurePowKernelsRegistered();
-    return CreateKernelForTensor(context.device, "Pow", {});
-}
-
 std::shared_ptr<OpBase> BuildPowOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if ((node.inputs.size() != 1 && node.inputs.size() != 2) || node.outputs.size() != 1) {
         return nullptr;

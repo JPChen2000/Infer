@@ -10,11 +10,6 @@ namespace operators {
 
 namespace {
 
-std::unique_ptr<KernelBase> CreateSigmoidKernel(const OperatorRegistry::BuildContext& context) {
-    kernel::EnsureSigmoidKernelsRegistered();
-    return CreateKernelForTensor(context.device, "Sigmoid", {});
-}
-
 std::shared_ptr<OpBase> BuildSigmoidOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 1 || node.outputs.size() != 1) {
         return nullptr;

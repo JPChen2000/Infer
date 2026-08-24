@@ -39,11 +39,6 @@ bool CheckBinaryShape(const BinaryParam& param) {
     return InferBroadcastShape(param.lhs->dims().data(), param.rhs->dims().data(), &out_dims);
 }
 
-std::unique_ptr<KernelBase> CreateMulKernel(const OperatorRegistry::BuildContext& context) {
-    kernel::EnsureMulKernelsRegistered();
-    return CreateKernelForTensor(context.device, "Mul", {});
-}
-
 std::shared_ptr<OpBase> BuildMulOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 2 || node.outputs.size() != 1) {
         return nullptr;

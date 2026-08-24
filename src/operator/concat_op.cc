@@ -70,11 +70,6 @@ std::vector<int64_t> InferConcatOutputShape(const ConcatParam& param) {
     return out_shape;
 }
 
-std::unique_ptr<KernelBase> CreateConcatKernel(const OperatorRegistry::BuildContext& context) {
-    kernel::EnsureConcatKernelsRegistered();
-    return CreateKernelForTensor(context.device, "Concat", {});
-}
-
 std::shared_ptr<OpBase> BuildConcatOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() < 2 || node.outputs.size() != 1) {
         return nullptr;

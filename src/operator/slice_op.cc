@@ -27,11 +27,6 @@ int32_t GetIntAttribute(const std::unordered_map<std::string, model::AttributeVa
     return default_value;
 }
 
-std::unique_ptr<KernelBase> CreateSliceKernel(const OperatorRegistry::BuildContext& context) {
-    kernel::EnsureSliceKernelsRegistered();
-    return CreateKernelForTensor(context.device, "Slice", {}, DataType::FP32);
-}
-
 std::shared_ptr<OpBase> BuildSliceOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if ((node.inputs.size() != 1 && (node.inputs.size() < 4 || node.inputs.size() > 5)) || node.outputs.size() != 1) {
         return nullptr;

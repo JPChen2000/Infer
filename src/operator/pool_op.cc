@@ -89,16 +89,6 @@ PoolParam BuildPoolParam(const model::NodeDesc& node, OperatorRegistry::TensorMa
     return param;
 }
 
-std::unique_ptr<KernelBase> CreateAvgPoolKernel(const OperatorRegistry::BuildContext& context) {
-    kernel::EnsurePoolKernelsRegistered();
-    return CreateKernelForTensor(context.device, "AvgPool", {});
-}
-
-std::unique_ptr<KernelBase> CreateMaxPoolKernel(const OperatorRegistry::BuildContext& context) {
-    kernel::EnsurePoolKernelsRegistered();
-    return CreateKernelForTensor(context.device, "MaxPool", {});
-}
-
 std::shared_ptr<OpBase> BuildAvgPoolOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 1 || node.outputs.size() != 1) {
         return nullptr;

@@ -36,11 +36,6 @@ float GetFloatAttribute(const std::unordered_map<std::string, model::AttributeVa
     return default_value;
 }
 
-std::unique_ptr<KernelBase> CreateBatchNormalizationKernel(const OperatorRegistry::BuildContext& context) {
-    kernel::EnsureBatchNormalizationKernelsRegistered();
-    return CreateKernelForTensor(context.device, "BatchNormalization", {}, DataType::FP32);
-}
-
 std::shared_ptr<OpBase> BuildBatchNormalizationOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 5 || node.outputs.size() != 1) {
         return nullptr;

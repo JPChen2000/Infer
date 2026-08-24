@@ -23,11 +23,6 @@ std::vector<int64_t> GetShapeAttribute(const std::unordered_map<std::string, mod
     return {};
 }
 
-std::unique_ptr<KernelBase> CreateReshapeKernel(const OperatorRegistry::BuildContext& context) {
-    kernel::EnsureReshapeKernelsRegistered();
-    return CreateKernelForTensor(context.device, "Reshape", {});
-}
-
 bool ResolveTargetShape(const std::shared_ptr<Tensor>& input, const std::shared_ptr<Tensor>& shape_tensor,
                         const std::vector<int64_t>& shape_attribute, std::vector<int64_t>* target_shape) {
     if (input == nullptr || target_shape == nullptr) {

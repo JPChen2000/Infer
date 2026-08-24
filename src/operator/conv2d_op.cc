@@ -30,11 +30,6 @@ int32_t GetIntAttribute(const std::unordered_map<std::string, model::AttributeVa
     return default_value;
 }
 
-std::unique_ptr<KernelBase> CreateConv2DKernel(const OperatorRegistry::BuildContext& context) {
-    kernel::EnsureConv2DKernelsRegistered();
-    return CreateKernelForTensor(context.device, "Conv2D", {});
-}
-
 std::shared_ptr<OpBase> BuildConv2DOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() < 2 || node.outputs.size() != 1) {
         return nullptr;

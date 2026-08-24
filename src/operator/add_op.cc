@@ -39,11 +39,6 @@ bool CheckBinaryShape(const BinaryParam& param) {
     return InferBroadcastShape(param.lhs->dims().data(), param.rhs->dims().data(), &out_dims);
 }
 
-std::unique_ptr<KernelBase> CreateAddKernel(const OperatorRegistry::BuildContext& context) {
-    kernel::EnsureAddKernelsRegistered();
-    return CreateKernelForTensor(context.device, "Add", {});
-}
-
 std::shared_ptr<OpBase> BuildAddOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
     if (node.inputs.size() != 2 || node.outputs.size() != 1) {
         return nullptr;
