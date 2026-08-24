@@ -19,7 +19,6 @@ void EnsureBuiltinKernelsRegistered();
 class KernelBase {
    public:
     KernelBase() = default;
-    explicit KernelBase(const KernelBase& base);
     virtual ~KernelBase() = default;
     virtual void SetParam(void* param) { param_ = param; };
     // Optional one-time preparation hook for immutable weights and other

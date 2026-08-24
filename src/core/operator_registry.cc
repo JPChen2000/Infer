@@ -25,12 +25,4 @@ std::shared_ptr<OpBase> OperatorRegistry::Create(const model::NodeDesc& node, Te
     return it->second(node, tensors);
 }
 
-const OperatorRegistry::Builder* OperatorRegistry::Find(const std::string& op_type) const {
-    auto it = registry_.find(op_type);
-    if (it == registry_.end()) {
-        return nullptr;
-    }
-    return &it->second;
-}
-
 }  // namespace feather

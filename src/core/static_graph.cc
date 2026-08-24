@@ -206,15 +206,17 @@ int32_t StaticGraph::Build() {
         static_node.op = op;
         node_index_by_name_[static_node.name] = nodes_.size();
         nodes_.push_back(std::move(static_node));
-        AddOperator(std::move(op));
     }
 
     return Check();
 }
 
 int32_t StaticGraph::Check() const {
-    for (const auto& op : operators_) {
-        if (op == nullptr || !op->HasKernel()) {
+    for (const auto& node : nodes_) {
+        if (node.removed) {
+            continue;
+        }
+        if (node.op == nullptr || !node.op->HasKernel()) {
             return -1;
         }
     }
@@ -230,9 +232,15 @@ int32_t StaticGraph::ApplyPasses() {
 
 void StaticGraph::SetPassManager(std::shared_ptr<PassManager> pass_manager) { pass_manager_ = std::move(pass_manager); }
 
-void StaticGraph::AddOperator(std::shared_ptr<OpBase> op) { operators_.push_back(std::move(op)); }
-
-size_t StaticGraph::OperatorSize() const { return operators_.size(); }
+size_t StaticGraph::OperatorSize() const {
+    size_t count = 0;
+    for (const auto& node : nodes_) {
+        if (!node.removed && node.op != nullptr) {
+            ++count;
+        }
+    }
+    return count;
+}
 
 size_t StaticGraph::NodeSize() const {
     size_t count = 0;
@@ -320,7 +328,6 @@ bool StaticGraph::RemoveNode(const std::string& node_name) {
     }
     node.removed = true;
     node.op.reset();
-    RebuildActiveOperators();
     return true;
 }
 
@@ -360,7 +367,6 @@ bool StaticGraph::RemoveNodeWithOutputAlias(const std::string& node_name) {
     users_by_value_.erase(output_name);
     node.removed = true;
     node.op.reset();
-    RebuildActiveOperators();
     return true;
 }
 
@@ -456,7 +462,6 @@ bool StaticGraph::ReplaceNodeDesc(const model::NodeDesc& desc) {
             break;
         }
     }
-    RebuildActiveOperators();
     return true;
 }
 
@@ -529,12 +534,10 @@ bool StaticGraph::ReplaceNodeDescAndAbsorbNode(const model::NodeDesc& desc,
     }
     absorbed.removed = true;
     absorbed.op.reset();
-    RebuildActiveOperators();
     return true;
 }
 
 void StaticGraph::ClearGraphState() {
-    operators_.clear();
     nodes_.clear();
     node_index_by_name_.clear();
     producer_by_value_.clear();
@@ -558,15 +561,6 @@ void StaticGraph::UnregisterValueUse(const std::string& value_name, const std::s
     users.erase(std::remove(users.begin(), users.end(), node_name), users.end());
     if (users.empty()) {
         users_by_value_.erase(it);
-    }
-}
-
-void StaticGraph::RebuildActiveOperators() {
-    operators_.clear();
-    for (const auto& node : nodes_) {
-        if (!node.removed && node.op != nullptr) {
-            operators_.push_back(node.op);
-        }
     }
 }
 
@@ -609,7 +603,6 @@ bool StaticGraph::RebuildNode(size_t node_index) {
         tensors_[static_node.outputs[i]] = outputs[i];
         producer_by_value_[static_node.outputs[i]] = static_node.name;
     }
-    RebuildActiveOperators();
     return true;
 }
 

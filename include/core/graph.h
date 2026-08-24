@@ -49,9 +49,6 @@ class RuntimeGraph {
    public:
     RuntimeGraph();
 
-    int32_t load_from_buffer(const char* buffer, size_t size);
-    int32_t load_from_path(const std::string& path);
-
     int32_t Check() const;
     int32_t Run();
     int32_t SetTensor(const std::string& name, std::shared_ptr<Tensor> tensor);

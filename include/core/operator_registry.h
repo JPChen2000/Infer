@@ -25,7 +25,6 @@ class OperatorRegistry {
 
     void Register(const std::string& op_type, Builder builder);
     std::shared_ptr<OpBase> Create(const model::NodeDesc& node, TensorMap& tensors) const;
-    const Builder* Find(const std::string& op_type) const;
 
    private:
     std::unordered_map<std::string, Builder> registry_;

@@ -77,21 +77,6 @@ inline DeviceType GetHostRuntimeDevice() {
 }
 
 
-enum class OpType {
-    Conv2D = 0,
-    Pool = 1,
-    Concat = 2,
-    ReLU = 3,
-    Gemm = 4,
-    Upsample = 5,
-    Reshape = 6,
-    Split = 7,
-    Sigmoid = 8,
-    Softmax = 9,
-    AvgPool = 10,
-    OP_NUMS
-};
-
 enum class DataLayout { 
     NCHW = 0, 
     NHWC = 1, 

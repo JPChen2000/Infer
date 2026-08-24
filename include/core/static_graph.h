@@ -40,7 +40,6 @@ class StaticGraph {
     int32_t ApplyPasses();
     void SetPassManager(std::shared_ptr<PassManager> pass_manager);
 
-    void AddOperator(std::shared_ptr<OpBase> op);
     size_t OperatorSize() const;
     size_t NodeSize() const;
     const model::ModelDesc& model() const { return model_; }
@@ -62,7 +61,6 @@ class StaticGraph {
     // The replacement must retain the target's original output prefix.
     bool ReplaceNodeDescAndAbsorbNode(const model::NodeDesc& desc, const std::string& absorbed_node_name);
 
-    const std::vector<std::shared_ptr<OpBase>>& operators() const { return operators_; }
     const std::unordered_map<std::string, std::shared_ptr<Tensor>>& tensors() const { return tensors_; }
     const std::vector<StaticNode>& nodes() const { return nodes_; }
 
@@ -70,12 +68,10 @@ class StaticGraph {
     void ClearGraphState();
     void RegisterValueUse(const std::string& value_name, const std::string& node_name);
     void UnregisterValueUse(const std::string& value_name, const std::string& node_name);
-    void RebuildActiveOperators();
     bool RebuildNode(size_t node_index);
 
     model::ModelDesc model_;
     std::unordered_map<std::string, std::shared_ptr<Tensor>> tensors_;
-    std::vector<std::shared_ptr<OpBase>> operators_;
     std::vector<StaticNode> nodes_;
     std::unordered_map<std::string, size_t> node_index_by_name_;
     std::unordered_map<std::string, std::string> producer_by_value_;

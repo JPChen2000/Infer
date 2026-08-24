@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
-#include <fstream>
 #include <mutex>
 #include <queue>
 #include <utility>
@@ -46,21 +45,6 @@ size_t TensorByteSizeForNode(const Tensor& tensor, const RuntimeNode& node) {
 RuntimeGraph::RuntimeGraph()
     : thread_mode_(RuntimeThreadMode::kParallelGraph),
       configured_thread_count_(DefaultThreadCount()) {}
-
-int32_t RuntimeGraph::load_from_buffer(const char* buffer, size_t size) {
-    if (buffer == nullptr || size == 0) {
-        return -1;
-    }
-    return 0;
-}
-
-int32_t RuntimeGraph::load_from_path(const std::string& path) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file.good()) {
-        return -1;
-    }
-    return 0;
-}
 
 std::string RuntimeNode::ProfileLabel() const {
     return "RuntimeNode::" + name + "[" + op_type + "]";
