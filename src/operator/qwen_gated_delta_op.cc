@@ -124,7 +124,7 @@ int32_t QwenGatedDeltaStateOp::InferOutputShapes() {
 
 void QwenGatedDeltaStateOp::AttachKernel(std::unique_ptr<KernelBase> kernel) {
     kernel_ = std::move(kernel);
-    if (kernel_ != nullptr) kernel_->SetParam(&param_);
+    if (kernel_ != nullptr) kernel_->SetParamOwner(std::make_shared<std::decay_t<decltype(param_)>>(param_));
 }
 
 int32_t QwenGatedDeltaStateOp::Run() { return InferOutputShapes() == 0 && kernel_ != nullptr ? kernel_->compute() : -1; }
@@ -156,7 +156,7 @@ int32_t QwenGatedDeltaOutputOp::InferOutputShapes() {
 
 void QwenGatedDeltaOutputOp::AttachKernel(std::unique_ptr<KernelBase> kernel) {
     kernel_ = std::move(kernel);
-    if (kernel_ != nullptr) kernel_->SetParam(&param_);
+    if (kernel_ != nullptr) kernel_->SetParamOwner(std::make_shared<std::decay_t<decltype(param_)>>(param_));
 }
 
 int32_t QwenGatedDeltaOutputOp::Run() { return InferOutputShapes() == 0 && kernel_ != nullptr ? kernel_->compute() : -1; }
@@ -209,7 +209,7 @@ int32_t QwenGatedDeltaOp::InferOutputShapes() {
 
 void QwenGatedDeltaOp::AttachKernel(std::unique_ptr<KernelBase> kernel) {
     kernel_ = std::move(kernel);
-    if (kernel_ != nullptr) kernel_->SetParam(&param_);
+    if (kernel_ != nullptr) kernel_->SetParamOwner(std::make_shared<std::decay_t<decltype(param_)>>(param_));
 }
 
 int32_t QwenGatedDeltaOp::Run() { return InferOutputShapes() == 0 && kernel_ != nullptr ? kernel_->compute() : -1; }

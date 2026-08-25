@@ -100,6 +100,7 @@ std::shared_ptr<OpBase> BuildReshapeOp(const model::NodeDesc& node, OperatorRegi
     }
 
     auto op = std::make_shared<ReshapeOp>(node.name.empty() ? "reshape" : node.name, param);
+    op->SetExecutionDevice(context.device);
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) {
         return nullptr;
     }
@@ -158,7 +159,8 @@ int32_t ReshapeOp::InferOutputShapes() {
     // copying every Qwen activation through shape-only nodes during decode.
     // CUDA keeps separate host storage but shares the device allocation in its
     // view kernel, so output lifetime remains independent of host metadata.
-    if (ActiveKernelDevice() != DeviceType::CUDA) {
+    const auto device = execution_device_explicit_ ? execution_device_ : ActiveKernelDevice();
+    if (device != DeviceType::CUDA) {
         param_.out->ShareDataWith(*param_.input);
         param_.out->Resize(target_shape);
         param_.out->set_data_type(param_.input->data_type());
@@ -188,7 +190,12 @@ int32_t ReshapeOp::Run() {
     if (kernel_ == nullptr) {
         return -1;
     }
+    RefreshKernelParams();
     return kernel_->compute();
+}
+
+void ReshapeOp::RefreshKernelParams() {
+    if (kernel_ != nullptr) kernel_->SetParamOwner(std::make_shared<ReshapeParam>(param_));
 }
 
 }  // namespace operators

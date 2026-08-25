@@ -72,6 +72,7 @@ std::shared_ptr<OpBase> BuildTransposeOp(const model::NodeDesc& node, OperatorRe
     param.perm = GetShapeAttribute(node.attributes, "perm");
 
     auto op = std::make_shared<TransposeOp>(node.name.empty() ? "transpose" : node.name, param);
+    op->SetExecutionDevice(context.device);
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) {
         return nullptr;
     }
@@ -126,7 +127,8 @@ int32_t TransposeOp::InferOutputShapes() {
         out_shape[i] = param_.input->dims()[param_.perm[i]];
     }
 
-    if (ActiveKernelDevice() != DeviceType::CUDA &&
+    const auto device = execution_device_explicit_ ? execution_device_ : ActiveKernelDevice();
+    if (device != DeviceType::CUDA &&
         IsContiguousViewPermutation(param_.input->dims().data(), param_.perm)) {
         param_.out->ShareDataWith(*param_.input);
         param_.out->Resize(out_shape);
@@ -151,7 +153,7 @@ int32_t TransposeOp::InferOutputShapes() {
 void TransposeOp::AttachKernel(std::unique_ptr<KernelBase> kernel) {
     kernel_ = std::move(kernel);
     if (kernel_ != nullptr) {
-        kernel_->SetParam((void*)&param_);
+        kernel_->SetParamOwner(std::make_shared<std::decay_t<decltype(param_)>>(param_));
     }
 }
 
@@ -163,7 +165,12 @@ int32_t TransposeOp::Run() {
         param_.out->IsInitialized() && param_.input->raw_data() == param_.out->raw_data()) {
         return 0;
     }
+    RefreshKernelParams();
     return kernel_->compute();
+}
+
+void TransposeOp::RefreshKernelParams() {
+    if (kernel_ != nullptr) kernel_->SetParamOwner(std::make_shared<TransposeParam>(param_));
 }
 
 }  // namespace operators

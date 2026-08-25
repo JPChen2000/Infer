@@ -102,7 +102,6 @@ feather::RuntimeNode MakeBinaryRuntimeNode(const std::string& name, const std::s
     node.op_type = op_type;
     node.inputs = std::move(inputs);
     node.outputs = std::move(outputs);
-    node.owner = std::move(op);
     node.kernel = std::move(kernel);
     node.kernel_device = node.kernel == nullptr ? feather::DeviceType::UNKNOWN : node.kernel->device();
     return node;
@@ -837,6 +836,61 @@ TEST(runtime_graph_test, LoweringProducesExecutableRuntimeNode) {
     ASSERT_NE(output_tensor, nullptr);
     EXPECT_FLOAT_EQ(output_tensor->data<float>()[0], 7.0f);
     EXPECT_FLOAT_EQ(output_tensor->data<float>()[1], 10.0f);
+}
+
+TEST(runtime_graph_test, LoweringDetachesAddKernelArgumentsFromStaticGraph) {
+    ModelDesc model;
+    model.name = "add_graph_lifetime";
+    model.version = 1;
+    model.graph.name = "main";
+    model.graph.inputs = {"input", "bias"};
+    model.graph.outputs = {"output"};
+
+    ValueDesc input;
+    input.tensor.name = "input";
+    input.tensor.dims = {1, 2};
+    input.tensor.data_type = DataType::FP32;
+
+    ValueDesc bias = input;
+    bias.tensor.name = "bias";
+    bias.constant = true;
+
+    ValueDesc output = input;
+    output.tensor.name = "output";
+
+    NodeDesc node;
+    node.name = "add0";
+    node.op_type = "Add";
+    node.inputs = {"input", "bias"};
+    node.outputs = {"output"};
+    model.graph.values = {input, bias, output};
+    model.graph.nodes = {node};
+
+    auto input_tensor = std::make_shared<Tensor>();
+    input_tensor->Assign<float>({1.0f, 2.0f}, {1, 2});
+    auto bias_tensor = std::make_shared<Tensor>();
+    bias_tensor->Assign<float>({3.0f, 4.0f}, {1, 2});
+
+    RuntimeGraph runtime_graph;
+    {
+        StaticGraph static_graph;
+        ASSERT_EQ(static_graph.SetModel(model), 0);
+        ASSERT_EQ(static_graph.SetTensor("input", input_tensor), 0);
+        ASSERT_EQ(static_graph.SetTensor("bias", bias_tensor), 0);
+        ASSERT_EQ(static_graph.Build(), 0);
+
+        GraphLowering lowering;
+        ASSERT_EQ(lowering.Lower(static_graph, &runtime_graph), 0);
+    }
+
+    const auto* runtime_node = runtime_graph.GetNode("add0");
+    ASSERT_NE(runtime_node, nullptr);
+    ASSERT_EQ(runtime_graph.Run(), 0);
+    const auto output_tensor = runtime_graph.GetTensor("output");
+    ASSERT_NE(output_tensor, nullptr);
+    ASSERT_EQ(output_tensor->numel(), 2);
+    EXPECT_FLOAT_EQ(output_tensor->data<float>()[0], 4.0f);
+    EXPECT_FLOAT_EQ(output_tensor->data<float>()[1], 6.0f);
 }
 
 TEST(runtime_graph_test, LoweringPreservesDagDependencies) {

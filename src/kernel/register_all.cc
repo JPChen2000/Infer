@@ -57,7 +57,7 @@ namespace kernel {
 void EnsureCudaKernelsRegistered();
 #endif
 
-void EnsureBuiltinKernelsRegistered() {
+void RegisterBuiltinKernels() {
     EnsureAddKernelsRegistered();
     EnsureBatchNormalizationKernelsRegistered();
     EnsureDivKernelsRegistered();
@@ -111,6 +111,8 @@ void EnsureBuiltinKernelsRegistered() {
     EnsureCudaKernelsRegistered();
 #endif
 }
+
+void EnsureBuiltinKernelsRegistered() { RegisterBuiltinKernels(); }
 
 }  // namespace kernel
 }  // namespace feather

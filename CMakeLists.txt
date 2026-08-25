@@ -377,6 +377,11 @@ if (FEATHER_ENABLE_OPENMP)
     target_link_libraries(infer_backend PUBLIC OpenMP::OpenMP_CXX)
 endif()
 if (FEATHER_WITH_CUDA)
+    # RuntimeGraph lives in infer_core but owns the CUDA/host hand-off and
+    # device-cache lifetime policy. Its CUDA branches must be compiled into
+    # the core object library as well as the backend kernels.
+    target_compile_definitions(infer_core PUBLIC FEATHER_WITH_CUDA)
+    target_link_libraries(infer_core PUBLIC CUDA::cudart CUDA::cublas)
     target_compile_definitions(infer_backend PUBLIC FEATHER_WITH_CUDA)
     target_link_libraries(infer_backend PUBLIC CUDA::cudart CUDA::cublas)
     if (FEATHER_WITH_CUDNN)

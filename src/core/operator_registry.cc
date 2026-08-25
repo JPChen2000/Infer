@@ -8,7 +8,7 @@ OperatorRegistry& OperatorRegistry::instance() {
     static bool initialized = false;
     if (!initialized && !initializing) {
         initializing = true;
-        operators::EnsureBuiltinOperatorsRegistered();
+        operators::RegisterBuiltinOperators();
         initialized = true;
         initializing = false;
     }
@@ -27,7 +27,11 @@ std::shared_ptr<OpBase> OperatorRegistry::Create(const model::NodeDesc& node, Te
     if (it == registry_.end()) {
         return nullptr;
     }
-    return it->second(node, tensors, context);
+    auto op = it->second(node, tensors, context);
+    if (op != nullptr) {
+        op->SetExecutionDevice(context.device);
+    }
+    return op;
 }
 
 }  // namespace feather

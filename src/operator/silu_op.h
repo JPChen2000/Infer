@@ -22,7 +22,7 @@ class SiluOp : public OpBase {
     void AttachKernel(std::unique_ptr<KernelBase> kernel) override {
         kernel_ = std::move(kernel);
         if (kernel_ != nullptr) {
-            kernel_->SetParam((void*)&param_);
+            kernel_->SetParamOwner(std::make_shared<std::decay_t<decltype(param_)>>(param_));
         }
     }
     std::unique_ptr<KernelBase> DetachKernel() override { return std::move(kernel_); }

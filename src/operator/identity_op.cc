@@ -20,6 +20,7 @@ std::shared_ptr<OpBase> BuildIdentityOp(const model::NodeDesc& node, OperatorReg
     param.out = tensors[node.outputs[0]];
 
     auto op = std::make_shared<IdentityOp>(node.name.empty() ? "identity" : node.name, param);
+    op->SetExecutionDevice(context.device);
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) {
         return nullptr;
     }
@@ -67,7 +68,8 @@ int32_t IdentityOp::InferOutputShapes() {
 
     // Identity has view semantics on host backends. CUDA keeps separate host
     // Tensor storage but shares the device allocation in its view kernel.
-    if (ActiveKernelDevice() != DeviceType::CUDA) {
+    const auto device = execution_device_explicit_ ? execution_device_ : ActiveKernelDevice();
+    if (device != DeviceType::CUDA) {
         param_.out->ShareDataWith(*param_.input);
         param_.out->Resize(param_.input->dims().data());
         param_.out->set_data_type(param_.input->data_type());
@@ -93,7 +95,7 @@ int32_t IdentityOp::InferOutputShapes() {
 void IdentityOp::AttachKernel(std::unique_ptr<KernelBase> kernel) {
     kernel_ = std::move(kernel);
     if (kernel_ != nullptr) {
-        kernel_->SetParam((void*)&param_);
+        kernel_->SetParamOwner(std::make_shared<std::decay_t<decltype(param_)>>(param_));
     }
 }
 
@@ -101,7 +103,12 @@ int32_t IdentityOp::Run() {
     if (InferOutputShapes() != 0 || kernel_ == nullptr) {
         return -1;
     }
+    RefreshKernelParams();
     return kernel_->compute();
+}
+
+void IdentityOp::RefreshKernelParams() {
+    if (kernel_ != nullptr) kernel_->SetParamOwner(std::make_shared<UnaryParam>(param_));
 }
 
 }  // namespace operators

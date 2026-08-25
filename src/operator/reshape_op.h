@@ -22,12 +22,13 @@ class ReshapeOp : public OpBase {
     void AttachKernel(std::unique_ptr<KernelBase> kernel) override {
         kernel_ = std::move(kernel);
         if (kernel_ != nullptr) {
-            kernel_->SetParam((void*)&param_);
+            kernel_->SetParamOwner(std::make_shared<std::decay_t<decltype(param_)>>(param_));
         }
     }
     std::unique_ptr<KernelBase> DetachKernel() override { return std::move(kernel_); }
     bool HasKernel() const override { return kernel_ != nullptr; }
     int32_t Run() override;
+    void RefreshKernelParams() override;
 
    private:
     void SyncIO();

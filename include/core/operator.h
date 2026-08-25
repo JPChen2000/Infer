@@ -18,6 +18,11 @@ class OpBase {
 
     const std::string& name() const { return name_; }
     const std::string& type() const { return type_; }
+    void SetExecutionDevice(DeviceType device) {
+        execution_device_ = NormalizeExecutionDevice(device);
+        execution_device_explicit_ = true;
+    }
+    DeviceType execution_device() const { return execution_device_; }
 
     const std::vector<std::shared_ptr<Tensor>>& inputs() const { return inputs_; }
     const std::vector<std::shared_ptr<Tensor>>& outputs() const { return outputs_; }
@@ -28,6 +33,7 @@ class OpBase {
 
     virtual int32_t CheckShape() const { return 0; }
     virtual int32_t InferOutputShapes() { return 0; }
+    virtual void RefreshKernelParams() {}
     virtual int32_t Run() = 0;
 
    protected:
@@ -38,6 +44,13 @@ class OpBase {
     std::string type_;
     std::vector<std::shared_ptr<Tensor>> inputs_;
     std::vector<std::shared_ptr<Tensor>> outputs_;
+    DeviceType execution_device_{GetHostRuntimeDevice()};
+    bool execution_device_explicit_{false};
+
+   private:
+    static DeviceType NormalizeExecutionDevice(DeviceType device) {
+        return device == DeviceType::UNKNOWN ? GetHostRuntimeDevice() : device;
+    }
 };
 
 }  // namespace feather

@@ -53,7 +53,7 @@ void EnsureQwenDepthwiseConvStateOperatorRegistered();
 void EnsureQwenRmsNormOperatorRegistered();
 void EnsureYoloDecodeOperatorRegistered();
 
-void EnsureBuiltinOperatorsRegistered() {
+void RegisterBuiltinOperators() {
     EnsureAddOperatorRegistered();
     EnsureBatchNormalizationOperatorRegistered();
     EnsureDivOperatorRegistered();
@@ -104,6 +104,8 @@ void EnsureBuiltinOperatorsRegistered() {
     EnsureQwenRmsNormOperatorRegistered();
     EnsureYoloDecodeOperatorRegistered();
 }
+
+void EnsureBuiltinOperatorsRegistered() { RegisterBuiltinOperators(); }
 
 }  // namespace operators
 }  // namespace feather

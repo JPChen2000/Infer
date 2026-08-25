@@ -13,6 +13,7 @@
 namespace feather {
 
 namespace operators {
+void RegisterBuiltinOperators();
 void EnsureBuiltinOperatorsRegistered();
 }
 

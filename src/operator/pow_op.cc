@@ -112,7 +112,7 @@ int32_t PowOp::InferOutputShapes() {
 void PowOp::AttachKernel(std::unique_ptr<KernelBase> kernel) {
     kernel_ = std::move(kernel);
     if (kernel_ != nullptr) {
-        kernel_->SetParam((void*)&param_);
+        kernel_->SetParamOwner(std::make_shared<std::decay_t<decltype(param_)>>(param_));
     }
 }
 

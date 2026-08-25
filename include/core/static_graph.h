@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "core/operator.h"
+#include "core/status.h"
 #include "model/model_format.h"
 #include "pass/graph_pass.h"
 
@@ -36,8 +37,11 @@ class StaticGraph {
     DeviceType KernelDevice() const { return kernel_device_; }
 
     int32_t Build();
+    Status BuildStatus();
     int32_t Check() const;
+    Status CheckStatus() const;
     int32_t ApplyPasses();
+    Status ApplyPassesStatus();
     void SetPassManager(std::shared_ptr<PassManager> pass_manager);
 
     size_t OperatorSize() const;

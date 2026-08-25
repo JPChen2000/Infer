@@ -9,8 +9,8 @@
 #include <unordered_set>
 #include <vector>
 
-#include "core/operator.h"
 #include "core/status.h"
+#include "core/kernel.h"
 #include "util/thread_pool_nv.h"
 
 namespace feather {
@@ -40,7 +40,6 @@ struct RuntimeNode {
     std::vector<std::string> outputs;
     std::vector<ValueId> input_ids;
     std::vector<ValueId> output_ids;
-    std::shared_ptr<OpBase> owner;
     std::unique_ptr<KernelBase> kernel;
     DeviceType kernel_device{DeviceType::UNKNOWN};
     std::vector<size_t> predecessors;
@@ -58,6 +57,7 @@ class RuntimeGraph {
     int32_t Check() const;
     Status CheckStatus() const;
     int32_t Run();
+    Status RunStatus();
     int32_t SetTensor(const std::string& name, std::shared_ptr<Tensor> tensor);
     std::shared_ptr<Tensor> GetTensor(const std::string& name) const;
     const RuntimeNode* GetNode(const std::string& name) const;
@@ -76,6 +76,7 @@ class RuntimeGraph {
     ValueId GetOrCreateValueId(const std::string& name);
     ValueId GetValueId(const std::string& name) const;
     int32_t Finalize();
+    Status FinalizeStatus();
     size_t NodeSize() const;
     size_t WorkerCount() const;
 

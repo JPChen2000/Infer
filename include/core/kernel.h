@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 
@@ -13,6 +14,7 @@ using feather::Tensor;
 
 namespace feather {
 namespace kernel {
+void RegisterBuiltinKernels();
 void EnsureBuiltinKernelsRegistered();
 }
 
@@ -20,7 +22,19 @@ class KernelBase {
    public:
     KernelBase() = default;
     virtual ~KernelBase() = default;
-    virtual void SetParam(void* param) { param_ = param; };
+    virtual void SetParam(void* param) {
+        param_owner_.reset();
+        param_ = param;
+    };
+    // Own the parameter structure while retaining shared Tensor handles; this
+    // keeps kernel execution independent from the operator object's lifetime
+    // without copying model data.
+    template <typename Param>
+    void SetParamOwner(std::shared_ptr<Param> param) {
+        param_owner_ = std::move(param);
+        param_ = param_owner_.get();
+    }
+    bool OwnsParam() const { return param_owner_ != nullptr; }
     // Optional one-time preparation hook for immutable weights and other
     // runtime-owned resources. Kernels may keep the default no-op behavior.
     virtual int32_t Prepare() { return 0; }
@@ -43,6 +57,7 @@ class KernelBase {
 
    protected:
     void* param_{nullptr};
+    std::shared_ptr<void> param_owner_;
     DeviceType device_{DeviceType::UNKNOWN};
     DataType data_type_{DataType::UNKNOWN};
     DataLayout layout_{DataLayout::ND};
@@ -59,7 +74,7 @@ class KernelDispatcher {
         static bool initialized = false;
         if (!initialized && !initializing) {
             initializing = true;
-            kernel::EnsureBuiltinKernelsRegistered();
+            kernel::RegisterBuiltinKernels();
             initialized = true;
             initializing = false;
         }

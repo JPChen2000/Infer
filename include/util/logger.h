@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <stdexcept>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -72,7 +73,8 @@ inline std::string FormatString(const std::string& format, Args... args) {
     do {                                                                                                             \
         if (!(expr)) {                                                                                               \
             std::cerr << "CHECK failed: " << #expr << " in file " << __FILE__ << ", line " << __LINE__ << std::endl; \
-            std::exit(EXIT_FAILURE);                                                                                 \
+            throw std::logic_error(std::string("CHECK failed: ") + #expr + " in " + __FILE__ + ":" +              \
+                                   std::to_string(__LINE__));                                                        \
         }                                                                                                            \
     } while (false)
 

@@ -109,7 +109,7 @@ int32_t AddOp::InferOutputShapes() {
 void AddOp::AttachKernel(std::unique_ptr<KernelBase> kernel) {
     kernel_ = std::move(kernel);
     if (kernel_ != nullptr) {
-        kernel_->SetParam((void*)&param_);
+        kernel_->SetParamOwner(std::make_shared<BinaryParam>(param_));
     }
 }
 
@@ -117,7 +117,12 @@ int32_t AddOp::Run() {
     if (InferOutputShapes() != 0 || kernel_ == nullptr) {
         return -1;
     }
+    RefreshKernelParams();
     return kernel_->compute();
+}
+
+void AddOp::RefreshKernelParams() {
+    if (kernel_ != nullptr) kernel_->SetParamOwner(std::make_shared<BinaryParam>(param_));
 }
 
 }  // namespace operators

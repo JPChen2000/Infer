@@ -72,7 +72,7 @@ std::vector<int64_t> InferPoolOutputShape(const PoolParam& param) {
 void AttachPoolKernel(std::unique_ptr<KernelBase>& slot, PoolParam* param, std::unique_ptr<KernelBase> kernel) {
     slot = std::move(kernel);
     if (slot != nullptr) {
-        slot->SetParam((void*)param);
+        slot->SetParamOwner(std::make_shared<PoolParam>(*param));
     }
 }
 

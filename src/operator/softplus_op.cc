@@ -49,7 +49,7 @@ int32_t SoftplusOp::InferOutputShapes() {
 
 void SoftplusOp::AttachKernel(std::unique_ptr<KernelBase> kernel) {
     kernel_ = std::move(kernel);
-    if (kernel_ != nullptr) kernel_->SetParam(&param_);
+    if (kernel_ != nullptr) kernel_->SetParamOwner(std::make_shared<std::decay_t<decltype(param_)>>(param_));
 }
 
 int32_t SoftplusOp::Run() { return InferOutputShapes() == 0 && kernel_ != nullptr ? kernel_->compute() : -1; }

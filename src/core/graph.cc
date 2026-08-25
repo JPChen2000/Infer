@@ -53,7 +53,7 @@ std::string RuntimeNode::ProfileLabel() const {
 }
 
 int32_t RuntimeNode::Run() {
-    if (owner == nullptr || kernel == nullptr) {
+    if (kernel == nullptr || !kernel->OwnsParam()) {
         return -1;
     }
     AutoTimer timer(ProfileLabel());
@@ -154,7 +154,7 @@ int32_t RuntimeGraph::Check() const {
 
 Status RuntimeGraph::CheckStatus() const {
     for (const auto& node : nodes_) {
-        if (node.owner == nullptr || node.kernel == nullptr) {
+        if (node.kernel == nullptr || !node.kernel->OwnsParam()) {
             return Status::Error(StatusCode::kBuildFailed, "runtime node has no kernel: " + node.name);
         }
     }
@@ -162,15 +162,20 @@ Status RuntimeGraph::CheckStatus() const {
 }
 
 int32_t RuntimeGraph::Run() {
-    auto status = Check();
-    if (status != 0) {
-        return status;
+    return RunStatus().ok() ? 0 : -1;
+}
+
+Status RuntimeGraph::RunStatus() {
+    const auto check_status = CheckStatus();
+    if (!check_status.ok()) {
+        return check_status;
     }
     ResetPendingDependencies();
 #ifdef FEATHER_WITH_CUDA
     ResetRemainingUses();
 #endif
-    return RunSerial();
+    const auto status = RunSerial();
+    return status == 0 ? Status::Ok() : Status::Error(StatusCode::kExecutionFailed, "runtime graph execution failed");
 }
 
 void RuntimeGraph::AddNode(RuntimeNode node) {
@@ -207,11 +212,15 @@ ValueId RuntimeGraph::GetValueId(const std::string& name) const {
 }
 
 int32_t RuntimeGraph::Finalize() {
+    return FinalizeStatus().ok() ? 0 : -1;
+}
+
+Status RuntimeGraph::FinalizeStatus() {
     const auto status = BuildDependencies();
     if (status != 0) {
         thread_pool_.reset();
         worker_count_ = 1;
-        return status;
+        return Status::Error(StatusCode::kBuildFailed, "runtime graph dependency construction failed");
     }
 
     // Prepare immutable-weight kernels before the first timed inference. This
@@ -221,14 +230,14 @@ int32_t RuntimeGraph::Finalize() {
         if (node.kernel != nullptr && node.kernel->Prepare() != 0) {
             thread_pool_.reset();
             worker_count_ = 1;
-            return -1;
+            return Status::Error(StatusCode::kBuildFailed, "runtime kernel preparation failed");
         }
     }
 
     if (thread_mode_ == RuntimeThreadMode::kSerialGraph) {
         thread_pool_.reset();
         worker_count_ = 1;
-        return 0;
+        return Status::Ok();
     }
 
     worker_count_ = std::max<size_t>(1, configured_thread_count_);
@@ -236,11 +245,11 @@ int32_t RuntimeGraph::Finalize() {
     if (worker_count_ <= 1) {
         thread_pool_.reset();
         worker_count_ = 1;
-        return 0;
+        return Status::Ok();
     }
 
     thread_pool_ = std::make_unique<ThreadPoolNv>(worker_count_);
-    return 0;
+    return Status::Ok();
 }
 
 size_t RuntimeGraph::NodeSize() const { return nodes_.size(); }

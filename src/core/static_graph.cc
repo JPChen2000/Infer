@@ -128,14 +128,18 @@ std::shared_ptr<Tensor> StaticGraph::GetTensor(const std::string& name) const {
     return it->second;
 }
 
-int32_t StaticGraph::Build() {
+Status StaticGraph::BuildStatus() {
     ClearGraphState();
+
+    const auto fail = [](const std::string& message) {
+        return Status::Error(StatusCode::kBuildFailed, message);
+    };
 
     std::unordered_set<std::string> static_values;
 
     for (const auto& input_name : model_.graph.inputs) {
         if (GetTensor(input_name) == nullptr) {
-            return -1;
+            return fail("missing graph input tensor: " + input_name);
         }
     }
 
@@ -149,11 +153,11 @@ int32_t StaticGraph::Build() {
             continue;
         }
         if (value.constant) {
-            return -1;
+            return fail("missing constant tensor: " + value.tensor.name);
         }
         auto tensor = CreateTensorFromValue(value);
         if (tensor == nullptr) {
-            return -1;
+            return fail("failed to create tensor: " + value.tensor.name);
         }
         tensors_[value.tensor.name] = tensor;
         if (value.constant) {
@@ -165,7 +169,7 @@ int32_t StaticGraph::Build() {
         auto op = OperatorRegistry::instance().Create(node, tensors_, OperatorRegistry::BuildContext{kernel_device_});
         if (op == nullptr) {
             std::cerr << "StaticGraph::Build failed to create node=" << node.name << " op=" << node.op_type << '\n';
-            return -1;
+            return fail("failed to create operator " + node.op_type + " for node " + node.name);
         }
         // Evaluate static control values early so downstream shape inference can
         // consume them. The original node and its input edges remain in the
@@ -175,15 +179,15 @@ int32_t StaticGraph::Build() {
             is_shape_node || (IsBuildTimeEvaluableControlOp(node.op_type) && HasOnlyStaticInputs(node, static_values));
         if (can_evaluate_at_build && EvaluateBuildTimeControlOp(op) != 0) {
             std::cerr << "StaticGraph::Build control evaluation failed node=" << node.name << " op=" << node.op_type << '\n';
-            return -1;
+            return fail("failed to evaluate control node: " + node.name);
         }
         const auto& outputs = op->outputs();
         if (node.outputs.size() != outputs.size()) {
-            return -1;
+            return fail("operator output count mismatch for node: " + node.name);
         }
         for (size_t i = 0; i < node.outputs.size(); ++i) {
             if (outputs[i] == nullptr) {
-                return -1;
+                return fail("null operator output for node: " + node.name);
             }
             RestoreDeclaredTensorMetadata(model_, node.outputs[i], outputs[i]);
             tensors_[node.outputs[i]] = outputs[i];
@@ -207,8 +211,10 @@ int32_t StaticGraph::Build() {
         nodes_.push_back(std::move(static_node));
     }
 
-    return Check();
+    return CheckStatus();
 }
+
+int32_t StaticGraph::Build() { return BuildStatus().ok() ? 0 : -1; }
 
 int32_t StaticGraph::Check() const {
     for (const auto& node : nodes_) {
@@ -222,11 +228,29 @@ int32_t StaticGraph::Check() const {
     return 0;
 }
 
+Status StaticGraph::CheckStatus() const {
+    for (const auto& node : nodes_) {
+        if (!node.removed && (node.op == nullptr || !node.op->HasKernel())) {
+            return Status::Error(StatusCode::kBuildFailed, "invalid static node: " + node.name);
+        }
+    }
+    return Status::Ok();
+}
+
 int32_t StaticGraph::ApplyPasses() {
     if (pass_manager_ == nullptr) {
         return 0;
     }
     return pass_manager_->Run(this);
+}
+
+Status StaticGraph::ApplyPassesStatus() {
+    if (pass_manager_ == nullptr) {
+        return Status::Ok();
+    }
+    return pass_manager_->Run(this) == 0
+               ? Status::Ok()
+               : Status::Error(StatusCode::kBuildFailed, "static graph pass pipeline failed");
 }
 
 void StaticGraph::SetPassManager(std::shared_ptr<PassManager> pass_manager) { pass_manager_ = std::move(pass_manager); }

@@ -23,6 +23,7 @@ class IdentityOp : public OpBase {
     std::unique_ptr<KernelBase> DetachKernel() override { return std::move(kernel_); }
     bool HasKernel() const override { return kernel_ != nullptr; }
     int32_t Run() override;
+    void RefreshKernelParams() override;
 
    private:
     void SyncIO();

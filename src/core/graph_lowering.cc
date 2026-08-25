@@ -6,9 +6,12 @@
 
 namespace feather {
 
-int32_t GraphLowering::Lower(StaticGraph& static_graph, RuntimeGraph* runtime_graph) const {
+Status GraphLowering::LowerStatus(StaticGraph& static_graph, RuntimeGraph* runtime_graph) const {
+    const auto fail = [](const std::string& message) {
+        return Status::Error(StatusCode::kBuildFailed, message);
+    };
     if (runtime_graph == nullptr) {
-        return -1;
+        return fail("runtime graph is null");
     }
 
     const auto requested_thread_mode = runtime_graph->ThreadMode();
@@ -18,7 +21,7 @@ int32_t GraphLowering::Lower(StaticGraph& static_graph, RuntimeGraph* runtime_gr
     runtime_graph->SetOutputNames(static_graph.model().graph.outputs);
     for (const auto& item : static_graph.tensors()) {
         if (runtime_graph->SetTensor(item.first, item.second) != 0) {
-            return -1;
+            return fail("failed to bind tensor: " + item.first);
         }
     }
 
@@ -40,26 +43,31 @@ int32_t GraphLowering::Lower(StaticGraph& static_graph, RuntimeGraph* runtime_gr
         }
         const auto& op = static_node.op;
         if (op == nullptr) {
-            return -1;
+            return fail("null static operator: " + static_node.name);
         }
         RuntimeNode node;
         node.name = op->name();
         node.op_type = op->type();
         node.inputs = static_node.inputs;
         node.outputs = static_node.outputs;
-        node.owner = op;
         node.kernel = op->DetachKernel();
         if (node.kernel == nullptr) {
-            return -1;
+            return fail("operator has no kernel: " + static_node.name);
         }
         node.kernel_device = node.kernel->device();
         runtime_graph->AddNode(std::move(node));
     }
 
-    if (runtime_graph->Finalize() != 0) {
-        return -1;
+    const auto finalize_status = runtime_graph->FinalizeStatus();
+    if (!finalize_status.ok()) {
+        return finalize_status;
     }
-    return runtime_graph->Check();
+    const auto check_status = runtime_graph->CheckStatus();
+    return check_status.ok() ? Status::Ok() : check_status;
+}
+
+int32_t GraphLowering::Lower(StaticGraph& static_graph, RuntimeGraph* runtime_graph) const {
+    return LowerStatus(static_graph, runtime_graph).ok() ? 0 : -1;
 }
 
 }  // namespace feather

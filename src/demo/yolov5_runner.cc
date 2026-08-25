@@ -87,6 +87,7 @@ int PrimeConstantTensorDevices(const model::ModelDesc& model, RuntimeGraph* runt
         if (tensor == nullptr || PrimeTensorDevice(tensor.get()) != 0) {
             return -1;
         }
+        kernel::cuda_detail::MarkTensorDevicePersistent(tensor.get(), true);
     }
     return kernel::cuda_detail::SynchronizeInferenceStream();
 }
