@@ -12,6 +12,10 @@
 
 namespace {
 
+std::filesystem::path QwenModelDirectory() {
+    return std::filesystem::path(__FILE__).parent_path().parent_path() / "models" / "llm" / "qwen3.5-0.8b";
+}
+
 std::shared_ptr<feather::Tensor> MakeDeclaredTensor(const feather::model::TensorDesc& desc) {
     const size_t bytes = static_cast<size_t>(desc.dims.empty() ? 1 : 1) *
                          static_cast<size_t>(std::max<int64_t>(1, [&desc]() {
@@ -32,7 +36,7 @@ std::shared_ptr<feather::Tensor> MakeDeclaredTensor(const feather::model::Tensor
 }  // namespace
 
 TEST(qwen_direct_export_test, LoadsDirectSafetensorsExportAndBuildsAtomicGraph) {
-    const auto path = std::filesystem::path("models/llm/qwen3.5-0.8b/qwen3.5-0.8b_decode_bf16_ctx8.fth");
+    const auto path = QwenModelDirectory() / "qwen3.5-0.8b_decode_bf16_ctx8.fth";
     if (!std::filesystem::is_regular_file(path)) {
         GTEST_SKIP() << "direct Qwen FTH asset is not present";
     }
@@ -68,7 +72,7 @@ TEST(qwen_direct_export_test, LoadsDirectSafetensorsExportAndBuildsAtomicGraph) 
 
 #ifdef FEATHER_WITH_CUDA
 TEST(qwen_direct_export_test, LowersEveryQwenDecodeNodeToCuda) {
-    const auto path = std::filesystem::path("models/llm/qwen3.5-0.8b/qwen3.5-0.8b_decode_bf16_ctx128.fth");
+    const auto path = QwenModelDirectory() / "qwen3.5-0.8b_decode_bf16_ctx128.fth";
     if (!std::filesystem::is_regular_file(path)) {
         GTEST_SKIP() << "context-128 Qwen FTH asset is not present";
     }

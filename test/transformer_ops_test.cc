@@ -11,6 +11,7 @@
 #include "core/static_graph.h"
 #include "core/tensor.h"
 #include "model/model_format.h"
+#include "util/bf16.h"
 #include "util/fp16.h"
 
 namespace {
@@ -584,4 +585,34 @@ TEST(transformer_ops_test, CastFp16ToFp32UsesCommonFp16Kernel) {
     ASSERT_NE(kernel, nullptr);
     EXPECT_EQ(kernel->device(), feather::DeviceType::COMMON);
     EXPECT_EQ(kernel->data_type(), feather::DataType::FP16);
+}
+
+TEST(transformer_ops_test, CastSupportsOnnxFloat8Types) {
+    const std::vector<std::pair<int64_t, feather::DataType>> cases = {
+        {17, feather::DataType::FP8E4M3},
+        {19, feather::DataType::FP8E5M2},
+    };
+
+    for (const auto& [onnx_type, expected_type] : cases) {
+        feather::OperatorRegistry::TensorMap tensors;
+        auto input = std::make_shared<feather::Tensor>();
+        input->Assign<feather::BFloat16>({feather::BFloat16{feather::FloatToBFloat16(1.5f)},
+                                           feather::BFloat16{feather::FloatToBFloat16(-2.25f)}},
+                                          {2});
+        tensors["input"] = input;
+        auto output = std::make_shared<feather::Tensor>(std::vector<int64_t>{2});
+        output->set_data_type(expected_type);
+        output->set_quantization({true, 0.25f});
+        tensors["output"] = output;
+
+        auto node = MakeNode("cast_to_fp8", "Cast", {"input"}, "output");
+        node.attributes["to"] = onnx_type;
+
+        feather::KernelDeviceScope scope(feather::DeviceType::COMMON);
+        auto op = feather::OperatorRegistry::instance().Create(node, tensors);
+        ASSERT_NE(op, nullptr) << "ONNX type=" << onnx_type;
+        ASSERT_EQ(op->Run(), 0) << "ONNX type=" << onnx_type;
+        ASSERT_EQ(op->outputs().front()->data_type(), expected_type);
+        EXPECT_FLOAT_EQ(op->outputs().front()->quantization_scale(), 0.25f);
+    }
 }

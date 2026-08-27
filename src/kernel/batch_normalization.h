@@ -8,6 +8,7 @@ namespace feather {
 namespace kernel {
 
 void EnsureCommonBatchNormalizationKernelsRegistered();
+void EnsureX86BatchNormalizationKernelsRegistered();
 void EnsureBatchNormalizationKernelsRegistered();
 
 template <DeviceType dev, DataType dtype>

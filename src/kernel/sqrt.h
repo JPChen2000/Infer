@@ -8,6 +8,7 @@ namespace feather {
 namespace kernel {
 
 void EnsureSqrtKernelsRegistered();
+void EnsureX86SqrtKernelsRegistered();
 
 template <DeviceType dev, DataType dtype>
 class SqrtKernel : public KernelBase {

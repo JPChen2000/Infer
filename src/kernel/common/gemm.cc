@@ -32,6 +32,10 @@ bool g_gemm_kernels_registered = []() {
                                                 []() { return std::make_unique<GemmKernel<DeviceType::COMMON, DataType::FP16>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::BF16, "Gemm",
                                                 []() { return std::make_unique<GemmKernel<DeviceType::COMMON, DataType::BF16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP8E4M3, "Gemm",
+                                                []() { return std::make_unique<GemmKernel<DeviceType::COMMON, DataType::FP8E4M3>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP8E5M2, "Gemm",
+                                                []() { return std::make_unique<GemmKernel<DeviceType::COMMON, DataType::FP8E5M2>>(); });
     return true;
 }();
 
@@ -92,6 +96,23 @@ template <>
 int32_t GemmKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Gemm::BF16");
     return ComputeGemmCommon<DataType::BF16>(static_cast<feather::operators::GemmParam*>(param_));
+}
+
+template <DataType dtype>
+int32_t ComputeCommonFp8Gemm(feather::operators::GemmParam* param) {
+    return ComputeGemmCommon<dtype>(param);
+}
+
+template <>
+int32_t GemmKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() {
+    AutoTimer timer("Common::Gemm::FP8E4M3");
+    return ComputeCommonFp8Gemm<DataType::FP8E4M3>(static_cast<feather::operators::GemmParam*>(param_));
+}
+
+template <>
+int32_t GemmKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() {
+    AutoTimer timer("Common::Gemm::FP8E5M2");
+    return ComputeCommonFp8Gemm<DataType::FP8E5M2>(static_cast<feather::operators::GemmParam*>(param_));
 }
 
 typedef feather::kernel::GemmKernel<DeviceType::COMMON, DataType::FP32> GemmCommonFP32Kernel;

@@ -20,6 +20,12 @@ bool g_cuda_div_kernels_registered = []() {
     dispatcher.registerKernel(DeviceType::CUDA, DataType::BF16, "Div", []() {
         return std::make_unique<DivKernel<DeviceType::CUDA, DataType::BF16>>();
     });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::FP8E4M3, "Div", []() {
+        return std::make_unique<DivKernel<DeviceType::CUDA, DataType::FP8E4M3>>();
+    });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::FP8E5M2, "Div", []() {
+        return std::make_unique<DivKernel<DeviceType::CUDA, DataType::FP8E5M2>>();
+    });
     return true;
 }();
 
@@ -41,6 +47,21 @@ template <>
 int32_t DivKernel<DeviceType::CUDA, DataType::BF16>::compute() {
     return cuda_detail::RunBinary<DataType::BF16, 3>(static_cast<feather::operators::BinaryParam*>(param_),
                                                      "CUDA::Div::BF16");
+}
+
+template <DataType dtype>
+int32_t ComputeCudaFp8Div(feather::operators::BinaryParam* param) {
+    return cuda_detail::RunBinary<dtype, 3>(param, "CUDA::Div::FP8");
+}
+
+template <>
+int32_t DivKernel<DeviceType::CUDA, DataType::FP8E4M3>::compute() {
+    return ComputeCudaFp8Div<DataType::FP8E4M3>(static_cast<feather::operators::BinaryParam*>(param_));
+}
+
+template <>
+int32_t DivKernel<DeviceType::CUDA, DataType::FP8E5M2>::compute() {
+    return ComputeCudaFp8Div<DataType::FP8E5M2>(static_cast<feather::operators::BinaryParam*>(param_));
 }
 
 void EnsureCudaDivKernelsRegistered() { (void)g_cuda_div_kernels_registered; }

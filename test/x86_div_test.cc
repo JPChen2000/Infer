@@ -1,9 +1,18 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <vector>
 
 #include "core/kernel.h"
 #include "src/kernel/div.h"
+#if defined(__GNUC__)
+#pragma GCC push_options
+#pragma GCC target("avx2")
+#endif
+#include "src/kernel/x86/elementwise.h"
+#if defined(__GNUC__)
+#pragma GCC pop_options
+#endif
 #include "src/operator/params.h"
 
 namespace {
@@ -48,6 +57,34 @@ TEST(x86_div_test, Fp32LastDimensionScalarBroadcastUsesX86Kernel) {
                             lhs->data<float>()[row * 8 + col] / rhs->data<float>()[row]);
         }
     }
+}
+
+#if defined(__GNUC__)
+__attribute__((target("avx2")))
+#endif
+void RunFp32SameShapeVectorDivisionTest() {
+    auto lhs = std::make_shared<Tensor>();
+    lhs->Assign<float>({8.0f, 12.0f, 18.0f, 25.0f, 32.0f, 45.0f, 63.0f, 80.0f}, {2, 4});
+    auto rhs = std::make_shared<Tensor>();
+    rhs->Assign<float>({2.0f, 3.0f, 6.0f, 5.0f, 4.0f, 9.0f, 7.0f, 8.0f}, {2, 4});
+    auto out = std::make_shared<Tensor>(std::vector<int64_t>{2, 4});
+    out->mutable_data<float>();
+
+    BinaryParam param;
+    param.lhs = lhs;
+    param.rhs = rhs;
+    param.out = out;
+    ASSERT_TRUE(feather::kernel::x86::elementwise_detail::TryComputeLastDimensionBroadcastFp32<
+                 feather::kernel::x86::elementwise_detail::BinaryOperation::kDiv>(&param));
+
+    const std::vector<float> expected = {4.0f, 4.0f, 3.0f, 5.0f, 8.0f, 5.0f, 9.0f, 10.0f};
+    for (size_t index = 0; index < expected.size(); ++index) {
+        EXPECT_FLOAT_EQ(out->data<float>()[index], expected[index]);
+    }
+}
+
+TEST(x86_div_test, Fp32SameShapeUsesVectorElementwisePath) {
+    RunFp32SameShapeVectorDivisionTest();
 }
 
 }  // namespace

@@ -3,6 +3,8 @@
 
 #include <cuda_runtime.h>
 
+#include <cmath>
+#include <limits>
 #include <vector>
 
 #include "src/kernel/cuda/kernel_io.cuh"
@@ -15,12 +17,13 @@ namespace kernel {
 namespace cuda_detail {
 
 template <typename T, int Op>
-__global__ void UnaryKernelCuda(const T* input, T* output, int64_t numel, float exponent) {
+__global__ void UnaryKernelCuda(const T* input, T* output, int64_t numel, float exponent, float input_scale,
+                                float output_scale) {
     const int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (idx >= numel) {
         return;
     }
-    const float x = ReadDevice(input, idx);
+    const float x = ReadDevice(input, idx, input_scale);
     float y = x;
     if constexpr (Op == 0) {
         y = x > 0.0f ? x : 0.0f;
@@ -47,12 +50,13 @@ __global__ void UnaryKernelCuda(const T* input, T* output, int64_t numel, float 
     } else if constexpr (Op == 11) {
         y = fmaxf(x, 0.0f) + log1pf(expf(-fabsf(x)));
     }
-    WriteDevice(output, idx, y);
+    WriteDevice(output, idx, y, output_scale);
 }
 
 template <typename T, int Op>
 __global__ void BinaryBroadcastKernelCuda(const T* lhs, const T* rhs, T* out, int64_t numel, CudaShape out_shape,
-                                          CudaShape lhs_shape, CudaShape rhs_shape) {
+                                          CudaShape lhs_shape, CudaShape rhs_shape, float lhs_scale, float rhs_scale,
+                                          float out_scale) {
     const int64_t linear = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (linear >= numel) {
         return;
@@ -74,8 +78,8 @@ __global__ void BinaryBroadcastKernelCuda(const T* lhs, const T* rhs, T* out, in
             rhs_offset += (rhs_shape.dims[rhs_axis] == 1 ? 0 : coord) * rhs_shape.strides[rhs_axis];
         }
     }
-    const float a = ReadDevice(lhs, lhs_offset);
-    const float b = ReadDevice(rhs, rhs_offset);
+    const float a = ReadDevice(lhs, lhs_offset, lhs_scale);
+    const float b = ReadDevice(rhs, rhs_offset, rhs_scale);
     float result = a;
     if constexpr (Op == 0) {
         result = a + b;
@@ -86,24 +90,28 @@ __global__ void BinaryBroadcastKernelCuda(const T* lhs, const T* rhs, T* out, in
     } else if constexpr (Op == 3) {
         result = a / b;
     }
-    WriteDevice(out, linear, result);
+    WriteDevice(out, linear, result, out_scale);
 }
 
 template <DataType dtype, int Op>
 int RunUnary(feather::operators::UnaryParam* param, const char* timer_name, float exponent = 1.0f) {
     AutoTimer timer(timer_name);
     using T = StorageT<dtype>;
-    if (param == nullptr || param->input == nullptr || param->out == nullptr) {
+    if (param == nullptr || !IsTensorReady<dtype>(param->input.get()) ||
+        !IsOutputReady<dtype>(param->out.get(), &param->input->dims().data()) ||
+        !std::isfinite(exponent)) {
         return -1;
     }
     DeviceBuffer<T> input;
     DeviceBuffer<T> output;
     const int64_t numel = param->input->numel();
+    if (numel <= 0) return -1;
     if (CopyTensorToDevice(param->input.get(), &input) != 0 || AllocateTensorOnDevice(param->out.get(), &output) != 0) {
         return -1;
     }
     UnaryKernelCuda<T, Op><<<static_cast<int>(DivUp(numel, kCudaThreads)), kCudaThreads, 0, InferenceStream()>>>(
-        input.get(), output.get(), numel, exponent);
+        input.get(), output.get(), numel, exponent, param->input->quantization_scale(),
+        param->out->quantization_scale());
     if (CudaCheck(cudaGetLastError()) != 0) {
         return -1;
     }
@@ -114,10 +122,8 @@ template <DataType dtype>
 int RunPow(feather::operators::PowParam* param, const char* timer_name) {
     AutoTimer timer(timer_name);
     using T = StorageT<dtype>;
-    if (param == nullptr || param->input == nullptr || param->out == nullptr) {
-        return -1;
-    }
-    if (param->input->data_type() != dtype || param->out->data_type() != dtype) {
+    if (param == nullptr || !IsTensorReady<dtype>(param->input.get()) ||
+        !IsOutputReady<dtype>(param->out.get(), &param->input->dims().data())) {
         return -1;
     }
     float exponent = param->exponent;
@@ -130,14 +136,17 @@ int RunPow(feather::operators::PowParam* param, const char* timer_name) {
             return -1;
         }
     }
+    if (!std::isfinite(exponent)) return -1;
     DeviceBuffer<T> input;
     DeviceBuffer<T> output;
     const int64_t numel = param->input->numel();
+    if (numel <= 0) return -1;
     if (CopyTensorToDevice(param->input.get(), &input) != 0 || AllocateTensorOnDevice(param->out.get(), &output) != 0) {
         return -1;
     }
     UnaryKernelCuda<T, 2><<<static_cast<int>(DivUp(numel, kCudaThreads)), kCudaThreads, 0, InferenceStream()>>>(
-        input.get(), output.get(), numel, exponent);
+        input.get(), output.get(), numel, exponent, param->input->quantization_scale(),
+        param->out->quantization_scale());
     if (CudaCheck(cudaGetLastError()) != 0) {
         return -1;
     }
@@ -148,17 +157,20 @@ template <DataType dtype, int Op>
 int RunUnaryElementwise(feather::operators::UnaryParam* param, const char* timer_name) {
     AutoTimer timer(timer_name);
     using T = StorageT<dtype>;
-    if (param == nullptr || param->input == nullptr || param->out == nullptr) {
+    if (param == nullptr || !IsTensorReady<dtype>(param->input.get()) ||
+        !IsOutputReady<dtype>(param->out.get(), &param->input->dims().data())) {
         return -1;
     }
     DeviceBuffer<T> input;
     DeviceBuffer<T> output;
     const int64_t numel = param->input->numel();
+    if (numel <= 0) return -1;
     if (CopyTensorToDevice(param->input.get(), &input) != 0 || AllocateTensorOnDevice(param->out.get(), &output) != 0) {
         return -1;
     }
     UnaryKernelCuda<T, Op><<<static_cast<int>(DivUp(numel, kCudaThreads)), kCudaThreads, 0, InferenceStream()>>>(
-        input.get(), output.get(), numel, 1.0f);
+        input.get(), output.get(), numel, 1.0f, param->input->quantization_scale(),
+        param->out->quantization_scale());
     if (CudaCheck(cudaGetLastError()) != 0) {
         return -1;
     }
@@ -169,13 +181,15 @@ template <DataType dtype, int Op>
 int RunBinary(feather::operators::BinaryParam* param, const char* timer_name) {
     AutoTimer timer(timer_name);
     using T = StorageT<dtype>;
-    if (param == nullptr || param->lhs == nullptr || param->rhs == nullptr || param->out == nullptr) {
+    if (param == nullptr || !IsTensorReady<dtype>(param->lhs.get()) ||
+        !IsTensorReady<dtype>(param->rhs.get())) {
         return -1;
     }
     const auto& lhs_dims = param->lhs->dims().data();
     const auto& rhs_dims = param->rhs->dims().data();
     std::vector<int64_t> out_dims;
-    if (!InferBroadcastShape(lhs_dims, rhs_dims, &out_dims) || out_dims.size() > kMaxCudaRank) {
+    if (!InferBroadcastShape(lhs_dims, rhs_dims, &out_dims) || out_dims.size() > kMaxCudaRank ||
+        !IsOutputReady<dtype>(param->out.get(), &out_dims)) {
         return -1;
     }
     CudaShape out_shape;
@@ -189,12 +203,14 @@ int RunBinary(feather::operators::BinaryParam* param, const char* timer_name) {
     DeviceBuffer<T> rhs;
     DeviceBuffer<T> out;
     const int64_t numel = param->out->numel();
+    if (numel <= 0) return -1;
     if (CopyTensorToDevice(param->lhs.get(), &lhs) != 0 || CopyTensorToDevice(param->rhs.get(), &rhs) != 0 ||
         AllocateTensorOnDevice(param->out.get(), &out) != 0) {
         return -1;
     }
     BinaryBroadcastKernelCuda<T, Op><<<static_cast<int>(DivUp(numel, kCudaThreads)), kCudaThreads, 0, InferenceStream()>>>(
-        lhs.get(), rhs.get(), out.get(), numel, out_shape, lhs_shape, rhs_shape);
+        lhs.get(), rhs.get(), out.get(), numel, out_shape, lhs_shape, rhs_shape, param->lhs->quantization_scale(),
+        param->rhs->quantization_scale(), param->out->quantization_scale());
     if (CudaCheck(cudaGetLastError()) != 0) {
         return -1;
     }

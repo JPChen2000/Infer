@@ -50,6 +50,7 @@ void EnsureCudaQwenRmsNormKernelsRegistered();
 void EnsureCudaQwenDepthwiseConvStateKernelsRegistered();
 void EnsureCudaQwenGatedDeltaKernelsRegistered();
 void EnsureCudaQwenGemmArgmaxKernelsRegistered();
+void EnsureCudaFp8KernelsRegistered();
 
 void EnsureCudaKernelsRegistered() {
     EnsureCudaAddKernelsRegistered();
@@ -99,6 +100,7 @@ void EnsureCudaKernelsRegistered() {
     EnsureCudaQwenDepthwiseConvStateKernelsRegistered();
     EnsureCudaQwenGatedDeltaKernelsRegistered();
     EnsureCudaQwenGemmArgmaxKernelsRegistered();
+    EnsureCudaFp8KernelsRegistered();
 }
 
 }  // namespace kernel

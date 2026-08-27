@@ -1,8 +1,10 @@
 #include "src/operator/qwen_gemm_argmax_op.h"
 
+#include <cmath>
 #include <utility>
 
 #include "core/operator_registry.h"
+#include "src/operator/tensor_op_utils.h"
 
 namespace feather {
 namespace operators {
@@ -16,6 +18,15 @@ std::shared_ptr<OpBase> BuildQwenGemmArgmaxOp(const model::NodeDesc& node, Opera
     param.a = tensors[node.inputs[0]];
     param.b = tensors[node.inputs[1]];
     param.out = tensors[node.outputs[0]];
+    param.output_scale = 1.0f;
+    const auto scale_it = node.attributes.find("output_scale");
+    if (scale_it != node.attributes.end()) {
+        const auto* scale = std::get_if<float>(&scale_it->second);
+        if (scale == nullptr) {
+            return nullptr;
+        }
+        param.output_scale = *scale;
+    }
     if (param.a == nullptr || param.b == nullptr || param.out == nullptr) {
         return nullptr;
     }
@@ -24,7 +35,8 @@ std::shared_ptr<OpBase> BuildQwenGemmArgmaxOp(const model::NodeDesc& node, Opera
         return nullptr;
     }
     kernel::EnsureQwenGemmArgmaxKernelsRegistered();
-    auto kernel = CreateKernelForTensor(context.device, "QwenGemmArgmax", {param.a, param.b, param.out}, DataType::BF16);
+    const DataType execution_dtype = param.a->data_type();
+    auto kernel = CreateKernelForTensor(context.device, "QwenGemmArgmax", {param.a, param.b}, execution_dtype);
     if (kernel == nullptr) {
         return nullptr;
     }
@@ -49,9 +61,12 @@ QwenGemmArgmaxOp::QwenGemmArgmaxOp(std::string name, const QwenGemmArgmaxParam& 
 void QwenGemmArgmaxOp::SyncIO() { SetInputs({param_.a, param_.b}); SetOutputs({param_.out}); }
 
 int32_t QwenGemmArgmaxOp::CheckShape() const {
+    const auto dtype = param_.a == nullptr ? DataType::UNKNOWN : param_.a->data_type();
+    const bool supported_dtype = dtype == DataType::BF16 || dtype == DataType::FP8E4M3 || dtype == DataType::FP8E5M2;
     if (param_.a == nullptr || param_.b == nullptr || param_.out == nullptr || !param_.a->IsInitialized() ||
-        !param_.b->IsInitialized() || param_.a->data_type() != DataType::BF16 ||
-        param_.b->data_type() != DataType::BF16 || param_.a->dims().size() < 2 || param_.b->dims().size() != 2 ||
+        !param_.b->IsInitialized() || !supported_dtype || param_.b->data_type() != dtype ||
+        !std::isfinite(param_.output_scale) || param_.output_scale <= 0.0f || param_.a->dims().size() < 2 ||
+        param_.b->dims().size() != 2 ||
         param_.a->dims()[param_.a->dims().size() - 1] != param_.b->dims()[1] ||
         param_.a->numel() != param_.a->dims()[param_.a->dims().size() - 1] ||
         param_.b->dims()[0] <= 0) {

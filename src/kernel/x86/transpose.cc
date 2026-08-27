@@ -114,6 +114,16 @@ bool IsLastTwoAxesTranspose(const feather::operators::TransposeParam* param) {
            param->perm[rank - 1] == static_cast<int64_t>(rank - 2);
 }
 
+bool IsVitMiddleAxesTranspose(const feather::operators::TransposeParam* param) {
+    return param != nullptr && param->input != nullptr && param->out != nullptr &&
+           param->input->dims().size() == 4 && param->perm == std::vector<int64_t>({0, 2, 1, 3});
+}
+
+bool IsVitHeadLastTranspose(const feather::operators::TransposeParam* param) {
+    return param != nullptr && param->input != nullptr && param->out != nullptr &&
+           param->input->dims().size() == 4 && param->perm == std::vector<int64_t>({0, 2, 3, 1});
+}
+
 bool IsYolov5HeadTranspose(const feather::operators::TransposeParam* param) {
     if (param == nullptr || param->input == nullptr || param->out == nullptr) {
         return false;
@@ -216,6 +226,36 @@ void Transpose2DTiled(const T* input, T* output, int64_t rows, int64_t cols) {
     }
 }
 
+template <typename T>
+void TransposeVitMiddleAxes(const T* input, T* output, int64_t batch, int64_t first, int64_t second,
+                            int64_t inner) {
+    for (int64_t n = 0; n < batch; ++n) {
+        for (int64_t second_index = 0; second_index < second; ++second_index) {
+            for (int64_t first_index = 0; first_index < first; ++first_index) {
+                const T* input_row = input + ((n * first + first_index) * second + second_index) * inner;
+                T* output_row = output + ((n * second + second_index) * first + first_index) * inner;
+                std::memcpy(output_row, input_row, static_cast<size_t>(inner) * sizeof(T));
+            }
+        }
+    }
+}
+
+template <typename T>
+void TransposeVitHeadLast(const T* input, T* output, int64_t batch, int64_t first, int64_t second,
+                          int64_t inner) {
+    for (int64_t n = 0; n < batch; ++n) {
+        for (int64_t second_index = 0; second_index < second; ++second_index) {
+            for (int64_t inner_index = 0; inner_index < inner; ++inner_index) {
+                T* output_row = output + ((n * second + second_index) * inner + inner_index) * first;
+                for (int64_t first_index = 0; first_index < first; ++first_index) {
+                    output_row[first_index] = input[((n * first + first_index) * second + second_index) * inner +
+                                                    inner_index];
+                }
+            }
+        }
+    }
+}
+
 int32_t ComputeTransposeYolov5HeadFP16(feather::operators::TransposeParam* param) {
     if (!IsYolov5HeadTranspose(param) || param->input->data_type() != DataType::FP16) {
         return -1;
@@ -292,6 +332,18 @@ int32_t ComputeTransposeRaw(feather::operators::TransposeParam* param, DataType 
     }
     const T* input = param->input->data<T>();
     T* output = static_cast<T*>(param->out->raw_data());
+
+    if (IsVitMiddleAxesTranspose(param)) {
+        const auto& dims = in_dims;
+        TransposeVitMiddleAxes(input, output, dims[0], dims[1], dims[2], dims[3]);
+        return 0;
+    }
+
+    if (IsVitHeadLastTranspose(param)) {
+        const auto& dims = in_dims;
+        TransposeVitHeadLast(input, output, dims[0], dims[1], dims[2], dims[3]);
+        return 0;
+    }
 
     if (Is2DTranspose(param)) {
         const int64_t rows = in_dims[0];

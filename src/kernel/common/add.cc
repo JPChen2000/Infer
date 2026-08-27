@@ -1,6 +1,7 @@
 #include "src/kernel/add.h"
 
 #include "src/kernel/common/kernel_io.h"
+#include "src/kernel/fp8_host.h"
 #include "util/timer.h"
 
 namespace feather {
@@ -52,6 +53,10 @@ bool g_add_kernels_registered = []() {
                                                 []() { return std::make_unique<AddKernel<DeviceType::COMMON, DataType::FP16>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::BF16, "Add",
                                                 []() { return std::make_unique<AddKernel<DeviceType::COMMON, DataType::BF16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP8E4M3, "Add",
+                                                []() { return std::make_unique<AddKernel<DeviceType::COMMON, DataType::FP8E4M3>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP8E5M2, "Add",
+                                                []() { return std::make_unique<AddKernel<DeviceType::COMMON, DataType::FP8E5M2>>(); });
     return true;
 }();
 
@@ -107,6 +112,23 @@ int32_t AddKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Add::BF16");
     auto* param = static_cast<feather::operators::BinaryParam*>(param_);
     return ComputeAddKernel<DataType::BF16>(param);
+}
+
+template <DataType dtype>
+int32_t ComputeAddFp8(feather::operators::BinaryParam* param) {
+    return fp8_host::Binary<dtype, fp8_host::BinaryOp::kAdd>(param);
+}
+
+template <>
+int32_t AddKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() {
+    AutoTimer timer("Common::Add::FP8E4M3");
+    return ComputeAddFp8<DataType::FP8E4M3>(static_cast<feather::operators::BinaryParam*>(param_));
+}
+
+template <>
+int32_t AddKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() {
+    AutoTimer timer("Common::Add::FP8E5M2");
+    return ComputeAddFp8<DataType::FP8E5M2>(static_cast<feather::operators::BinaryParam*>(param_));
 }
 
 typedef feather::kernel::AddKernel<DeviceType::COMMON, DataType::FP32> AddCommonFP32Kernel;

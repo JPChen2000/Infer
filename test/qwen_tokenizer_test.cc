@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -9,19 +11,89 @@
 
 namespace {
 
-const std::filesystem::path kTokenizerDir = "models/llm/qwen3.5-0.8b";
+const std::filesystem::path kTokenizerDir =
+    std::filesystem::path(__FILE__).parent_path().parent_path() / "models" / "llm" / "qwen3.5-0.8b";
 
-void SkipWithoutTokenizerAssets() {
-    if (!std::filesystem::is_regular_file(kTokenizerDir / "vocab.json") ||
-        !std::filesystem::is_regular_file(kTokenizerDir / "merges.txt")) {
-        GTEST_SKIP() << "Qwen tokenizer assets are not present";
-    }
+bool HasTokenizerAssets(const std::filesystem::path& tokenizer_dir) {
+    return std::filesystem::is_regular_file(tokenizer_dir / "vocab.json") &&
+           std::filesystem::is_regular_file(tokenizer_dir / "merges.txt") &&
+           std::filesystem::is_regular_file(tokenizer_dir / "tokenizer.json");
 }
+
+class TokenizerAssetFixture {
+   public:
+    TokenizerAssetFixture()
+        : directory_(std::filesystem::temp_directory_path() /
+                     ("feather_qwen_tokenizer_assets_" +
+                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {}
+
+    ~TokenizerAssetFixture() {
+        std::error_code error;
+        std::filesystem::remove_all(directory_, error);
+    }
+
+    bool CreateFile(const std::string& name) const {
+        std::error_code error;
+        std::filesystem::create_directories(directory_, error);
+        if (error) {
+            return false;
+        }
+        std::ofstream output(directory_ / name, std::ios::binary | std::ios::trunc);
+        return output.good();
+    }
+
+    const std::filesystem::path& directory() const { return directory_; }
+
+   private:
+    std::filesystem::path directory_;
+};
+
+class ScopedWorkingDirectory {
+   public:
+    explicit ScopedWorkingDirectory(const std::filesystem::path& directory) : original_(std::filesystem::current_path()) {
+        std::error_code error;
+        std::filesystem::current_path(directory, error);
+        changed_ = !error;
+    }
+
+    ~ScopedWorkingDirectory() {
+        std::error_code error;
+        std::filesystem::current_path(original_, error);
+    }
+
+    bool changed() const { return changed_; }
+
+   private:
+    std::filesystem::path original_;
+    bool changed_{};
+};
 
 }  // namespace
 
+TEST(qwen_tokenizer_test, RejectsIncompleteTokenizerAssetSet) {
+    TokenizerAssetFixture fixture;
+    ASSERT_TRUE(fixture.CreateFile("vocab.json"));
+    ASSERT_TRUE(fixture.CreateFile("merges.txt"));
+
+    EXPECT_FALSE(HasTokenizerAssets(fixture.directory()));
+}
+
+TEST(qwen_tokenizer_test, ResolvesAssetsOutsideRepositoryWorkingDirectory) {
+    const auto source_tokenizer_dir =
+        std::filesystem::path(__FILE__).parent_path().parent_path() / "models" / "llm" / "qwen3.5-0.8b";
+    if (!HasTokenizerAssets(source_tokenizer_dir)) {
+        GTEST_SKIP() << "Qwen tokenizer assets are not present";
+    }
+
+    ScopedWorkingDirectory working_directory(std::filesystem::path(__FILE__).parent_path());
+    ASSERT_TRUE(working_directory.changed());
+    EXPECT_TRUE(HasTokenizerAssets(kTokenizerDir));
+}
+
 TEST(qwen_tokenizer_test, EncodesAndDecodesRealQwenBpeText) {
-    SkipWithoutTokenizerAssets();
+    if (!HasTokenizerAssets(kTokenizerDir)) {
+        GTEST_SKIP() << "Qwen tokenizer assets are not present";
+    }
 
     feather::demo::QwenTokenizer tokenizer;
     ASSERT_EQ(tokenizer.Load(kTokenizerDir.string()), 0) << tokenizer.LastError();
@@ -32,7 +104,9 @@ TEST(qwen_tokenizer_test, EncodesAndDecodesRealQwenBpeText) {
 }
 
 TEST(qwen_tokenizer_test, PreservesSpecialTokensAndChatFormatting) {
-    SkipWithoutTokenizerAssets();
+    if (!HasTokenizerAssets(kTokenizerDir)) {
+        GTEST_SKIP() << "Qwen tokenizer assets are not present";
+    }
 
     feather::demo::QwenTokenizer tokenizer;
     ASSERT_EQ(tokenizer.Load(kTokenizerDir.string()), 0) << tokenizer.LastError();
@@ -54,7 +128,9 @@ TEST(qwen_tokenizer_test, PreservesSpecialTokensAndChatFormatting) {
 }
 
 TEST(qwen_tokenizer_test, MatchesOfficialTokenizerForChineseChatPrompt) {
-    SkipWithoutTokenizerAssets();
+    if (!HasTokenizerAssets(kTokenizerDir)) {
+        GTEST_SKIP() << "Qwen tokenizer assets are not present";
+    }
 
     feather::demo::QwenTokenizer tokenizer;
     ASSERT_EQ(tokenizer.Load(kTokenizerDir.string()), 0) << tokenizer.LastError();

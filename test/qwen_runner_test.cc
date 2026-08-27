@@ -18,6 +18,10 @@
 
 namespace {
 
+std::filesystem::path QwenModelDirectory() {
+    return std::filesystem::path(__FILE__).parent_path().parent_path() / "models" / "llm" / "qwen3.5-0.8b";
+}
+
 feather::model::ValueDesc MakeValue(const std::string& name, const std::vector<int64_t>& dims,
                                     feather::DataType data_type, bool constant = false) {
     feather::model::ValueDesc value;
@@ -323,7 +327,7 @@ TEST(qwen_runner_test, SelectsFirstFiniteMaximumFromBf16Logits) {
 }
 
 TEST(qwen_runner_test, LoadsRealDirectSafetensorsExportWithExplicitStateBindings) {
-    const auto model_path = std::filesystem::path("models/llm/qwen3.5-0.8b/qwen3.5-0.8b_decode_bf16_ctx8.fth");
+    const auto model_path = QwenModelDirectory() / "qwen3.5-0.8b_decode_bf16_ctx8.fth";
     if (!std::filesystem::is_regular_file(model_path)) {
         GTEST_SKIP() << "direct Qwen FTH asset is not present";
     }
@@ -335,7 +339,7 @@ TEST(qwen_runner_test, LoadsRealDirectSafetensorsExportWithExplicitStateBindings
 }
 
 TEST(qwen_runner_test, LoadsPersistentContext128DirectSafetensorsExport) {
-    const auto model_path = std::filesystem::path("models/llm/qwen3.5-0.8b/qwen3.5-0.8b_decode_bf16_ctx128.fth");
+    const auto model_path = QwenModelDirectory() / "qwen3.5-0.8b_decode_bf16_ctx128.fth";
     if (!std::filesystem::is_regular_file(model_path)) {
         GTEST_SKIP() << "context-128 Qwen FTH asset is not present";
     }
@@ -346,8 +350,7 @@ TEST(qwen_runner_test, LoadsPersistentContext128DirectSafetensorsExport) {
 }
 
 TEST(qwen_runner_test, DefaultExportMatchesReferenceFirstDecodeToken) {
-    const auto model_path =
-        std::filesystem::path("models/llm/qwen3.5-0.8b/qwen3.5-0.8b_decode_bf16_ctx8.fth");
+    const auto model_path = QwenModelDirectory() / "qwen3.5-0.8b_decode_bf16_ctx8.fth";
     if (!std::filesystem::is_regular_file(model_path)) {
         GTEST_SKIP() << "default Qwen FTH asset is not present";
     }
@@ -364,8 +367,7 @@ TEST(qwen_runner_test, DefaultExportMatchesReferenceFirstDecodeToken) {
 }
 
 TEST(qwen_runner_test, X86BackendMatchesCommonForReferenceFirstDecodeToken) {
-    const auto model_path =
-        std::filesystem::path("models/llm/qwen3.5-0.8b/qwen3.5-0.8b_decode_bf16_ctx8.fth");
+    const auto model_path = QwenModelDirectory() / "qwen3.5-0.8b_decode_bf16_ctx8.fth";
     if (!std::filesystem::is_regular_file(model_path)) {
         GTEST_SKIP() << "default Qwen FTH asset is not present";
     }
@@ -385,13 +387,25 @@ TEST(qwen_runner_test, X86BackendMatchesCommonForReferenceFirstDecodeToken) {
     EXPECT_EQ(x86_generated, common_generated);
 }
 
+TEST(qwen_runner_test, X86BackendRunsFp8E4M3Context128) {
+    const auto model_path = QwenModelDirectory() / "qwen3.5-0.8b_decode_fp8e4m3_ctx128.fth";
+    if (!std::filesystem::is_regular_file(model_path)) {
+        GTEST_SKIP() << "FP8 E4M3 Qwen FTH asset is not present";
+    }
+
+    feather::demo::QwenRunner runner;
+    ASSERT_EQ(runner.Load(model_path.string(), feather::demo::QwenBackend::kX86), 0) << runner.LastError();
+    std::vector<int64_t> generated;
+    ASSERT_EQ(runner.Generate({151644}, 1, {}, &generated), 0) << runner.LastError();
+    ASSERT_EQ(generated.size(), 1U);
+}
+
 #ifdef FEATHER_WITH_CUDA
 TEST(qwen_runner_test, CudaBackendMatchesCommonForReferenceFirstDecodeToken) {
     if (!HasCudaDevice()) {
         GTEST_SKIP() << "CUDA device is not available";
     }
-    const auto model_path =
-        std::filesystem::path("models/llm/qwen3.5-0.8b/qwen3.5-0.8b_decode_bf16_ctx8.fth");
+    const auto model_path = QwenModelDirectory() / "qwen3.5-0.8b_decode_bf16_ctx8.fth";
     if (!std::filesystem::is_regular_file(model_path)) {
         GTEST_SKIP() << "default Qwen FTH asset is not present";
     }

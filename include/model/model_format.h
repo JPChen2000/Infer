@@ -20,6 +20,7 @@ struct TensorDesc {
     std::vector<int64_t> dims;
     DataType data_type{DataType::UNKNOWN};
     DataLayout layout{DataLayout::ND};
+    QuantizationParams quantization{};
 };
 
 struct WeightLocation {

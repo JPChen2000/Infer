@@ -126,7 +126,10 @@ REGISTER_KERNEL(COMMON, FP16, BatchNormalization, BatchNormalizationCommonFP16Ke
 
 void EnsureCommonBatchNormalizationKernelsRegistered() { (void)g_batch_norm_kernels_registered; }
 
-void EnsureBatchNormalizationKernelsRegistered() { EnsureCommonBatchNormalizationKernelsRegistered(); }
+void EnsureBatchNormalizationKernelsRegistered() {
+    EnsureCommonBatchNormalizationKernelsRegistered();
+    EnsureX86BatchNormalizationKernelsRegistered();
+}
 
 }  // namespace kernel
 }  // namespace feather

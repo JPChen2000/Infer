@@ -137,6 +137,36 @@ TEST(add_mul_op_test, MulBroadcastsColumnVectorOnX86) {
     }
 }
 
+TEST(add_mul_op_test, ScalarBroadcastsOnX86Fp32) {
+    auto lhs = std::make_shared<Tensor>();
+    lhs->Assign<float>({1, 2, 3, 4, 5, 6}, {2, 3});
+    auto rhs = std::make_shared<Tensor>();
+    rhs->Assign<float>({2.0f}, {});
+    auto out = std::make_shared<Tensor>(std::vector<int64_t>{2, 3});
+
+    BinaryParam add_param;
+    add_param.lhs = lhs;
+    add_param.rhs = rhs;
+    add_param.out = out;
+    auto add_kernel = KernelDispatcher::instance().create(DeviceType::X86, DataType::FP32, "Add");
+    ASSERT_NE(add_kernel, nullptr);
+    add_kernel->SetParam(&add_param);
+    ASSERT_EQ(add_kernel->compute(), 0);
+    EXPECT_EQ(std::vector<float>(out->data<float>(), out->data<float>() + 6),
+              (std::vector<float>{3, 4, 5, 6, 7, 8}));
+
+    BinaryParam mul_param;
+    mul_param.lhs = lhs;
+    mul_param.rhs = rhs;
+    mul_param.out = out;
+    auto mul_kernel = KernelDispatcher::instance().create(DeviceType::X86, DataType::FP32, "Mul");
+    ASSERT_NE(mul_kernel, nullptr);
+    mul_kernel->SetParam(&mul_param);
+    ASSERT_EQ(mul_kernel->compute(), 0);
+    EXPECT_EQ(std::vector<float>(out->data<float>(), out->data<float>() + 6),
+              (std::vector<float>{2, 4, 6, 8, 10, 12}));
+}
+
 TEST(add_mul_op_test, AddRunsOnX86FP16) {
     auto lhs = std::make_shared<Tensor>();
     lhs->Assign<uint16_t>({feather::FloatToHalf(1.0f), feather::FloatToHalf(2.0f), feather::FloatToHalf(3.0f),

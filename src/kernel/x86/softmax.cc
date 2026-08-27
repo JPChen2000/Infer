@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <future>
 #include <limits>
 #include <vector>
@@ -211,6 +212,49 @@ int32_t ComputeSoftmaxFallback(feather::operators::SoftmaxParam* param) {
     return 0;
 }
 
+int32_t ComputeSoftmaxFp32X86(feather::operators::SoftmaxParam* param) {
+    if (param == nullptr || param->input == nullptr || param->out == nullptr ||
+        param->input->data_type() != DataType::FP32 ||
+        (param->out->data_type() != DataType::UNKNOWN && param->out->data_type() != DataType::FP32)) {
+        return -1;
+    }
+
+    SoftmaxShape shape;
+    if (!PrepareSoftmaxShape(param, &shape)) {
+        return -1;
+    }
+
+    param->out->set_data_type(DataType::FP32);
+    const float* input = param->input->data<float>();
+    float* output = param->out->mutable_data<float>();
+    const int64_t total_work_items = shape.outer * shape.inner;
+    const int64_t total_scalar_work_items = total_work_items * shape.axis_dim;
+
+    ParallelForSoftmaxWorkItems(total_work_items, total_scalar_work_items, [&](int64_t begin, int64_t end) {
+        std::vector<float> scratch(static_cast<size_t>(shape.axis_dim), 0.0f);
+        for (int64_t work_index = begin; work_index < end; ++work_index) {
+            const int64_t outer_index = work_index / shape.inner;
+            const int64_t inner_index = work_index % shape.inner;
+            const int64_t base = outer_index * shape.axis_dim * shape.inner + inner_index;
+            if (shape.inner == 1) {
+                std::memcpy(scratch.data(), input + base, static_cast<size_t>(shape.axis_dim) * sizeof(float));
+                ComputeExpAndNormalize(scratch.data(), shape.axis_dim);
+                std::memcpy(output + base, scratch.data(), static_cast<size_t>(shape.axis_dim) * sizeof(float));
+                continue;
+            }
+
+            for (int64_t axis_index = 0; axis_index < shape.axis_dim; ++axis_index) {
+                scratch[static_cast<size_t>(axis_index)] = input[base + axis_index * shape.inner];
+            }
+            ComputeExpAndNormalize(scratch.data(), shape.axis_dim);
+            for (int64_t axis_index = 0; axis_index < shape.axis_dim; ++axis_index) {
+                output[base + axis_index * shape.inner] = scratch[static_cast<size_t>(axis_index)];
+            }
+        }
+    });
+    return 0;
+}
+
 int32_t ComputeSoftmaxFp16X86(feather::operators::SoftmaxParam* param) {
     if (param == nullptr || param->input == nullptr || param->out == nullptr) {
         return -1;
@@ -269,7 +313,7 @@ template <>
 int32_t SoftmaxKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::Softmax::FP32");
     auto* param = static_cast<feather::operators::SoftmaxParam*>(param_);
-    return ComputeSoftmaxFallback<DataType::FP32>(param);
+    return ComputeSoftmaxFp32X86(param);
 }
 
 template <>

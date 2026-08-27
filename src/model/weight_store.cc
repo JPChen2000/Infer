@@ -77,6 +77,8 @@ std::shared_ptr<Tensor> WeightStore::CreateTensorView(const TensorDesc& desc, co
     auto tensor = std::make_shared<Tensor>();
     tensor->Resize(desc.dims);
     tensor->set_data_type(desc.data_type);
+    tensor->set_layout(desc.layout);
+    tensor->set_quantization(desc.quantization);
     tensor->ResetBuffer(buffer, byte_size, offset);
     return tensor;
 }

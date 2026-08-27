@@ -13,7 +13,7 @@ namespace model {
 namespace {
 
 constexpr char kMagic[8] = {'F', 'T', 'H', 'M', 'O', 'D', 'L', '\0'};
-constexpr uint32_t kFormatVersion = 1;
+constexpr uint32_t kFormatVersion = 2;
 constexpr uint64_t kWeightAlignment = 64;
 
 struct FileHeader {
@@ -38,6 +38,9 @@ size_t DataTypeSize(DataType dtype) {
         case DataType::FP16:
         case DataType::BF16:
             return 2;
+        case DataType::FP8E4M3:
+        case DataType::FP8E5M2:
+            return 1;
         case DataType::FP32:
         case DataType::INT32:
             return 4;
@@ -234,14 +237,22 @@ bool ReadAttribute(BinaryReader* reader, AttributeValue* attr) {
     }
 }
 
-void WriteTensorDesc(BinaryWriter* writer, const TensorDesc& desc) {
+void WriteTensorDesc(BinaryWriter* writer, const TensorDesc& desc, bool include_quantization) {
     writer->WriteString(desc.name);
     writer->WriteVector(desc.dims);
     writer->WritePod(static_cast<int32_t>(desc.data_type));
     writer->WritePod(static_cast<int32_t>(desc.layout));
+    if (include_quantization) {
+        const uint8_t enabled = desc.quantization.enabled ? 1 : 0;
+        writer->WritePod(enabled);
+        writer->WritePod(desc.quantization.scale);
+        writer->WritePod(static_cast<int32_t>(desc.quantization.granularity));
+        writer->WritePod(desc.quantization.axis);
+        writer->WritePod(desc.quantization.block_size);
+    }
 }
 
-bool ReadTensorDesc(BinaryReader* reader, TensorDesc* desc) {
+bool ReadTensorDesc(BinaryReader* reader, TensorDesc* desc, bool include_quantization) {
     int32_t data_type = 0;
     int32_t layout = 0;
     if (!reader->ReadString(&desc->name) || !reader->ReadVector(&desc->dims) ||
@@ -250,6 +261,18 @@ bool ReadTensorDesc(BinaryReader* reader, TensorDesc* desc) {
     }
     desc->data_type = static_cast<DataType>(data_type);
     desc->layout = static_cast<DataLayout>(layout);
+    if (include_quantization) {
+        uint8_t enabled = 0;
+        float scale = 1.0f;
+        int32_t granularity = 0;
+        if (!reader->ReadPod(&enabled) || !reader->ReadPod(&scale) || !reader->ReadPod(&granularity) ||
+            !reader->ReadPod(&desc->quantization.axis) || !reader->ReadPod(&desc->quantization.block_size)) {
+            return false;
+        }
+        desc->quantization.enabled = enabled != 0;
+        desc->quantization.scale = scale;
+        desc->quantization.granularity = static_cast<QuantizationGranularity>(granularity);
+    }
     return true;
 }
 
@@ -267,16 +290,16 @@ bool ReadWeightLocation(BinaryReader* reader, WeightLocation* location) {
            reader->ReadString(&location->checksum);
 }
 
-void WriteValueDesc(BinaryWriter* writer, const ValueDesc& value) {
-    WriteTensorDesc(writer, value.tensor);
+void WriteValueDesc(BinaryWriter* writer, const ValueDesc& value, bool include_quantization) {
+    WriteTensorDesc(writer, value.tensor, include_quantization);
     uint8_t constant = value.constant ? 1 : 0;
     writer->WritePod(constant);
     WriteWeightLocation(writer, value.weight);
 }
 
-bool ReadValueDesc(BinaryReader* reader, ValueDesc* value) {
+bool ReadValueDesc(BinaryReader* reader, ValueDesc* value, bool include_quantization) {
     uint8_t constant = 0;
-    if (!ReadTensorDesc(reader, &value->tensor) || !reader->ReadPod(&constant) ||
+    if (!ReadTensorDesc(reader, &value->tensor, include_quantization) || !reader->ReadPod(&constant) ||
         !ReadWeightLocation(reader, &value->weight)) {
         return false;
     }
@@ -319,14 +342,14 @@ bool ReadNodeDesc(BinaryReader* reader, NodeDesc* node) {
     return true;
 }
 
-void WriteGraphDesc(BinaryWriter* writer, const GraphDesc& graph) {
+void WriteGraphDesc(BinaryWriter* writer, const GraphDesc& graph, bool include_quantization) {
     writer->WriteString(graph.name);
     WriteStringVector(writer, graph.inputs);
     WriteStringVector(writer, graph.outputs);
     uint64_t value_size = graph.values.size();
     writer->WritePod(value_size);
     for (const auto& value : graph.values) {
-        WriteValueDesc(writer, value);
+        WriteValueDesc(writer, value, include_quantization);
     }
     uint64_t node_size = graph.nodes.size();
     writer->WritePod(node_size);
@@ -335,7 +358,7 @@ void WriteGraphDesc(BinaryWriter* writer, const GraphDesc& graph) {
     }
 }
 
-bool ReadGraphDesc(BinaryReader* reader, GraphDesc* graph) {
+bool ReadGraphDesc(BinaryReader* reader, GraphDesc* graph, bool include_quantization) {
     if (!reader->ReadString(&graph->name) || !ReadStringVector(reader, &graph->inputs) ||
         !ReadStringVector(reader, &graph->outputs)) {
         return false;
@@ -346,7 +369,7 @@ bool ReadGraphDesc(BinaryReader* reader, GraphDesc* graph) {
     }
     graph->values.resize(static_cast<size_t>(value_size));
     for (auto& value : graph->values) {
-        if (!ReadValueDesc(reader, &value)) {
+        if (!ReadValueDesc(reader, &value, include_quantization)) {
             return false;
         }
     }
@@ -363,18 +386,18 @@ bool ReadGraphDesc(BinaryReader* reader, GraphDesc* graph) {
     return true;
 }
 
-std::vector<char> SerializeModel(const ModelDesc& model) {
+std::vector<char> SerializeModel(const ModelDesc& model, bool include_quantization) {
     BinaryWriter writer;
     writer.WriteString(model.name);
     writer.WritePod(model.version);
-    WriteGraphDesc(&writer, model.graph);
+    WriteGraphDesc(&writer, model.graph, include_quantization);
     return writer.data();
 }
 
-bool DeserializeModel(const char* data, size_t size, ModelDesc* model) {
+bool DeserializeModel(const char* data, size_t size, ModelDesc* model, bool include_quantization) {
     BinaryReader reader(data, size);
     return reader.ReadString(&model->name) && reader.ReadPod(&model->version) &&
-           ReadGraphDesc(&reader, &model->graph) && reader.Finished();
+           ReadGraphDesc(&reader, &model->graph, include_quantization) && reader.Finished();
 }
 
 }  // namespace
@@ -384,7 +407,7 @@ bool ModelWriter::Save(const std::string& path, const ModelDesc& model,
     ModelDesc output = model;
     std::vector<char> metadata;
     for (int pass = 0; pass < 4; ++pass) {
-        metadata = SerializeModel(output);
+        metadata = SerializeModel(output, true);
         auto weight_offset = AlignUp(sizeof(FileHeader) + metadata.size(), kWeightAlignment);
 
         for (auto& value : output.graph.values) {
@@ -407,7 +430,7 @@ bool ModelWriter::Save(const std::string& path, const ModelDesc& model,
             weight_offset = AlignUp(weight_offset + actual_size, kWeightAlignment);
         }
 
-        auto updated_metadata = SerializeModel(output);
+        auto updated_metadata = SerializeModel(output, true);
         if (updated_metadata.size() == metadata.size()) {
             metadata = std::move(updated_metadata);
             break;
@@ -454,14 +477,14 @@ bool ModelLoader::Load(const std::string& path) {
     FileHeader header {};
     in.read(reinterpret_cast<char*>(&header), sizeof(header));
     if (!in.good() || std::memcmp(header.magic, kMagic, sizeof(kMagic)) != 0 ||
-        header.version != kFormatVersion ||
+        (header.version != 1 && header.version != kFormatVersion) ||
         header.metadata_size > std::numeric_limits<size_t>::max()) {
         return false;
     }
 
     std::vector<char> metadata(static_cast<size_t>(header.metadata_size));
     in.read(metadata.data(), metadata.size());
-    if (!in.good() || !DeserializeModel(metadata.data(), metadata.size(), &model_)) {
+    if (!in.good() || !DeserializeModel(metadata.data(), metadata.size(), &model_, header.version >= 2)) {
         return false;
     }
 

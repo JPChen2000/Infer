@@ -26,6 +26,10 @@ bool g_matmul_kernels_registered = []() {
                                                 []() { return std::make_unique<MatMulKernel<DeviceType::COMMON, DataType::FP16>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::BF16, "MatMul",
                                                 []() { return std::make_unique<MatMulKernel<DeviceType::COMMON, DataType::BF16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP8E4M3, "MatMul",
+                                                []() { return std::make_unique<MatMulKernel<DeviceType::COMMON, DataType::FP8E4M3>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP8E5M2, "MatMul",
+                                                []() { return std::make_unique<MatMulKernel<DeviceType::COMMON, DataType::FP8E5M2>>(); });
     return true;
 }();
 
@@ -112,6 +116,23 @@ template <>
 int32_t MatMulKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::MatMul::BF16");
     return ComputeMatMulCommon<DataType::BF16>(static_cast<feather::operators::MatMulParam*>(param_));
+}
+
+template <DataType dtype>
+int32_t ComputeCommonFp8MatMul(feather::operators::MatMulParam* param) {
+    return ComputeMatMulCommon<dtype>(param);
+}
+
+template <>
+int32_t MatMulKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() {
+    AutoTimer timer("Common::MatMul::FP8E4M3");
+    return ComputeCommonFp8MatMul<DataType::FP8E4M3>(static_cast<feather::operators::MatMulParam*>(param_));
+}
+
+template <>
+int32_t MatMulKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() {
+    AutoTimer timer("Common::MatMul::FP8E5M2");
+    return ComputeCommonFp8MatMul<DataType::FP8E5M2>(static_cast<feather::operators::MatMulParam*>(param_));
 }
 
 typedef feather::kernel::MatMulKernel<DeviceType::COMMON, DataType::FP32> MatMulCommonFP32Kernel;

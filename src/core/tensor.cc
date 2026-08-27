@@ -1,5 +1,6 @@
 #include <iostream>
 #include <atomic>
+#include <cmath>
 #include "core/tensor.h"
 #include "util/logger.h"
 
@@ -13,6 +14,13 @@ uint64_t NextMutationVersion() {
 }
 
 }  // namespace
+
+void Tensor::set_quantization(const QuantizationParams& quantization) {
+  m_quantization = quantization;
+  if (!(m_quantization.scale > 0.0f) || !std::isfinite(m_quantization.scale)) {
+    m_quantization.scale = 1.0f;
+  }
+}
 
 void Tensor::MarkStorageMutated() {
   if (m_mutation_state == nullptr) {
@@ -31,6 +39,7 @@ void Tensor::ShareDataWith(const Tensor &other) {
   m_dims = other.m_dims;
   m_data_type = other.m_data_type;
   m_layout = other.m_layout;
+  m_quantization = other.m_quantization;
   m_memory_size = other.m_memory_size;
   m_immutable = other.m_immutable;
   m_offset = other.m_offset;

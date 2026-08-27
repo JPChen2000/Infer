@@ -59,7 +59,10 @@ int32_t ErfKernel<DeviceType::COMMON, DataType::BF16>::compute() {
                                                    [](float value) { return std::erf(value); });
 }
 
-void EnsureErfKernelsRegistered() { (void)g_erf_kernels_registered; }
+void EnsureErfKernelsRegistered() {
+    (void)g_erf_kernels_registered;
+    EnsureX86ErfKernelsRegistered();
+}
 
 }  // namespace kernel
 }  // namespace feather

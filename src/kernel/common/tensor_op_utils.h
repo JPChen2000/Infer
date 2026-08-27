@@ -9,6 +9,7 @@
 #include "src/kernel/common/kernel_io.h"
 #include "src/operator/params.h"
 #include "util/bf16.h"
+#include "util/fp8.h"
 
 namespace feather {
 namespace kernel {
@@ -66,6 +67,10 @@ inline bool ReadBool(const Tensor* tensor, int64_t offset) {
             return HalfToFloat(tensor->data<uint16_t>()[offset]) != 0.0f;
         case DataType::BF16:
             return BFloat16ToFloat(tensor->data<BFloat16>()[offset].bits) != 0.0f;
+        case DataType::FP8E4M3:
+            return Fp8E4M3ToFloat(tensor->data<Fp8E4M3>()[offset].bits) * tensor->quantization_scale() != 0.0f;
+        case DataType::FP8E5M2:
+            return Fp8E5M2ToFloat(tensor->data<Fp8E5M2>()[offset].bits) * tensor->quantization_scale() != 0.0f;
         case DataType::FP32:
             return tensor->data<float>()[offset] != 0.0f;
         default:
@@ -84,6 +89,10 @@ inline float ReadFloat(const Tensor* tensor, int64_t offset) {
             return HalfToFloat(tensor->data<uint16_t>()[offset]);
         case DataType::BF16:
             return BFloat16ToFloat(tensor->data<BFloat16>()[offset].bits);
+        case DataType::FP8E4M3:
+            return Fp8E4M3ToFloat(tensor->data<Fp8E4M3>()[offset].bits) * tensor->quantization_scale();
+        case DataType::FP8E5M2:
+            return Fp8E5M2ToFloat(tensor->data<Fp8E5M2>()[offset].bits) * tensor->quantization_scale();
         case DataType::FP32:
             return tensor->data<float>()[offset];
         case DataType::INT32:

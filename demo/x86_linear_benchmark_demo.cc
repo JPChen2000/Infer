@@ -279,8 +279,13 @@ void BenchmarkGemmVectorBiasFp16(benchmark::State& state) {
     state.SetItemsProcessed(state.iterations() * m * n * k);
 }
 
-BENCHMARK(BenchmarkMatMul)->Args({64, 64, 64})->Args({128, 128, 128})->Args({256, 256, 256})->Unit(
-    benchmark::kMicrosecond);
+BENCHMARK(BenchmarkMatMul)
+    ->Args({64, 64, 64})
+    ->Args({128, 128, 128})
+    ->Args({256, 256, 256})
+    ->Args({197, 768, 3072})
+    ->Args({197, 3072, 768})
+    ->Unit(benchmark::kMicrosecond);
 BENCHMARK(BenchmarkGemmVectorBias)
     ->Args({64, 64, 64})
     ->Args({128, 128, 128})

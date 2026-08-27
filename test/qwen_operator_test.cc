@@ -25,6 +25,7 @@
 #include "src/operator/sin_op.h"
 #include "src/operator/softplus_op.h"
 #include "util/bf16.h"
+#include "util/fp8.h"
 #include "util/fp16.h"
 
 namespace {
@@ -413,6 +414,87 @@ TEST(qwen_operator_test, X86QwenDepthwiseConvStateMatchesConvAndStateShift) {
         EXPECT_EQ(next_state_data[channel * 3 + 1].bits, state_values[static_cast<size_t>(channel * 3 + 2)].bits)
             << "state channel=" << channel << " offset=1";
         EXPECT_EQ(next_state_data[channel * 3 + 2].bits, mixed_values[static_cast<size_t>(channel)].bits)
+            << "state channel=" << channel << " offset=2";
+    }
+}
+
+TEST(qwen_operator_test, X86QwenFp8DepthwiseConvStateMatchesQuantizedConvAndStateShift) {
+    constexpr int64_t channels = 19;
+    constexpr float input_scale = 0.25f;
+    constexpr float weight_scale = 0.125f;
+    constexpr float output_scale = 0.25f;
+    std::vector<BFloat16> state_values(static_cast<size_t>(channels * 3));
+    std::vector<BFloat16> mixed_values(static_cast<size_t>(channels));
+    std::vector<feather::Fp8E4M3> weight_values(static_cast<size_t>(channels * 4));
+    for (int64_t channel = 0; channel < channels; ++channel) {
+        for (int64_t offset = 0; offset < 3; ++offset) {
+            state_values[static_cast<size_t>(channel * 3 + offset)] = BFloat16{feather::FloatToBFloat16(
+                0.0625f * static_cast<float>((channel * 7 + offset * 5) % 31 - 15))};
+        }
+        mixed_values[static_cast<size_t>(channel)] = BFloat16{feather::FloatToBFloat16(
+            0.03125f * static_cast<float>((channel * 11) % 29 - 14))};
+        for (int64_t offset = 0; offset < 4; ++offset) {
+            const float value = 0.046875f * static_cast<float>((channel * 13 + offset * 3) % 37 - 18);
+            weight_values[static_cast<size_t>(channel * 4 + offset)] =
+                feather::Fp8E4M3{feather::FloatToFp8E4M3(value / weight_scale)};
+        }
+    }
+
+    auto state = std::make_shared<Tensor>();
+    state->Assign<BFloat16>(state_values, {1, channels, 3});
+    auto mixed = std::make_shared<Tensor>();
+    mixed->Assign<BFloat16>(mixed_values, {1, channels, 1});
+    auto weight = std::make_shared<Tensor>();
+    weight->Assign<feather::Fp8E4M3>(weight_values, {channels, 1, 1, 4});
+    weight->set_quantization({true, weight_scale});
+    auto conv_out = std::make_shared<Tensor>(std::vector<int64_t>{1, channels, 1, 1});
+    conv_out->set_data_type(DataType::BF16);
+    auto discarded_prefix = std::make_shared<Tensor>(std::vector<int64_t>{1, channels, 1});
+    discarded_prefix->set_data_type(DataType::BF16);
+    auto next_state = std::make_shared<Tensor>(std::vector<int64_t>{1, channels, 3});
+    next_state->set_data_type(DataType::BF16);
+
+    feather::operators::QwenDepthwiseConvStateParam param{};
+    param.state = state;
+    param.mixed = mixed;
+    param.weight = weight;
+    param.conv_out = conv_out;
+    param.discarded_prefix = discarded_prefix;
+    param.next_state = next_state;
+    param.fp8_dtype = DataType::FP8E4M3;
+    param.fp8_input_scale = input_scale;
+    param.fp8_output_scale = output_scale;
+
+    auto kernel = KernelDispatcher::instance().create(DeviceType::X86, DataType::FP8E4M3,
+                                                       "QwenDepthwiseConvState");
+    ASSERT_NE(kernel, nullptr);
+    kernel->SetParam(&param);
+    ASSERT_EQ(kernel->compute(), 0);
+
+    const auto* conv_data = conv_out->data<BFloat16>();
+    const auto* prefix = discarded_prefix->data<BFloat16>();
+    const auto* next = next_state->data<BFloat16>();
+    for (int64_t channel = 0; channel < channels; ++channel) {
+        float expected_value = 0.0f;
+        for (int64_t tap = 0; tap < 4; ++tap) {
+            const int64_t source_index = channel * 3 + tap;
+            const float source = tap < 3 ? feather::BFloat16ToFloat(state_values[static_cast<size_t>(source_index)].bits)
+                                         : feather::BFloat16ToFloat(mixed_values[static_cast<size_t>(channel)].bits);
+            const float quantized_source = feather::Fp8E4M3ToFloat(feather::FloatToFp8E4M3(source / input_scale)) * input_scale;
+            const float decoded_weight = feather::Fp8E4M3ToFloat(weight_values[static_cast<size_t>(channel * 4 + tap)].bits) *
+                                         weight_scale;
+            expected_value += quantized_source * decoded_weight;
+        }
+        const uint8_t expected_code = feather::FloatToFp8E4M3(expected_value / output_scale);
+        const float expected_bf16 = feather::Fp8E4M3ToFloat(expected_code) * output_scale;
+        EXPECT_EQ(conv_data[channel].bits, feather::FloatToBFloat16(expected_bf16)) << "channel=" << channel;
+        EXPECT_EQ(prefix[channel].bits, state_values[static_cast<size_t>(channel * 3)].bits)
+            << "prefix channel=" << channel;
+        EXPECT_EQ(next[channel * 3].bits, state_values[static_cast<size_t>(channel * 3 + 1)].bits)
+            << "state channel=" << channel << " offset=0";
+        EXPECT_EQ(next[channel * 3 + 1].bits, state_values[static_cast<size_t>(channel * 3 + 2)].bits)
+            << "state channel=" << channel << " offset=1";
+        EXPECT_EQ(next[channel * 3 + 2].bits, mixed_values[static_cast<size_t>(channel)].bits)
             << "state channel=" << channel << " offset=2";
     }
 }

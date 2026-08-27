@@ -14,6 +14,7 @@ std::shared_ptr<Tensor> CreateTensorFromValue(const model::ValueDesc& value) {
     auto tensor = std::make_shared<Tensor>(value.tensor.dims);
     tensor->set_data_type(value.tensor.data_type);
     tensor->set_layout(value.tensor.layout);
+    tensor->set_quantization(value.tensor.quantization);
     return tensor;
 }
 
@@ -38,6 +39,7 @@ void RestoreDeclaredTensorMetadata(const model::ModelDesc& model, const std::str
     if (value->tensor.layout != DataLayout::ND) {
         tensor->set_layout(value->tensor.layout);
     }
+    tensor->set_quantization(value->tensor.quantization);
 }
 
 bool IsBuildTimeEvaluableControlOp(const std::string& op_type) {

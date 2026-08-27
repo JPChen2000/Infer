@@ -19,6 +19,12 @@ bool g_div_kernels_registered = []() {
     dispatcher.registerKernel(DeviceType::COMMON, DataType::BF16, "Div", []() {
         return std::make_unique<DivKernel<DeviceType::COMMON, DataType::BF16>>();
     });
+    dispatcher.registerKernel(DeviceType::COMMON, DataType::FP8E4M3, "Div", []() {
+        return std::make_unique<DivKernel<DeviceType::COMMON, DataType::FP8E4M3>>();
+    });
+    dispatcher.registerKernel(DeviceType::COMMON, DataType::FP8E5M2, "Div", []() {
+        return std::make_unique<DivKernel<DeviceType::COMMON, DataType::FP8E5M2>>();
+    });
     return true;
 }();
 
@@ -55,6 +61,25 @@ int32_t DivKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     }
     return common_detail::RunBinary<DataType::BF16>(param->out.get(), param->lhs.get(), param->rhs.get(),
                                                     [](float lhs, float rhs) { return lhs / rhs; });
+}
+
+template <DataType dtype>
+int32_t ComputeDivFp8(feather::operators::BinaryParam* param) {
+    if (param == nullptr) return -1;
+    return common_detail::RunBinary<dtype>(param->out.get(), param->lhs.get(), param->rhs.get(),
+                                           [](float lhs, float rhs) { return lhs / rhs; });
+}
+
+template <>
+int32_t DivKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() {
+    AutoTimer timer("Common::Div::FP8E4M3");
+    return ComputeDivFp8<DataType::FP8E4M3>(static_cast<feather::operators::BinaryParam*>(param_));
+}
+
+template <>
+int32_t DivKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() {
+    AutoTimer timer("Common::Div::FP8E5M2");
+    return ComputeDivFp8<DataType::FP8E5M2>(static_cast<feather::operators::BinaryParam*>(param_));
 }
 
 void EnsureDivKernelsRegistered() {

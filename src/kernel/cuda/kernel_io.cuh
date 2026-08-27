@@ -5,13 +5,16 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <utility>
 #include <vector>
 
 #include "core/tensor.h"
 #include "src/kernel/cuda/runtime.h"
 #include "util/bf16.h"
+#include "util/fp8.h"
 #include "util/types.h"
 
 namespace feather {
@@ -29,24 +32,44 @@ inline int CublasCheck(cublasStatus_t status) {
     return status == CUBLAS_STATUS_SUCCESS ? 0 : -1;
 }
 
-inline int64_t DivUp(int64_t value, int64_t divisor) {
-    return (value + divisor - 1) / divisor;
-}
-
 inline std::vector<int64_t> ComputeStrides(const std::vector<int64_t>& dims) {
+    for (const int64_t dim : dims) {
+        if (dim <= 0) return {};
+    }
     std::vector<int64_t> strides(dims.size(), 1);
-    for (int64_t i = static_cast<int64_t>(dims.size()) - 2; i >= 0; --i) {
-        strides[static_cast<size_t>(i)] = strides[static_cast<size_t>(i + 1)] * dims[static_cast<size_t>(i + 1)];
+    int64_t suffix = 1;
+    for (int64_t i = static_cast<int64_t>(dims.size()) - 1; i >= 0; --i) {
+        strides[static_cast<size_t>(i)] = suffix;
+        if (suffix > std::numeric_limits<int64_t>::max() / dims[static_cast<size_t>(i)]) return {};
+        suffix *= dims[static_cast<size_t>(i)];
     }
     return strides;
 }
 
+inline bool HasValidCudaShape(const std::vector<int64_t>& dims) {
+    if (dims.size() > kMaxCudaRank) return false;
+    if (dims.empty()) return true;
+    return !ComputeStrides(dims).empty();
+}
+
 inline int64_t ComputeProduct(const std::vector<int64_t>& dims, size_t begin, size_t end) {
+    if (begin > end || end > dims.size()) return -1;
     int64_t product = 1;
     for (size_t i = begin; i < end; ++i) {
+        if (dims[i] <= 0 || product > std::numeric_limits<int64_t>::max() / dims[i]) {
+            return -1;
+        }
         product *= dims[i];
     }
     return product;
+}
+
+inline bool SafeByteCount(int64_t count, size_t element_bytes, size_t* bytes) {
+    if (bytes == nullptr || count < 0 || element_bytes == 0) return false;
+    const auto unsigned_count = static_cast<uint64_t>(count);
+    if (unsigned_count > std::numeric_limits<size_t>::max() / element_bytes) return false;
+    *bytes = static_cast<size_t>(unsigned_count) * element_bytes;
+    return true;
 }
 
 struct CudaShape {
@@ -56,7 +79,7 @@ struct CudaShape {
 };
 
 inline bool MakeCudaShape(const std::vector<int64_t>& dims, CudaShape* shape) {
-    if (shape == nullptr || dims.size() > kMaxCudaRank) {
+    if (shape == nullptr || !HasValidCudaShape(dims)) {
         return false;
     }
     *shape = CudaShape();
@@ -79,7 +102,7 @@ inline bool InferBroadcastShape(const std::vector<int64_t>& lhs_dims, const std:
     for (size_t i = 0; i < out_rank; ++i) {
         const int64_t lhs_dim = i < out_rank - lhs_dims.size() ? 1 : lhs_dims[i - (out_rank - lhs_dims.size())];
         const int64_t rhs_dim = i < out_rank - rhs_dims.size() ? 1 : rhs_dims[i - (out_rank - rhs_dims.size())];
-        if (lhs_dim != rhs_dim && lhs_dim != 1 && rhs_dim != 1) {
+        if (lhs_dim <= 0 || rhs_dim <= 0 || (lhs_dim != rhs_dim && lhs_dim != 1 && rhs_dim != 1)) {
             return false;
         }
         (*out_dims)[i] = std::max(lhs_dim, rhs_dim);
@@ -174,6 +197,16 @@ struct CudaStorage<DataType::BF16> {
 };
 
 template <>
+struct CudaStorage<DataType::FP8E4M3> {
+    using Type = Fp8E4M3;
+};
+
+template <>
+struct CudaStorage<DataType::FP8E5M2> {
+    using Type = Fp8E5M2;
+};
+
+template <>
 struct CudaStorage<DataType::INT32> {
     using Type = int32_t;
 };
@@ -186,14 +219,59 @@ struct CudaStorage<DataType::INT64> {
 template <DataType dtype>
 using StorageT = typename CudaStorage<dtype>::Type;
 
+template <DataType dtype>
+inline bool HasValidQuantizationScale(const Tensor* tensor) {
+    if (tensor == nullptr) return false;
+    if constexpr (dtype == DataType::FP8E4M3 || dtype == DataType::FP8E5M2) {
+        const float scale = tensor->quantization_scale();
+        return HasCompatiblePerTensorQuantization(tensor->quantization()) && std::isfinite(scale) && scale > 0.0f;
+    }
+    return true;
+}
+
+template <DataType dtype>
+inline bool IsTensorReady(const Tensor* tensor) {
+    if (tensor == nullptr || !tensor->IsInitialized() || tensor->data_type() != dtype ||
+        !HasValidCudaShape(tensor->dims().data())) {
+        return false;
+    }
+    const int64_t safe_numel = ComputeProduct(tensor->dims().data(), 0, tensor->dims().size());
+    if (safe_numel < 0 || tensor->numel() != safe_numel) return false;
+    const auto element_bytes = DataTypeBytes(dtype);
+    size_t required_bytes = 0;
+    return HasValidQuantizationScale<dtype>(tensor) && SafeByteCount(safe_numel, element_bytes, &required_bytes) &&
+           tensor->memory_size() >= required_bytes;
+}
+
+template <DataType dtype>
+inline bool IsOutputReady(const Tensor* tensor, const std::vector<int64_t>* expected_dims = nullptr) {
+    if (tensor == nullptr || !tensor->IsInitialized() || !HasValidCudaShape(tensor->dims().data()) ||
+        (tensor->data_type() != DataType::UNKNOWN && tensor->data_type() != dtype)) {
+        return false;
+    }
+    if (expected_dims != nullptr &&
+        (!HasValidCudaShape(*expected_dims) || tensor->dims().data() != *expected_dims)) return false;
+    const int64_t safe_numel = ComputeProduct(tensor->dims().data(), 0, tensor->dims().size());
+    if (safe_numel < 0 || tensor->numel() != safe_numel) return false;
+    const auto element_bytes = DataTypeBytes(dtype);
+    size_t required_bytes = 0;
+    return HasValidQuantizationScale<dtype>(tensor) && SafeByteCount(safe_numel, element_bytes, &required_bytes) &&
+           tensor->memory_size() >= required_bytes;
+}
+
 template <typename T>
 int CopyTensorToDevice(const Tensor* tensor, DeviceBuffer<T>* device) {
-    if (tensor == nullptr || device == nullptr || !tensor->IsInitialized()) {
+    if (tensor == nullptr || device == nullptr || !tensor->IsInitialized() ||
+        !HasValidCudaShape(tensor->dims().data()) || tensor->numel() < 0) {
         return -1;
     }
-    const size_t count = static_cast<size_t>(tensor->numel());
+    const int64_t safe_numel = ComputeProduct(tensor->dims().data(), 0, tensor->dims().size());
+    size_t bytes = 0;
+    if (safe_numel < 0 || tensor->numel() != safe_numel || !SafeByteCount(safe_numel, sizeof(T), &bytes) ||
+        tensor->memory_size() < bytes) return -1;
+    const size_t count = static_cast<size_t>(safe_numel);
     void* ptr = nullptr;
-    if (AcquireTensorDevice(tensor, count * sizeof(T), count == 0 ? nullptr : tensor->data<T>(), &ptr) != 0) {
+    if (AcquireTensorDevice(tensor, bytes, count == 0 ? nullptr : tensor->data<T>(), &ptr) != 0) {
         return -1;
     }
     device->attach(reinterpret_cast<T*>(ptr), count);
@@ -202,13 +280,17 @@ int CopyTensorToDevice(const Tensor* tensor, DeviceBuffer<T>* device) {
 
 template <typename T>
 int AllocateTensorOnDevice(Tensor* tensor, DeviceBuffer<T>* device) {
-    if (tensor == nullptr || device == nullptr) {
+    if (tensor == nullptr || device == nullptr || !tensor->IsInitialized() ||
+        !HasValidCudaShape(tensor->dims().data())) {
         return -1;
     }
+    const int64_t safe_numel = ComputeProduct(tensor->dims().data(), 0, tensor->dims().size());
+    size_t bytes = 0;
+    if (safe_numel < 0 || tensor->numel() != safe_numel || !SafeByteCount(safe_numel, sizeof(T), &bytes)) return -1;
     tensor->set_data_type(DataTypeTrait<T>::type());
-    const size_t count = static_cast<size_t>(tensor->numel());
+    const size_t count = static_cast<size_t>(safe_numel);
     void* ptr = nullptr;
-    if (AcquireOutputTensorDevice(tensor, count * sizeof(T), &ptr) != 0) {
+    if (AcquireOutputTensorDevice(tensor, bytes, &ptr) != 0) {
         return -1;
     }
     device->attach(reinterpret_cast<T*>(ptr), count);
@@ -217,9 +299,14 @@ int AllocateTensorOnDevice(Tensor* tensor, DeviceBuffer<T>* device) {
 
 template <typename T>
 int CopyDeviceToTensor(DeviceBuffer<T>* device, Tensor* tensor) {
-    if (device == nullptr || tensor == nullptr) {
+    if (device == nullptr || tensor == nullptr || !tensor->IsInitialized() ||
+        !HasValidCudaShape(tensor->dims().data())) {
         return -1;
     }
+    const int64_t safe_numel = ComputeProduct(tensor->dims().data(), 0, tensor->dims().size());
+    size_t required_bytes = 0;
+    if (safe_numel < 0 || tensor->numel() != safe_numel || !SafeByteCount(safe_numel, sizeof(T), &required_bytes) ||
+        device->count() != static_cast<size_t>(safe_numel) || tensor->memory_size() < required_bytes) return -1;
     if (DeferredHostSyncEnabled()) {
         return 0;
     }
@@ -227,7 +314,7 @@ int CopyDeviceToTensor(DeviceBuffer<T>* device, Tensor* tensor) {
     if (device->count() == 0) {
         return 0;
     }
-    return SyncTensorToHost(tensor, device->count() * sizeof(T), host);
+    return SyncTensorToHost(tensor, required_bytes, host);
 }
 
 template <typename T>
@@ -241,8 +328,9 @@ int CopyHostVectorToDevice(const std::vector<T>& host, DeviceBuffer<T>* device) 
     if (host.empty()) {
         return 0;
     }
-    return CudaCheck(cudaMemcpyAsync(device->get(), host.data(), host.size() * sizeof(T), cudaMemcpyHostToDevice,
-                                     InferenceStream()));
+    size_t bytes = 0;
+    if (!SafeByteCount(static_cast<int64_t>(host.size()), sizeof(T), &bytes)) return -1;
+    return CudaCheck(cudaMemcpyAsync(device->get(), host.data(), bytes, cudaMemcpyHostToDevice, InferenceStream()));
 }
 
 template <typename T>
@@ -299,6 +387,14 @@ __device__ inline float ReadDevice(const BFloat16* data, int64_t idx) {
     return __uint_as_float(static_cast<uint32_t>(data[idx].bits) << 16);
 }
 
+__device__ inline float ReadDevice(const Fp8E4M3* data, int64_t idx, float scale) {
+    return Fp8E4M3ToFloat(data[idx].bits) * scale;
+}
+
+__device__ inline float ReadDevice(const Fp8E5M2* data, int64_t idx, float scale) {
+    return Fp8E5M2ToFloat(data[idx].bits) * scale;
+}
+
 __device__ inline float ReadDevice(const int32_t* data, int64_t idx) {
     return static_cast<float>(data[idx]);
 }
@@ -325,6 +421,24 @@ __device__ inline void WriteDevice(BFloat16* data, int64_t idx, float value) {
     }
     const uint32_t round_bias = 0x7fffu + ((float_bits >> 16) & 1u);
     data[idx].bits = static_cast<uint16_t>((float_bits + round_bias) >> 16);
+}
+
+__device__ inline void WriteDevice(Fp8E4M3* data, int64_t idx, float value, float scale) {
+    data[idx].bits = FloatToFp8E4M3(value / scale);
+}
+
+__device__ inline void WriteDevice(Fp8E5M2* data, int64_t idx, float value, float scale) {
+    data[idx].bits = FloatToFp8E5M2(value / scale);
+}
+
+template <typename T>
+__device__ inline float ReadDevice(const T* data, int64_t idx, float) {
+    return ReadDevice(data, idx);
+}
+
+template <typename T>
+__device__ inline void WriteDevice(T* data, int64_t idx, float value, float) {
+    WriteDevice(data, idx, value);
 }
 
 }  // namespace cuda_detail

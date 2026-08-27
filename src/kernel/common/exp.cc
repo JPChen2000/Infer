@@ -38,7 +38,10 @@ template <> int32_t ExpKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     return RunExp<DataType::BF16>(static_cast<feather::operators::UnaryParam*>(param_));
 }
 
-void EnsureExpKernelsRegistered() { (void)g_exp_kernels_registered; }
+void EnsureExpKernelsRegistered() {
+    (void)g_exp_kernels_registered;
+    EnsureX86ExpKernelsRegistered();
+}
 
 }  // namespace kernel
 }  // namespace feather

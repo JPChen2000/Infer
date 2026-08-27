@@ -160,6 +160,39 @@ TEST(softmax_transpose_op_test, TransposeSupports3DPermOnX86) {
     }
 }
 
+TEST(softmax_transpose_op_test, TransposeSupportsVitAttentionPermOnX86) {
+    auto input = std::make_shared<Tensor>();
+    std::vector<float> values(1 * 3 * 2 * 4);
+    for (size_t index = 0; index < values.size(); ++index) {
+        values[index] = static_cast<float>(index + 1);
+    }
+    input->Assign<float>(values, {1, 3, 2, 4});
+
+    auto out = std::make_shared<Tensor>(std::vector<int64_t>{1, 2, 3, 4});
+    TransposeParam param{};
+    param.input = input;
+    param.out = out;
+    param.perm = {0, 2, 1, 3};
+
+    std::shared_ptr<OpBase> op = std::make_shared<feather::operators::TransposeOp>("transpose_vit_attention", param);
+    ASSERT_EQ(op->CheckShape(), 0);
+    ASSERT_EQ(op->InferOutputShapes(), 0);
+    auto kernel = KernelDispatcher::instance().create(DeviceType::X86, DataType::FP32, "Transpose");
+    ASSERT_NE(kernel, nullptr);
+    op->AttachKernel(std::move(kernel));
+    ASSERT_EQ(op->Run(), 0);
+
+    for (int64_t head = 0; head < 2; ++head) {
+        for (int64_t token = 0; token < 3; ++token) {
+            for (int64_t channel = 0; channel < 4; ++channel) {
+                const int64_t input_index = (token * 2 + head) * 4 + channel;
+                const int64_t output_index = (head * 3 + token) * 4 + channel;
+                EXPECT_FLOAT_EQ(out->data<float>()[output_index], input->data<float>()[input_index]);
+            }
+        }
+    }
+}
+
 TEST(softmax_transpose_op_test, TransposeRunsOnX86FP16) {
     auto input = std::make_shared<Tensor>();
     input->Assign<uint16_t>({feather::FloatToHalf(1.0f), feather::FloatToHalf(2.0f), feather::FloatToHalf(3.0f),

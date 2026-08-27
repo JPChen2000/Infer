@@ -1,6 +1,7 @@
 #include "src/kernel/mul.h"
 
 #include "src/kernel/common/kernel_io.h"
+#include "src/kernel/fp8_host.h"
 #include "util/timer.h"
 
 namespace feather {
@@ -52,6 +53,10 @@ bool g_mul_kernels_registered = []() {
                                                 []() { return std::make_unique<MulKernel<DeviceType::COMMON, DataType::FP16>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::BF16, "Mul",
                                                 []() { return std::make_unique<MulKernel<DeviceType::COMMON, DataType::BF16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP8E4M3, "Mul",
+                                                []() { return std::make_unique<MulKernel<DeviceType::COMMON, DataType::FP8E4M3>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP8E5M2, "Mul",
+                                                []() { return std::make_unique<MulKernel<DeviceType::COMMON, DataType::FP8E5M2>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::INT64, "Mul",
                                                 []() { return std::make_unique<MulKernel<DeviceType::COMMON, DataType::INT64>>(); });
     return true;
@@ -115,6 +120,23 @@ int32_t MulKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Mul::BF16");
     auto* param = static_cast<feather::operators::BinaryParam*>(param_);
     return ComputeMulKernel<DataType::BF16>(param);
+}
+
+template <DataType dtype>
+int32_t ComputeMulFp8(feather::operators::BinaryParam* param) {
+    return fp8_host::Binary<dtype, fp8_host::BinaryOp::kMul>(param);
+}
+
+template <>
+int32_t MulKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() {
+    AutoTimer timer("Common::Mul::FP8E4M3");
+    return ComputeMulFp8<DataType::FP8E4M3>(static_cast<feather::operators::BinaryParam*>(param_));
+}
+
+template <>
+int32_t MulKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() {
+    AutoTimer timer("Common::Mul::FP8E5M2");
+    return ComputeMulFp8<DataType::FP8E5M2>(static_cast<feather::operators::BinaryParam*>(param_));
 }
 
 template <>

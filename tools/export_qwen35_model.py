@@ -9,6 +9,7 @@ operators; no Qwen-specific operator is emitted.
 
 import argparse
 import json
+import math
 import struct
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,10 +23,10 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL_DIR = ROOT / "models" / "llm" / "qwen3.5-0.8b"
 
 FTH_MAGIC = b"FTHMODL\x00"
-FTH_FORMAT_VERSION = 1
+FTH_FORMAT_VERSION = 2
 FTH_WEIGHT_ALIGNMENT = 64
 FTH_LAYOUT_ND = 2
-FTH_DTYPE_BYTES = {1: 1, 2: 1, 3: 2, 4: 4, 5: 4, 6: 8, 9: 1, 11: 2}
+FTH_DTYPE_BYTES = {1: 1, 2: 1, 3: 2, 4: 4, 5: 4, 6: 8, 9: 1, 11: 2, 12: 1, 13: 1}
 FTH_INT8 = 1
 FTH_UINT8 = 2
 FTH_FP16 = 3
@@ -34,10 +35,14 @@ FTH_INT32 = 5
 FTH_INT64 = 6
 FTH_BOOL = 9
 FTH_BF16 = 11
+FTH_FP8E4M3 = 12
+FTH_FP8E5M2 = 13
 
 BF16 = FTH_BF16
 FP32 = FTH_FP32
 INT64 = FTH_INT64
+FP8E4M3 = FTH_FP8E4M3
+FP8E5M2 = FTH_FP8E5M2
 
 FTH_TO_ONNX_DTYPE = {
     FTH_INT8: 3,
@@ -48,6 +53,23 @@ FTH_TO_ONNX_DTYPE = {
     FTH_INT64: 7,
     FTH_BOOL: 9,
     FTH_BF16: 16,
+    FTH_FP8E4M3: 17,
+    FTH_FP8E5M2: 19,
+}
+
+FP8_MAX_FINITE = {
+    FP8E4M3: 448.0,
+    FP8E5M2: 57344.0,
+}
+
+FP8_NUMPY_DTYPE = {
+    FP8E4M3: ml_dtypes.float8_e4m3fn,
+    FP8E5M2: ml_dtypes.float8_e5m2,
+}
+
+FP8_FORMAT_NAMES = {
+    FP8E4M3: "fp8e4m3",
+    FP8E5M2: "fp8e5m2",
 }
 
 
@@ -57,6 +79,11 @@ class FeatherTensorDesc:
     dims: list
     data_type: int
     layout: int = FTH_LAYOUT_ND
+    quantization_enabled: bool = False
+    quantization_scale: float = 1.0
+    quantization_granularity: int = 0
+    quantization_axis: int = -1
+    quantization_block_size: int = 0
 
 
 @dataclass
@@ -81,6 +108,63 @@ class FeatherNodeDesc:
 class FeatherWeightPayload:
     byte_size: int
     write: object
+
+
+def is_fp8_dtype(dtype):
+    return dtype in FP8_MAX_FINITE
+
+
+def fp8_format_name(dtype):
+    try:
+        return FP8_FORMAT_NAMES[dtype]
+    except KeyError as error:
+        raise ValueError(f"unsupported FP8 dtype {dtype}") from error
+
+
+def fp8_scale_for_amax(dtype, amax):
+    if dtype not in FP8_MAX_FINITE:
+        raise ValueError(f"unsupported FP8 dtype {dtype}")
+    if not math.isfinite(float(amax)):
+        raise ValueError("FP8 scale requires a finite maximum")
+    if amax <= 0.0:
+        return 1.0
+    scale = 2.0 ** math.ceil(math.log2(float(amax) / FP8_MAX_FINITE[dtype]))
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise ValueError("FP8 scale is outside the finite range")
+    return float(scale)
+
+
+def fp8_scale_for_array(dtype, array):
+    """Return a deterministic FP8 scale without materializing a full FP32 copy."""
+    values = np.asarray(array)
+    flat = values.reshape(-1)
+    maximum = 0.0
+    chunk_size = 1 << 20
+    for start in range(0, flat.size, chunk_size):
+        chunk = np.asarray(flat[start:start + chunk_size], dtype=np.float32)
+        if not np.all(np.isfinite(chunk)):
+            raise ValueError("FP8 model weights must be finite")
+        if chunk.size:
+            maximum = max(maximum, float(np.max(np.abs(chunk))))
+    return fp8_scale_for_amax(dtype, maximum)
+
+
+def fp8_encode(array, dtype, scale):
+    if dtype not in FP8_NUMPY_DTYPE:
+        raise ValueError(f"unsupported FP8 dtype {dtype}")
+    if not math.isfinite(float(scale)) or scale <= 0.0:
+        raise ValueError("FP8 scale must be finite and positive")
+    values = np.asarray(array)
+    encoded = np.empty(values.shape, dtype=FP8_NUMPY_DTYPE[dtype])
+    flat_values = values.reshape(-1)
+    flat_encoded = encoded.reshape(-1)
+    chunk_size = 1 << 20
+    for start in range(0, flat_values.size, chunk_size):
+        chunk = np.asarray(flat_values[start:start + chunk_size], dtype=np.float32)
+        if not np.all(np.isfinite(chunk)):
+            raise ValueError("FP8 model weights must be finite")
+        flat_encoded[start:start + chunk.size] = (chunk / float(scale)).astype(FP8_NUMPY_DTYPE[dtype])
+    return np.ascontiguousarray(encoded.view(np.uint8))
 
 
 def fth_align_up(value, alignment=FTH_WEIGHT_ALIGNMENT):
@@ -118,8 +202,15 @@ def fth_encode_attribute(value):
 
 
 def fth_encode_tensor(desc):
-    return (fth_encode_string(desc.name) + fth_encode_ints(desc.dims) +
-            struct.pack("<i", desc.data_type) + struct.pack("<i", desc.layout))
+    payload = (fth_encode_string(desc.name) + fth_encode_ints(desc.dims) +
+               struct.pack("<i", desc.data_type) + struct.pack("<i", desc.layout))
+    if FTH_FORMAT_VERSION >= 2:
+        payload += (struct.pack("<B", 1 if desc.quantization_enabled else 0) +
+                    struct.pack("<f", float(desc.quantization_scale)) +
+                    struct.pack("<i", int(desc.quantization_granularity)) +
+                    struct.pack("<q", int(desc.quantization_axis)) +
+                    struct.pack("<q", int(desc.quantization_block_size)))
+    return payload
 
 
 def fth_encode_value(value, output_path):
@@ -218,15 +309,15 @@ def dtype_of(array):
     raise ValueError(f"unsupported Feather tensor dtype: {dtype}")
 
 
-def tensor_proto_from_array(array, name, tensor_proto, numpy_helper):
+def tensor_proto_from_array(array, name, data_type, tensor_proto, numpy_helper):
     array = normalize_constant(array)
-    if str(array.dtype) != "bfloat16":
+    if data_type not in {FTH_BF16, FTH_FP8E4M3, FTH_FP8E5M2}:
         return numpy_helper.from_array(array, name=name)
     tensor = tensor_proto()
     tensor.name = name
-    tensor.data_type = FTH_TO_ONNX_DTYPE[FTH_BF16]
+    tensor.data_type = FTH_TO_ONNX_DTYPE[data_type]
     tensor.dims.extend(array.shape)
-    tensor.raw_data = array.tobytes()
+    tensor.raw_data = raw_array_view(array).tobytes()
     return tensor
 
 
@@ -255,24 +346,36 @@ class AtomicGraph:
         self.constant_names = []
         self.constant_values = {}
         self.external_constant_loaders = {}
+        self.quantization_scales = {}
         self.counter = 0
 
     def fresh(self, stem):
         self.counter += 1
         return f"{stem}_{self.counter}"
 
-    def register(self, name, shape, dtype):
-        self.value_info[name] = (list(shape), int(dtype))
+    def register(self, name, shape, dtype, quantization_scale=None):
+        dtype = int(dtype)
+        if is_fp8_dtype(dtype):
+            if quantization_scale is None:
+                quantization_scale = self.quantization_scales.get(name)
+            if quantization_scale is None or not math.isfinite(float(quantization_scale)) or quantization_scale <= 0.0:
+                raise ValueError(f"FP8 value {name} requires a finite positive per-tensor scale")
+            self.quantization_scales[name] = float(quantization_scale)
+        else:
+            if quantization_scale is not None:
+                raise ValueError(f"non-FP8 value {name} must not carry FP8 quantization metadata")
+            self.quantization_scales.pop(name, None)
+        self.value_info[name] = (list(shape), dtype)
         return name
 
-    def input(self, name, shape, dtype):
-        self.register(name, shape, dtype)
+    def input(self, name, shape, dtype, quantization_scale=None):
+        self.register(name, shape, dtype, quantization_scale)
         self.inputs.append(name)
         return name
 
-    def output(self, name, shape=None, dtype=None):
+    def output(self, name, shape=None, dtype=None, quantization_scale=None):
         if shape is not None:
-            self.register(name, shape, dtype)
+            self.register(name, shape, dtype, quantization_scale)
         self.outputs.append(name)
         return name
 
@@ -286,13 +389,13 @@ class AtomicGraph:
         self.register(name, list(array.shape), dtype_of(array))
         return name
 
-    def external_const(self, name, shape, dtype, loader):
+    def external_const(self, name, shape, dtype, loader, quantization_scale=None):
         if name in self.constants:
             return name
         self.constants.add(name)
         self.constant_names.append(name)
         self.external_constant_loaders[name] = loader
-        self.register(name, shape, dtype)
+        self.register(name, shape, dtype, quantization_scale)
         return name
 
     def scalar(self, name, value, dtype=np.float32):
@@ -301,17 +404,23 @@ class AtomicGraph:
     def ints(self, name, values):
         return self.const(name, np.asarray(values, dtype=np.int64))
 
-    def node(self, op_type, inputs, outputs, shapes, dtypes, name=None, **attrs):
+    def node(self, op_type, inputs, outputs, shapes, dtypes, name=None, quantization_scales=None, **attrs):
         if isinstance(outputs, str):
             outputs = [outputs]
         if isinstance(shapes, tuple) and shapes and isinstance(shapes[0], int):
             shapes = [shapes]
         if isinstance(dtypes, int):
             dtypes = [dtypes] * len(outputs)
+        if quantization_scales is None:
+            quantization_scales = [None] * len(outputs)
+        elif isinstance(quantization_scales, (float, int, np.floating, np.integer)):
+            quantization_scales = [quantization_scales] * len(outputs)
+        if len(outputs) != len(shapes) or len(outputs) != len(dtypes) or len(outputs) != len(quantization_scales):
+            raise ValueError(f"invalid output metadata for {op_type}")
         if name is None:
             name = self.fresh(op_type.lower())
-        for output, shape, dtype in zip(outputs, shapes, dtypes):
-            self.register(output, shape, dtype)
+        for output, shape, dtype, quantization_scale in zip(outputs, shapes, dtypes, quantization_scales):
+            self.register(output, shape, dtype, quantization_scale)
         self.nodes.append(FeatherNodeDesc(
             name=name,
             op_type=op_type,
@@ -321,38 +430,71 @@ class AtomicGraph:
         ))
         return outputs[0] if len(outputs) == 1 else outputs
 
+    def value_quantization_scale(self, name):
+        if not is_fp8_dtype(self.value_info[name][1]):
+            return None
+        return self.quantization_scales[name]
+
+    def inherited_fp8_scale(self, values, dtype):
+        if not is_fp8_dtype(dtype):
+            return None
+        scales = [self.value_quantization_scale(value) for value in values]
+        if not scales or any(scale is None for scale in scales):
+            raise ValueError("FP8 operation inputs require per-tensor scales")
+        first = scales[0]
+        if any(not math.isclose(scale, first, rel_tol=0.0, abs_tol=0.0) for scale in scales[1:]):
+            raise ValueError("FP8 view operations require equal input scales")
+        return first
+
     def unary(self, op_type, x, shape, dtype, stem):
-        return self.node(op_type, [x], self.fresh(stem), [shape], dtype)
+        return self.node(op_type, [x], self.fresh(stem), [shape], dtype,
+                         quantization_scales=self.inherited_fp8_scale([x], dtype))
 
     def binary(self, op_type, lhs, rhs, shape, dtype, stem):
-        return self.node(op_type, [lhs, rhs], self.fresh(stem), [shape], dtype)
+        return self.node(op_type, [lhs, rhs], self.fresh(stem), [shape], dtype,
+                         quantization_scales=self.inherited_fp8_scale([lhs, rhs], dtype))
 
-    def cast(self, x, shape, dtype, stem):
+    def cast(self, x, shape, dtype, stem, quantization_scale=None):
         source_dtype = self.value_info[x][1]
         if source_dtype == dtype:
+            if is_fp8_dtype(dtype) and quantization_scale is not None and \
+                    self.value_quantization_scale(x) != float(quantization_scale):
+                raise ValueError("a no-op FP8 Cast cannot change its quantization scale")
             return x
-        return self.node("Cast", [x], self.fresh(stem), [shape], dtype, to=FTH_TO_ONNX_DTYPE[dtype])
+        return self.node("Cast", [x], self.fresh(stem), [shape], dtype,
+                         quantization_scales=quantization_scale, to=FTH_TO_ONNX_DTYPE[dtype])
 
     def reshape(self, x, shape, stem):
         shape_name = self.ints(self.fresh(f"{stem}_shape"), shape)
-        return self.node("Reshape", [x, shape_name], self.fresh(stem), [shape], self.value_info[x][1])
+        dtype = self.value_info[x][1]
+        return self.node("Reshape", [x, shape_name], self.fresh(stem), [shape], dtype,
+                         quantization_scales=self.value_quantization_scale(x))
 
     def transpose(self, x, perm, shape, stem):
-        return self.node("Transpose", [x], self.fresh(stem), [shape], self.value_info[x][1], perm=perm)
+        dtype = self.value_info[x][1]
+        return self.node("Transpose", [x], self.fresh(stem), [shape], dtype,
+                         quantization_scales=self.value_quantization_scale(x), perm=perm)
 
     def unsqueeze(self, x, axes, shape, stem):
-        return self.node("Unsqueeze", [x], self.fresh(stem), [shape], self.value_info[x][1], axes=axes)
+        dtype = self.value_info[x][1]
+        return self.node("Unsqueeze", [x], self.fresh(stem), [shape], dtype,
+                         quantization_scales=self.value_quantization_scale(x), axes=axes)
 
     def expand(self, x, shape, stem):
         shape_name = self.ints(self.fresh(f"{stem}_shape"), shape)
-        return self.node("Expand", [x, shape_name], self.fresh(stem), [shape], self.value_info[x][1])
+        dtype = self.value_info[x][1]
+        return self.node("Expand", [x, shape_name], self.fresh(stem), [shape], dtype,
+                         quantization_scales=self.value_quantization_scale(x))
 
     def concat(self, inputs, axis, shape, dtype, stem):
-        return self.node("Concat", inputs, self.fresh(stem), [shape], dtype, axis=axis)
+        return self.node("Concat", inputs, self.fresh(stem), [shape], dtype,
+                         quantization_scales=self.inherited_fp8_scale(inputs, dtype), axis=axis)
 
     def split(self, x, sizes, axis, shapes, stem):
         names = [self.fresh(f"{stem}_{i}") for i in range(len(sizes))]
-        return self.node("Split", [x], names, shapes, self.value_info[x][1], axis=axis, split=sizes)
+        dtype = self.value_info[x][1]
+        return self.node("Split", [x], names, shapes, dtype,
+                         quantization_scales=self.value_quantization_scale(x), axis=axis, split=sizes)
 
     def reduce(self, op_type, x, axes, keepdims, shape, dtype, stem):
         return self.node(op_type, [x], self.fresh(stem), [shape], dtype, axes=axes, keepdims=int(keepdims))
@@ -367,7 +509,7 @@ class AtomicGraph:
                 array = self.constant_values[name]
             else:
                 array = self.external_constant_loaders[name]()
-            initializers.append(tensor_proto_from_array(array, name, TensorProto, numpy_helper))
+            initializers.append(tensor_proto_from_array(array, name, self.value_info[name][1], TensorProto, numpy_helper))
         input_infos = []
         for name in self.inputs:
             shape, dtype = self.value_info[name]
@@ -396,7 +538,7 @@ class AtomicGraph:
         model = helper.make_model(
             graph,
             producer_name="feather-qwen35-exporter",
-            opset_imports=[helper.make_opsetid("", 11)],
+            opset_imports=[helper.make_opsetid("", 19 if any(is_fp8_dtype(dtype) for _, dtype in self.value_info.values()) else 11)],
         )
         model.ir_version = 7
         model.doc_string = (
@@ -408,9 +550,12 @@ class AtomicGraph:
     def write_fth(self, path, model_name):
         values = []
         for name, (shape, dtype) in self.value_info.items():
+            quantization_scale = self.quantization_scales.get(name)
             values.append(FeatherValueDesc(
                 tensor=FeatherTensorDesc(name=name, dims=[int(value) for value in shape],
-                                         data_type=int(dtype)),
+                                         data_type=int(dtype),
+                                         quantization_enabled=is_fp8_dtype(dtype),
+                                         quantization_scale=1.0 if quantization_scale is None else quantization_scale),
                 constant=name in self.constants,
             ))
 
@@ -451,9 +596,19 @@ class AtomicGraph:
 
 
 class QwenBuilder:
-    def __init__(self, model_dir, max_context):
+    def __init__(self, model_dir, max_context, fp8_dtype=None, fp8_activation_amax=96.0):
+        if fp8_dtype is not None and not is_fp8_dtype(fp8_dtype):
+            raise ValueError(f"unsupported Qwen FP8 format {fp8_dtype}")
+        if fp8_dtype is not None and (
+                not math.isfinite(float(fp8_activation_amax)) or fp8_activation_amax <= 0.0):
+            raise ValueError("FP8 activation maximum must be finite and positive")
         self.model_dir = Path(model_dir)
         self.max_context = max_context
+        self.fp8_dtype = fp8_dtype
+        self.fp8_activation_scale = (
+            fp8_scale_for_amax(fp8_dtype, fp8_activation_amax) if fp8_dtype is not None else None
+        )
+        self.fp8_weight_scales = {}
         self.config = json.loads((self.model_dir / "config.json").read_text())
         self.text = self.config["text_config"]
         self.hidden = int(self.text["hidden_size"])
@@ -475,10 +630,6 @@ class QwenBuilder:
         self.cast_cache = {}
 
     def weight(self, key, transpose=False, force_dtype=None):
-        suffix = "_t" if transpose else ""
-        name = "weight_" + key.replace(".", "_") + suffix
-        if name in self.g.constants:
-            return name
         source_slice = self.source.get_slice(key)
         shape = list(source_slice.get_shape())
         source_dtype = str(source_slice.get_dtype())
@@ -494,16 +645,38 @@ class QwenBuilder:
             shape.reverse()
         if force_dtype is not None:
             dtype = force_dtype
+        suffix = "_t" if transpose else ""
+        quantization_scale = None
+        if is_fp8_dtype(dtype):
+            suffix += f"__{fp8_format_name(dtype)}"
+            quantization_scale = self.fp8_weight_scale(key, dtype)
+        name = "weight_" + key.replace(".", "_") + suffix
+        if name in self.g.constants:
+            return name
         return self.g.external_const(
             name,
             shape,
             dtype,
             lambda key=key, transpose=transpose, force_dtype=force_dtype: self.load_weight(
                 key, transpose=transpose, force_dtype=force_dtype),
+            quantization_scale=quantization_scale,
         )
+
+    def fp8_weight_scale(self, key, dtype):
+        cache_key = (key, dtype)
+        if cache_key not in self.fp8_weight_scales:
+            if self.source is None:
+                raise RuntimeError("Qwen weights require an open safetensors source")
+            self.fp8_weight_scales[cache_key] = fp8_scale_for_array(
+                dtype, source_to_numpy(self.source.get_tensor(key))
+            )
+        return self.fp8_weight_scales[cache_key]
 
     def load_weight(self, key, transpose=False, force_dtype=None):
         array = source_to_numpy(self.source.get_tensor(key))
+        if is_fp8_dtype(force_dtype):
+            encoded = fp8_encode(array, force_dtype, self.fp8_weight_scale(key, force_dtype))
+            return np.ascontiguousarray(encoded.T) if transpose else encoded
         if transpose:
             array = np.ascontiguousarray(array.T)
         if force_dtype is None or dtype_of(array) == force_dtype:
@@ -514,11 +687,19 @@ class QwenBuilder:
             return np.asarray(np.asarray(array, dtype=np.float32), dtype=ml_dtypes.bfloat16)
         raise ValueError(f"unsupported forced dtype {force_dtype}")
 
-    def cast(self, x, dtype, stem):
+    def cast(self, x, dtype, stem, quantization_scale=None):
         shape = self.g.value_info[x][0]
-        key = (x, dtype)
+        if is_fp8_dtype(dtype):
+            if quantization_scale is None:
+                quantization_scale = self.fp8_activation_scale
+            if quantization_scale is None:
+                raise ValueError("FP8 casts require an explicit activation scale")
+            quantization_scale = float(quantization_scale)
+        elif quantization_scale is not None:
+            raise ValueError("non-FP8 casts cannot carry quantization metadata")
+        key = (x, dtype, quantization_scale)
         if key not in self.cast_cache:
-            self.cast_cache[key] = self.g.cast(x, shape, dtype, stem)
+            self.cast_cache[key] = self.g.cast(x, shape, dtype, stem, quantization_scale=quantization_scale)
         return self.cast_cache[key]
 
     def rms_norm(self, x, weight_key, stem):
@@ -555,8 +736,20 @@ class QwenBuilder:
         x_shape = self.g.value_info[x][0]
         out_shape = list(x_shape)
         out_shape[-1] = out_size
-        w = self.weight(key, transpose=True)
-        return self.g.node("MatMul", [x, w], self.g.fresh(stem), [out_shape], BF16)
+        if self.fp8_dtype is None:
+            w = self.weight(key, transpose=True)
+            return self.g.node("MatMul", [x, w], self.g.fresh(stem), [out_shape], BF16)
+        fp8_input = self.cast(x, self.fp8_dtype, f"{stem}_to_fp8", self.fp8_activation_scale)
+        fp8_weight = self.weight(key, transpose=True, force_dtype=self.fp8_dtype)
+        fp8_output = self.g.node(
+            "MatMul",
+            [fp8_input, fp8_weight],
+            self.g.fresh(stem),
+            [out_shape],
+            self.fp8_dtype,
+            quantization_scales=self.fp8_activation_scale,
+        )
+        return self.cast(fp8_output, BF16, f"{stem}_to_bf16")
 
     def silu(self, x, stem):
         shape = self.g.value_info[x][0]
@@ -574,21 +767,37 @@ class QwenBuilder:
         joined = self.g.concat([state, mixed_t], 2, [1, self.conv_dim, 4], BF16, f"{stem}_state_join")
         joined_2d = self.g.reshape(joined, [1, self.conv_dim, 1, 4], f"{stem}_conv_input")
         conv_weight = self.g.reshape(
-            self.weight(f"model.language_model.layers.{layer}.linear_attn.conv1d.weight"),
+            self.weight(
+                f"model.language_model.layers.{layer}.linear_attn.conv1d.weight",
+                force_dtype=self.fp8_dtype,
+            ) if self.fp8_dtype is not None else self.weight(
+                f"model.language_model.layers.{layer}.linear_attn.conv1d.weight"
+            ),
             [self.conv_dim, 1, 1, 4],
             f"{stem}_conv_weight",
         )
+        conv_input = joined_2d
+        conv_dtype = BF16
+        conv_quantization_scale = None
+        if self.fp8_dtype is not None:
+            conv_input = self.cast(joined_2d, self.fp8_dtype, f"{stem}_conv_input_to_fp8",
+                                   self.fp8_activation_scale)
+            conv_dtype = self.fp8_dtype
+            conv_quantization_scale = self.fp8_activation_scale
         conv = self.g.node(
             "Conv",
-            [joined_2d, conv_weight],
+            [conv_input, conv_weight],
             self.g.fresh(f"{stem}_conv"),
             [[1, self.conv_dim, 1, 1]],
-            BF16,
+            conv_dtype,
+            quantization_scales=conv_quantization_scale,
             strides=[1, 1],
             pads=[0, 0, 0, 0],
             dilations=[1, 1],
             group=self.conv_dim,
         )
+        if self.fp8_dtype is not None:
+            conv = self.cast(conv, BF16, f"{stem}_conv_to_bf16")
         conv = self.g.reshape(conv, [1, self.conv_dim, 1], f"{stem}_conv_squeeze")
         conv = self.silu(conv, f"{stem}_conv_activation")
         _, next_conv_state = self.g.split(joined, [1, 3], 2, [[1, self.conv_dim, 1], [1, self.conv_dim, 3]], f"{stem}_state_split")
@@ -788,8 +997,20 @@ class QwenBuilder:
             else:
                 g.input(f"k_cache_{layer}", [1, self.kv_heads, self.max_context - 1, self.head_dim], BF16)
                 g.input(f"v_cache_{layer}", [1, self.kv_heads, self.max_context - 1, self.head_dim], BF16)
-        embedding = self.weight("model.language_model.embed_tokens.weight")
-        hidden = g.node("Gather", [embedding, token_ids], g.fresh("embedding"), [[1, 1, self.hidden]], BF16, axis=0)
+        embedding = self.weight(
+            "model.language_model.embed_tokens.weight", force_dtype=self.fp8_dtype
+        ) if self.fp8_dtype is not None else self.weight("model.language_model.embed_tokens.weight")
+        hidden = g.node(
+            "Gather",
+            [embedding, token_ids],
+            g.fresh("embedding"),
+            [[1, 1, self.hidden]],
+            self.fp8_dtype if self.fp8_dtype is not None else BF16,
+            quantization_scales=self.fp8_activation_scale if self.fp8_dtype is not None else None,
+            axis=0,
+        )
+        if self.fp8_dtype is not None:
+            hidden = self.cast(hidden, BF16, "embedding_to_bf16")
         for layer in range(self.layers):
             if self.text["layer_types"][layer] == "linear_attention":
                 hidden, next_conv, next_state = self.build_linear_layer(layer, hidden)
@@ -809,18 +1030,42 @@ class QwenBuilder:
                 g.output(current_v, [1, self.kv_heads, 1, self.head_dim], BF16)
         hidden = self.rms_norm(hidden, "model.language_model.norm.weight", "final_norm")
         hidden = g.reshape(hidden, [1, self.hidden], "lm_head_input")
-        embedding_logits = self.weight("model.language_model.embed_tokens.weight")
-        logits = g.node(
-            "Gemm",
-            [hidden, embedding_logits],
-            "logits",
-            [[1, self.vocab]],
-            BF16,
-            alpha=1.0,
-            beta=1.0,
-            transA=0,
-            transB=1,
-        )
+        if self.fp8_dtype is None:
+            embedding_logits = self.weight("model.language_model.embed_tokens.weight")
+            logits = g.node(
+                "Gemm",
+                [hidden, embedding_logits],
+                "logits",
+                [[1, self.vocab]],
+                BF16,
+                alpha=1.0,
+                beta=1.0,
+                transA=0,
+                transB=1,
+            )
+        else:
+            hidden = self.cast(hidden, self.fp8_dtype, "lm_head_input_to_fp8", self.fp8_activation_scale)
+            embedding_logits = self.weight("model.language_model.embed_tokens.weight", force_dtype=self.fp8_dtype)
+            fp8_logits = g.node(
+                "Gemm",
+                [hidden, embedding_logits],
+                g.fresh("logits_fp8"),
+                [[1, self.vocab]],
+                self.fp8_dtype,
+                quantization_scales=self.fp8_activation_scale,
+                alpha=1.0,
+                beta=1.0,
+                transA=0,
+                transB=1,
+            )
+            logits = g.node(
+                "Cast",
+                [fp8_logits],
+                "logits",
+                [[1, self.vocab]],
+                BF16,
+                to=FTH_TO_ONNX_DTYPE[BF16],
+            )
         g.output(logits, [1, self.vocab], BF16)
         return g
 
@@ -828,7 +1073,8 @@ class QwenBuilder:
         return self.g.make_model(self.max_context)
 
     def write_fth(self, path):
-        self.g.write_fth(path, "qwen3.5-0.8b_decode_bf16")
+        precision = "bf16" if self.fp8_dtype is None else fp8_format_name(self.fp8_dtype)
+        self.g.write_fth(path, f"qwen3.5-0.8b_decode_{precision}")
 
 
 def resolve_shard(model_dir):
@@ -849,19 +1095,29 @@ def main():
     parser = argparse.ArgumentParser(description="Export Qwen3.5-0.8B safetensors directly to atomic Feather FTH")
     parser.add_argument("--model-dir", type=Path, default=DEFAULT_MODEL_DIR)
     parser.add_argument("--max-context", type=int, default=128)
+    parser.add_argument("--fp8-format", choices=("e4m3", "e5m2"),
+                        help="Export FP8 compute islands with the selected format.")
+    parser.add_argument("--fp8-activation-amax", type=float, default=96.0,
+                        help="Static finite activation bound used to derive per-tensor FP8 scales.")
     parser.add_argument("--output-fth", type=Path)
     parser.add_argument("--output-onnx", type=Path,
                         help="Optional debug ONNX path. This is not used by FTH export.")
     args = parser.parse_args()
     if args.max_context < 2:
         raise ValueError("--max-context must be at least 2")
+    if args.fp8_format is not None and (
+            not math.isfinite(args.fp8_activation_amax) or args.fp8_activation_amax <= 0.0):
+        raise ValueError("--fp8-activation-amax must be finite and positive")
     model_dir = args.model_dir.resolve()
-    output_fth = args.output_fth or model_dir / f"qwen3.5-0.8b_decode_bf16_ctx{args.max_context}.fth"
+    fp8_dtype = {"e4m3": FP8E4M3, "e5m2": FP8E5M2}.get(args.fp8_format)
+    precision = "bf16" if fp8_dtype is None else fp8_format_name(fp8_dtype)
+    output_fth = args.output_fth or model_dir / f"qwen3.5-0.8b_decode_{precision}_ctx{args.max_context}.fth"
     output_fth.parent.mkdir(parents=True, exist_ok=True)
     if args.output_onnx is not None:
         args.output_onnx.parent.mkdir(parents=True, exist_ok=True)
     shard = resolve_shard(model_dir)
-    builder = QwenBuilder(model_dir, args.max_context)
+    builder = QwenBuilder(model_dir, args.max_context, fp8_dtype=fp8_dtype,
+                          fp8_activation_amax=args.fp8_activation_amax)
     with safe_open(shard, framework="pt", device="cpu") as source:
         builder.source = source
         graph = builder.build()

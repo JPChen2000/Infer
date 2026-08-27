@@ -37,6 +37,12 @@ bool ResolveCastDataType(int64_t onnx_type, DataType* data_type) {
         case 16:
             *data_type = DataType::BF16;
             return true;
+        case 17:
+            *data_type = DataType::FP8E4M3;
+            return true;
+        case 19:
+            *data_type = DataType::FP8E5M2;
+            return true;
         default:
             return false;
     }

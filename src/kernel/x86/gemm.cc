@@ -1,7 +1,11 @@
 #include "src/kernel/gemm.h"
 
+#include <cmath>
+
 #include "src/operator/params.h"
 #include "src/kernel/common/kernel_io.h"
+#include "src/kernel/fp8_host.h"
+#include "src/kernel/x86/linear_fp8.h"
 #include "src/kernel/x86/linear.h"
 #include "src/kernel/x86/linear_fp16.h"
 #include "src/kernel/x86/linear_fp32.h"
@@ -13,12 +17,20 @@ namespace kernel {
 namespace {
 
 constexpr int64_t kBf16PackedRhsMinimumMacs = 1 << 18;
+constexpr int64_t kFp8PackedRhsMinimumMacs = 1 << 18;
 
 bool ShouldUsePackedBf16Rhs(const feather::operators::GemmParam* param, int64_t m, int64_t k, int64_t n) {
     if (param == nullptr || param->b == nullptr || !param->b->is_immutable() || m != 1 || k <= 0 || n < 64) {
         return false;
     }
     return k >= kBf16PackedRhsMinimumMacs / n;
+}
+
+bool ShouldUsePackedFp8Rhs(const feather::operators::GemmParam* param, int64_t m, int64_t k, int64_t n) {
+    if (param == nullptr || param->b == nullptr || !param->b->is_immutable() || m != 1 || k <= 0 || n < 64) {
+        return false;
+    }
+    return k >= kFp8PackedRhsMinimumMacs / n;
 }
 
 bool IsVectorBias(const Tensor* bias, int64_t n) {
@@ -66,6 +78,107 @@ int32_t ComputeGeneralGemm(feather::operators::GemmParam* param) {
             }
             TensorIO<dtype>::Write(param->out.get(), i * n + j, sum);
         }
+    }
+    return 0;
+}
+
+template <DataType dtype>
+int32_t ComputeFp8Gemm(feather::operators::GemmParam* param, x86::PackedFp8Rhs* packed_rhs,
+                       x86::PackedFp8TransposedRhs* packed_transposed_rhs, x86::Fp8LinearWorkspace* workspace) {
+    if (param == nullptr || param->a == nullptr || param->b == nullptr || param->out == nullptr || param->trans_a ||
+        param->a->dims().size() < 2 || param->b->dims().size() != 2 || !std::isfinite(param->alpha) ||
+        !std::isfinite(param->beta) || !fp8_host::IsTensor<dtype>(param->a.get()) ||
+        !fp8_host::IsTensor<dtype>(param->b.get())) {
+        return -1;
+    }
+
+    const auto& a_dims = param->a->dims().data();
+    const auto& b_dims = param->b->dims().data();
+    const int64_t k = a_dims.back();
+    const int64_t b_k = param->trans_b ? b_dims[1] : b_dims[0];
+    const int64_t n = param->trans_b ? b_dims[0] : b_dims[1];
+    if (k <= 0 || n <= 0 || b_k != k || param->a->numel() <= 0 || param->a->numel() % k != 0) {
+        return -1;
+    }
+    const int64_t m = param->a->numel() / k;
+    if (m <= 0 || m > std::numeric_limits<int64_t>::max() / n) {
+        return -1;
+    }
+
+    std::vector<int64_t> expected_dims = a_dims;
+    expected_dims.back() = n;
+    if (!fp8_host::PrepareOutput<dtype>(param->out.get(), &expected_dims)) {
+        return -1;
+    }
+
+    const uint8_t* bias = nullptr;
+    float bias_scale = 1.0f;
+    x86::LinearBiasType bias_type = x86::LinearBiasType::kNone;
+    if (param->bias != nullptr) {
+        if (!fp8_host::IsTensor<dtype>(param->bias.get())) {
+            return -1;
+        }
+        if (IsVectorBias(param->bias.get(), n)) {
+            bias_type = x86::LinearBiasType::kVector;
+        } else if (param->bias->dims().size() == 2 && param->bias->dims()[0] == m &&
+                   param->bias->dims()[1] == n) {
+            bias_type = x86::LinearBiasType::kMatrix;
+        } else {
+            return -1;
+        }
+        bias = static_cast<const uint8_t*>(param->bias->raw_data());
+        bias_scale = param->bias->quantization_scale();
+    }
+
+    const auto* lhs = static_cast<const uint8_t*>(param->a->raw_data());
+    const auto* rhs = static_cast<const uint8_t*>(param->b->raw_data());
+    auto* out = static_cast<uint8_t*>(param->out->raw_data());
+    if (param->trans_b) {
+        if (ShouldUsePackedFp8Rhs(param, m, k, n) && packed_transposed_rhs != nullptr &&
+            packed_transposed_rhs->Matches(dtype, rhs, k, n, param->b->mutation_version())) {
+            return x86::ComputeLinearRowMajorX86Fp8PackedTransposedRhs(
+                dtype, lhs, param->a->quantization_scale(), rhs, param->b->quantization_scale(),
+                *packed_transposed_rhs, bias, bias_scale, m, k, n, bias_type, out,
+                param->out->quantization_scale(), param->alpha, param->beta, param->b->mutation_version(), workspace);
+        }
+        return x86::ComputeLinearRowMajorX86Fp8TransposedRhs(
+            dtype, lhs, param->a->quantization_scale(), rhs, param->b->quantization_scale(), bias, bias_scale,
+            param->alpha, param->beta, m, k, n, bias_type, out, param->out->quantization_scale());
+    }
+    if (ShouldUsePackedFp8Rhs(param, m, k, n) && packed_rhs != nullptr &&
+        packed_rhs->Matches(dtype, rhs, k, n, param->b->mutation_version())) {
+        return x86::ComputeLinearRowMajorX86Fp8PackedRhs(
+            dtype, lhs, param->a->quantization_scale(), rhs, param->b->quantization_scale(), *packed_rhs, bias,
+            bias_scale, m, k, n, bias_type, out, param->out->quantization_scale(), param->alpha, param->beta,
+            param->b->mutation_version(), workspace);
+    }
+    return x86::ComputeLinearRowMajorX86Fp8(
+        dtype, lhs, param->a->quantization_scale(), rhs, param->b->quantization_scale(), bias, bias_scale, m, k, n,
+        bias_type, out, param->out->quantization_scale(), param->alpha, param->beta);
+}
+
+template <DataType dtype>
+int32_t PrepareFp8Gemm(feather::operators::GemmParam* param, x86::PackedFp8Rhs* packed_rhs,
+                       x86::PackedFp8TransposedRhs* packed_transposed_rhs) {
+    if (param == nullptr || param->a == nullptr || param->b == nullptr || param->out == nullptr ||
+        !fp8_host::IsTensor<dtype>(param->a.get()) || !fp8_host::IsTensor<dtype>(param->b.get()) || param->trans_a ||
+        param->a->dims().size() < 2 || param->b->dims().size() != 2) {
+        return 0;
+    }
+    const int64_t k = param->a->dims()[param->a->dims().size() - 1];
+    const int64_t b_k = param->trans_b ? param->b->dims()[1] : param->b->dims()[0];
+    const int64_t n = param->trans_b ? param->b->dims()[0] : param->b->dims()[1];
+    const int64_t m = k > 0 && param->a->numel() % k == 0 ? param->a->numel() / k : 0;
+    if (m <= 0 || k != b_k || !ShouldUsePackedFp8Rhs(param, m, k, n)) {
+        return 0;
+    }
+    const auto* rhs = static_cast<const uint8_t*>(param->b->raw_data());
+    if (param->trans_b) {
+        if (packed_transposed_rhs != nullptr) {
+            (void)packed_transposed_rhs->Pack(dtype, rhs, k, n, param->b->mutation_version());
+        }
+    } else if (packed_rhs != nullptr) {
+        (void)packed_rhs->Pack(dtype, rhs, k, n, param->b->mutation_version());
     }
     return 0;
 }
@@ -218,6 +331,28 @@ int32_t GemmKernel<DeviceType::X86, DataType::BF16>::compute() {
                                              bias_type, out, &workspace_);
 }
 
+int32_t GemmKernel<DeviceType::X86, DataType::FP8E4M3>::compute() {
+    AutoTimer timer("X86::Gemm::FP8E4M3");
+    return ComputeFp8Gemm<DataType::FP8E4M3>(static_cast<feather::operators::GemmParam*>(param_), &packed_rhs_,
+                                             &packed_transposed_rhs_, &workspace_);
+}
+
+int32_t GemmKernel<DeviceType::X86, DataType::FP8E5M2>::compute() {
+    AutoTimer timer("X86::Gemm::FP8E5M2");
+    return ComputeFp8Gemm<DataType::FP8E5M2>(static_cast<feather::operators::GemmParam*>(param_), &packed_rhs_,
+                                             &packed_transposed_rhs_, &workspace_);
+}
+
+int32_t GemmKernel<DeviceType::X86, DataType::FP8E4M3>::Prepare() {
+    return PrepareFp8Gemm<DataType::FP8E4M3>(static_cast<feather::operators::GemmParam*>(param_), &packed_rhs_,
+                                             &packed_transposed_rhs_);
+}
+
+int32_t GemmKernel<DeviceType::X86, DataType::FP8E5M2>::Prepare() {
+    return PrepareFp8Gemm<DataType::FP8E5M2>(static_cast<feather::operators::GemmParam*>(param_), &packed_rhs_,
+                                             &packed_transposed_rhs_);
+}
+
 void EnsureX86GemmKernelsRegistered() {
     static bool registered = []() {
         KernelDispatcher::instance().registerKernel(
@@ -229,6 +364,12 @@ void EnsureX86GemmKernelsRegistered() {
         KernelDispatcher::instance().registerKernel(
             DeviceType::X86, DataType::BF16, "Gemm",
             []() { return std::make_unique<GemmKernel<DeviceType::X86, DataType::BF16>>(); });
+        KernelDispatcher::instance().registerKernel(
+            DeviceType::X86, DataType::FP8E4M3, "Gemm",
+            []() { return std::make_unique<GemmKernel<DeviceType::X86, DataType::FP8E4M3>>(); });
+        KernelDispatcher::instance().registerKernel(
+            DeviceType::X86, DataType::FP8E5M2, "Gemm",
+            []() { return std::make_unique<GemmKernel<DeviceType::X86, DataType::FP8E5M2>>(); });
         return true;
     }();
     (void)registered;

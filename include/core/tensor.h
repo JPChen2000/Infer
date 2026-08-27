@@ -77,6 +77,9 @@ class Tensor {
 
     DataType data_type() const { return m_data_type; }
     void set_data_type(const DataType &data_type) { m_data_type = data_type; }
+    const QuantizationParams& quantization() const { return m_quantization; }
+    void set_quantization(const QuantizationParams& quantization);
+    float quantization_scale() const { return m_quantization.enabled ? m_quantization.scale : 1.0f; }
     DataLayout layout() const { return m_layout; }
     void set_layout(DataLayout layout) { m_layout = layout; }
     bool is_immutable() const { return m_immutable; }
@@ -175,6 +178,7 @@ class Tensor {
     size_t m_memory_size{};
     size_t m_offset{};
     bool m_immutable{false};
+    QuantizationParams m_quantization{};
     std::shared_ptr<MutationState> m_mutation_state = std::make_shared<MutationState>();
 };
 

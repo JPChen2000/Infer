@@ -59,7 +59,10 @@ int32_t SqrtKernel<DeviceType::COMMON, DataType::BF16>::compute() {
                                                    [](float value) { return std::sqrt(value); });
 }
 
-void EnsureSqrtKernelsRegistered() { (void)g_sqrt_kernels_registered; }
+void EnsureSqrtKernelsRegistered() {
+    (void)g_sqrt_kernels_registered;
+    EnsureX86SqrtKernelsRegistered();
+}
 
 }  // namespace kernel
 }  // namespace feather

@@ -51,6 +51,12 @@ struct QwenDepthwiseConvStateParam : ParamBase {
     std::shared_ptr<Tensor> conv_out;
     std::shared_ptr<Tensor> discarded_prefix;
     std::shared_ptr<Tensor> next_state;
+    // FP8 state-convolution fusion keeps the BF16 state interface while
+    // preserving the quantization points of the original Cast/Conv/Cast
+    // sequence.
+    DataType fp8_dtype{DataType::UNKNOWN};
+    float fp8_input_scale{1.0f};
+    float fp8_output_scale{1.0f};
 };
 
 struct BatchNormParam : ParamBase {
@@ -87,6 +93,10 @@ struct QwenGemmArgmaxParam : ParamBase {
     std::shared_ptr<Tensor> a;
     std::shared_ptr<Tensor> b;
     std::shared_ptr<Tensor> out;
+    // FP8 lm-head graphs quantize the intermediate Gemm result before the
+    // original Cast-to-BF16 node.  Keep that scale explicit so the fused
+    // terminal path preserves the exported graph's greedy-selection values.
+    float output_scale{1.0f};
 };
 
 struct QwenGatedDeltaStateParam : ParamBase {

@@ -235,11 +235,15 @@ set(SRC "src/core/memory.cc"
     "src/kernel/common/resize.cc"
     "src/kernel/common/resize_concat.cc"
     "src/kernel/common/yolo_decode.cc"
+    "src/kernel/common/fp8.cc"
     "src/kernel/x86/add.cc"
+    "src/kernel/x86/batch_normalization.cc"
     "src/kernel/x86/cast.cc"
     "src/kernel/x86/concat.cc"
     "src/kernel/x86/conv2d.cc"
     "src/kernel/x86/div.cc"
+    "src/kernel/x86/erf.cc"
+    "src/kernel/x86/exp.cc"
     "src/kernel/x86/direct_conv_fp32.cc"
     "src/kernel/x86/expand.cc"
     "src/kernel/x86/fc.cc"
@@ -248,6 +252,8 @@ set(SRC "src/core/memory.cc"
     "src/kernel/x86/identity.cc"
     "src/kernel/x86/linear.cc"
     "src/kernel/x86/linear_fp16.cc"
+    "src/kernel/x86/linear_fp8.cc"
+    "src/kernel/x86/fp8_utils.cc"
     "src/kernel/x86/linear_fp32.cc"
     "src/kernel/x86/matmul.cc"
     "src/kernel/x86/mul.cc"
@@ -264,12 +270,15 @@ set(SRC "src/core/memory.cc"
     "src/kernel/x86/slice.cc"
     "src/kernel/x86/split.cc"
     "src/kernel/x86/softmax.cc"
+    "src/kernel/x86/sqrt.cc"
+    "src/kernel/x86/sub.cc"
     "src/kernel/x86/transpose.cc"
     "src/kernel/x86/qwen_gated_delta.cc"
     "src/kernel/x86/qwen_gemm_argmax.cc"
     "src/kernel/x86/qwen_depthwise_conv.cc"
     "src/kernel/x86/qwen_rms_norm.cc"
     "src/kernel/x86/yolo_decode.cc"
+    "src/kernel/x86/fp8.cc"
     "src/demo/classification_demo.cc"
     "src/demo/classification_runner.cc"
     "src/demo/image_io.cc"
@@ -329,7 +338,8 @@ set(CUDA_SRC
     "src/kernel/cuda/qwen_rms_norm.cu"
     "src/kernel/cuda/qwen_depthwise_conv.cu"
     "src/kernel/cuda/qwen_gated_delta.cu"
-    "src/kernel/cuda/qwen_gemm_argmax.cu")
+    "src/kernel/cuda/qwen_gemm_argmax.cu"
+    "src/kernel/cuda/fp8.cu")
 
 if (FEATHER_WITH_CUDA)
     list(APPEND SRC ${CUDA_SRC})
@@ -413,10 +423,13 @@ if (FEATHER_DEBUG)
 endif()
 set_source_files_properties(
     src/kernel/x86/add.cc
+    src/kernel/x86/batch_normalization.cc
     src/kernel/x86/cast.cc
     src/kernel/x86/concat.cc
     src/kernel/x86/conv2d.cc
     src/kernel/x86/div.cc
+    src/kernel/x86/erf.cc
+    src/kernel/x86/exp.cc
     src/kernel/x86/direct_conv_fp32.cc
     src/kernel/x86/expand.cc
     src/kernel/x86/fc.cc
@@ -425,6 +438,8 @@ set_source_files_properties(
     src/kernel/x86/identity.cc
     src/kernel/x86/linear.cc
     src/kernel/x86/linear_fp16.cc
+    src/kernel/x86/linear_fp8.cc
+    src/kernel/x86/fp8_utils.cc
     src/kernel/x86/linear_fp32.cc
     src/kernel/x86/matmul.cc
     src/kernel/x86/mul.cc
@@ -441,11 +456,14 @@ set_source_files_properties(
     src/kernel/x86/slice.cc
     src/kernel/x86/split.cc
     src/kernel/x86/softmax.cc
+    src/kernel/x86/sqrt.cc
+    src/kernel/x86/sub.cc
     src/kernel/x86/transpose.cc
     src/kernel/x86/qwen_gated_delta.cc
     src/kernel/x86/qwen_depthwise_conv.cc
     src/kernel/x86/qwen_rms_norm.cc
     src/kernel/x86/yolo_decode.cc
+    src/kernel/x86/fp8.cc
     PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-mf16c")
 target_include_directories(yolov5_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR})

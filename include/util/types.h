@@ -7,6 +7,8 @@
 #include <unordered_map>
 #include <vector>
 #include <variant>
+
+#include "util/fp8.h"
 namespace feather {
 
 struct BFloat16;
@@ -24,7 +26,31 @@ enum class DataType {
     BOOL = 9,
     UNKNOWN = 10,
     BF16 = 11,
+    FP8E4M3 = 12,
+    FP8E5M2 = 13,
 };
+
+enum class QuantizationGranularity {
+    kPerTensor = 0,
+    kPerChannel = 1,
+    kPerGroup = 2,
+    kPerBlock = 3,
+};
+
+struct QuantizationParams {
+    bool enabled{false};
+    float scale{1.0f};
+    QuantizationGranularity granularity{QuantizationGranularity::kPerTensor};
+    int64_t axis{-1};
+    int64_t block_size{0};
+};
+
+// FP8 kernels consume one scalar scale for an entire tensor. Disabled
+// quantization denotes the implicit unit scale; enabled non-scalar schemes
+// need a kernel that explicitly implements their indexing semantics.
+inline bool HasCompatiblePerTensorQuantization(const QuantizationParams& quantization) {
+    return !quantization.enabled || quantization.granularity == QuantizationGranularity::kPerTensor;
+}
 
 template<typename T>
 struct DataTypeTrait {
@@ -45,6 +71,10 @@ struct DataTypeTrait {
             return DataType::FP16;
         } else if constexpr (std::is_same<T, BFloat16>::value) {
             return DataType::BF16;
+        } else if constexpr (std::is_same<T, Fp8E4M3>::value) {
+            return DataType::FP8E4M3;
+        } else if constexpr (std::is_same<T, Fp8E5M2>::value) {
+            return DataType::FP8E5M2;
         } else if constexpr (std::is_same<T, std::string>::value) {
             return DataType::STRING;
         } else {
@@ -146,6 +176,8 @@ inline size_t DataTypeBytes(DataType dtype) {
         case DataType::INT8:
         case DataType::UINT8:
         case DataType::BOOL:
+        case DataType::FP8E4M3:
+        case DataType::FP8E5M2:
             return 1;
         case DataType::FP16:
         case DataType::BF16:

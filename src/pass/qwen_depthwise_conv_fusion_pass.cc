@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -16,7 +17,10 @@ const std::string kQwenDepthwiseConvFusionPassName = "QwenDepthwiseConvFusionPas
 struct QwenDepthwiseConvPattern {
     std::string concat;
     std::string reshape;
+    std::string input_cast;
     std::string conv;
+    std::string output_cast;
+    std::string target;
     std::string split;
     std::string state;
     std::string mixed;
@@ -24,6 +28,9 @@ struct QwenDepthwiseConvPattern {
     std::string conv_out;
     std::string discarded_prefix;
     std::string next_state;
+    bool fp8{false};
+    float fp8_input_scale{1.0f};
+    float fp8_output_scale{1.0f};
 };
 
 bool IsQwenModel(const StaticGraph& graph) {
@@ -83,6 +90,10 @@ bool HasShape(const std::shared_ptr<Tensor>& tensor, const std::vector<int64_t>&
     return tensor != nullptr && tensor->data_type() == DataType::BF16 && tensor->dims().data() == shape;
 }
 
+bool HasDims(const std::shared_ptr<Tensor>& tensor, const std::vector<int64_t>& shape) {
+    return tensor != nullptr && tensor->dims().data() == shape;
+}
+
 bool HasOnlyUsers(const StaticGraph& graph, const std::string& value, std::vector<std::string> expected) {
     auto users = graph.GetUsers(value);
     std::sort(users.begin(), users.end());
@@ -91,6 +102,12 @@ bool HasOnlyUsers(const StaticGraph& graph, const std::string& value, std::vecto
 }
 
 bool IsConvNode(const StaticNode& node) { return node.op_type == "Conv" || node.op_type == "Conv2D"; }
+
+bool IsFp8DataType(DataType data_type) {
+    return data_type == DataType::FP8E4M3 || data_type == DataType::FP8E5M2;
+}
+
+bool IsValidScale(float scale) { return std::isfinite(scale) && scale > 0.0f; }
 
 bool HasQwenConvDefaults(const StaticGraph& graph, const StaticNode& conv, int64_t channels) {
     int64_t group = 1;
@@ -121,9 +138,25 @@ bool MatchQwenDepthwiseConvPattern(const StaticGraph& graph, const StaticNode& c
         return false;
     }
 
-    const auto* reshape = ProducerNode(graph, conv.inputs[0], "Reshape");
+    const auto* input_cast = static_cast<const StaticNode*>(nullptr);
+    const StaticNode* reshape = ProducerNode(graph, conv.inputs[0], "Reshape");
+    bool fp8 = false;
+    if (reshape == nullptr) {
+        input_cast = ProducerNode(graph, conv.inputs[0], "Cast");
+        if (input_cast == nullptr || input_cast->inputs.size() != 1 || input_cast->outputs.size() != 1 ||
+            !HasOnlyUsers(graph, input_cast->outputs[0], {conv.name})) {
+            return false;
+        }
+        int64_t cast_to = 0;
+        if (!ReadIntAttribute(graph, *input_cast, "to", &cast_to) ||
+            (cast_to != 17 && cast_to != 19)) {
+            return false;
+        }
+        reshape = ProducerNode(graph, input_cast->inputs[0], "Reshape");
+        fp8 = true;
+    }
     if (reshape == nullptr || reshape->inputs.size() != 2 || reshape->outputs.size() != 1 ||
-        !HasOnlyUsers(graph, reshape->outputs[0], {conv.name})) {
+        !HasOnlyUsers(graph, reshape->outputs[0], {fp8 ? input_cast->name : conv.name})) {
         return false;
     }
     const auto* concat = ProducerNode(graph, reshape->inputs[0], "Concat");
@@ -175,22 +208,76 @@ bool MatchQwenDepthwiseConvPattern(const StaticGraph& graph, const StaticNode& c
     const int64_t channels = state->dims()[1];
     if (!HasShape(state, {1, channels, 3}) || !HasShape(mixed, {1, channels, 1}) ||
         !HasShape(joined, {1, channels, 4}) || !HasShape(conv_input, {1, channels, 1, 4}) ||
-        !HasShape(weight, {channels, 1, 1, 4}) || !HasShape(conv_out, {1, channels, 1, 1}) ||
         !HasShape(discarded_prefix, {1, channels, 1}) || !HasShape(next_state, {1, channels, 3}) ||
         !HasQwenConvDefaults(graph, conv, channels)) {
         return false;
     }
 
+    const StaticNode* output_cast = nullptr;
+    const StaticNode* target = &conv;
+    std::string conv_out_name = conv.outputs[0];
+    float fp8_input_scale = 1.0f;
+    float fp8_output_scale = 1.0f;
+    if (!fp8) {
+        if (!HasShape(weight, {channels, 1, 1, 4}) || !HasShape(conv_out, {1, channels, 1, 1}) ||
+            weight->data_type() != DataType::BF16 || conv_out->data_type() != DataType::BF16) {
+            return false;
+        }
+    } else {
+        const auto input_cast_output = graph.GetTensor(input_cast->outputs[0]);
+        if (input_cast_output == nullptr || !IsFp8DataType(input_cast_output->data_type()) ||
+            !IsValidScale(input_cast_output->quantization_scale()) ||
+            !HasCompatiblePerTensorQuantization(input_cast_output->quantization()) ||
+            !IsFp8DataType(weight->data_type()) || weight->data_type() != input_cast_output->data_type() ||
+            !HasDims(weight, {channels, 1, 1, 4}) ||
+            !HasCompatiblePerTensorQuantization(weight->quantization()) ||
+            !IsValidScale(weight->quantization_scale()) || !HasDims(conv_out, {1, channels, 1, 1}) ||
+            conv_out->data_type() != input_cast_output->data_type()) {
+            return false;
+        }
+        const auto conv_users = graph.GetUsers(conv.outputs[0]);
+        if (conv_users.size() != 1) {
+            return false;
+        }
+        output_cast = graph.GetNode(conv_users.front());
+        if (output_cast == nullptr || output_cast->op_type != "Cast" || output_cast->inputs.size() != 1 ||
+            output_cast->outputs.size() != 1 || output_cast->inputs[0] != conv.outputs[0]) {
+            return false;
+        }
+        int64_t output_cast_to = 0;
+        if (!ReadIntAttribute(graph, *output_cast, "to", &output_cast_to) || output_cast_to != 16) {
+            return false;
+        }
+        const auto output_cast_output = graph.GetTensor(output_cast->outputs[0]);
+        if (!HasShape(output_cast_output, {1, channels, 1, 1}) ||
+            output_cast_output->data_type() != DataType::BF16) {
+            return false;
+        }
+        fp8_input_scale = input_cast_output->quantization_scale();
+        fp8_output_scale = conv_out->quantization_scale();
+        if (!IsValidScale(fp8_output_scale)) {
+            return false;
+        }
+        target = output_cast;
+        conv_out_name = output_cast->outputs[0];
+    }
+
     pattern->concat = concat->name;
     pattern->reshape = reshape->name;
+    pattern->input_cast = input_cast == nullptr ? "" : input_cast->name;
     pattern->conv = conv.name;
+    pattern->output_cast = output_cast == nullptr ? "" : output_cast->name;
+    pattern->target = target->name;
     pattern->split = split->name;
     pattern->state = concat->inputs[0];
     pattern->mixed = concat->inputs[1];
     pattern->weight = conv.inputs[1];
-    pattern->conv_out = conv.outputs[0];
+    pattern->conv_out = conv_out_name;
     pattern->discarded_prefix = split->outputs[0];
     pattern->next_state = split->outputs[1];
+    pattern->fp8 = fp8;
+    pattern->fp8_input_scale = fp8_input_scale;
+    pattern->fp8_output_scale = fp8_output_scale;
     return true;
 }
 
@@ -223,14 +310,23 @@ int32_t QwenDepthwiseConvFusionPass::Run(StaticGraph* graph) {
         if (!MatchQwenDepthwiseConvPattern(*graph, *conv, &pattern)) {
             continue;
         }
+        if (pattern.fp8 && graph->KernelDevice() != DeviceType::X86) {
+            continue;
+        }
 
         model::NodeDesc replacement;
-        replacement.name = pattern.conv;
+        replacement.name = pattern.target;
         replacement.op_type = "QwenDepthwiseConvState";
         replacement.inputs = {pattern.state, pattern.mixed, pattern.weight};
         replacement.outputs = {pattern.conv_out, pattern.discarded_prefix, pattern.next_state};
-        if (!graph->ReplaceNodeDescAndAbsorbNode(replacement, pattern.split) || !graph->RemoveNode(pattern.reshape) ||
-            !graph->RemoveNode(pattern.concat)) {
+        if (pattern.fp8) {
+            replacement.attributes["fp8_input_scale"] = pattern.fp8_input_scale;
+            replacement.attributes["fp8_output_scale"] = pattern.fp8_output_scale;
+        }
+        if (!graph->ReplaceNodeDescAndAbsorbNode(replacement, pattern.split) ||
+            (pattern.fp8 && !graph->RemoveNode(pattern.conv)) ||
+            (!pattern.input_cast.empty() && !graph->RemoveNode(pattern.input_cast)) ||
+            !graph->RemoveNode(pattern.reshape) || !graph->RemoveNode(pattern.concat)) {
             return -1;
         }
     }

@@ -8,6 +8,7 @@ namespace feather {
 namespace kernel {
 
 void EnsureSubKernelsRegistered();
+void EnsureX86SubKernelsRegistered();
 
 template <DeviceType dev, DataType dtype>
 class SubKernel : public KernelBase {

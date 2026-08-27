@@ -24,6 +24,7 @@
 #include "pass/yolo_decode_fusion_pass.h"
 #include "model/model_format.h"
 #include "util/bf16.h"
+#include "util/fp8.h"
 
 using feather::DataType;
 using feather::DeadNodeEliminationPass;
@@ -877,6 +878,148 @@ void BindQwenDepthwiseConvInputs(StaticGraph* graph) {
     ASSERT_EQ(graph->SetTensor("reshape_shape", reshape_shape), 0);
 }
 
+ModelDesc BuildQwenFp8DepthwiseConvModelDesc(DataType fp8_dtype) {
+    constexpr int64_t kChannels = 3;
+    constexpr float kInputScale = 0.25f;
+    constexpr float kWeightScale = 0.125f;
+    constexpr float kOutputScale = 0.5f;
+    const int64_t onnx_fp8_type = fp8_dtype == DataType::FP8E4M3 ? 17 : 19;
+
+    ModelDesc model;
+    model.name = "qwen_fp8_depthwise_conv_graph";
+    model.version = 1;
+    model.graph.name = "decode";
+    model.graph.inputs = {"state", "mixed", "weight", "reshape_shape"};
+    model.graph.outputs = {"conv_out", "next_state"};
+
+    auto value = [](const std::string& name, std::vector<int64_t> dims, DataType data_type) {
+        ValueDesc desc;
+        desc.tensor.name = name;
+        desc.tensor.dims = std::move(dims);
+        desc.tensor.data_type = data_type;
+        return desc;
+    };
+    auto fp8_value = [&](const std::string& name, std::vector<int64_t> dims, bool constant, float scale) {
+        auto desc = value(name, std::move(dims), fp8_dtype);
+        desc.constant = constant;
+        desc.tensor.quantization = {true, scale};
+        return desc;
+    };
+    model.graph.values = {
+        value("state", {1, kChannels, 3}, DataType::BF16),
+        value("mixed", {1, kChannels, 1}, DataType::BF16),
+        fp8_value("weight", {kChannels, 1, 1, 4}, true, kWeightScale),
+        value("reshape_shape", {4}, DataType::INT64),
+        value("joined", {1, kChannels, 4}, DataType::BF16),
+        value("conv_input", {1, kChannels, 1, 4}, DataType::BF16),
+        fp8_value("conv_input_fp8", {1, kChannels, 1, 4}, false, kInputScale),
+        fp8_value("conv_out_fp8", {1, kChannels, 1, 1}, false, kOutputScale),
+        value("conv_out", {1, kChannels, 1, 1}, DataType::BF16),
+        value("discarded_prefix", {1, kChannels, 1}, DataType::BF16),
+        value("next_state", {1, kChannels, 3}, DataType::BF16),
+    };
+
+    NodeDesc concat;
+    concat.name = "state_concat";
+    concat.op_type = "Concat";
+    concat.inputs = {"state", "mixed"};
+    concat.outputs = {"joined"};
+    concat.attributes["axis"] = static_cast<int64_t>(2);
+
+    NodeDesc reshape;
+    reshape.name = "state_reshape";
+    reshape.op_type = "Reshape";
+    reshape.inputs = {"joined", "reshape_shape"};
+    reshape.outputs = {"conv_input"};
+
+    NodeDesc input_cast;
+    input_cast.name = "state_conv_to_fp8";
+    input_cast.op_type = "Cast";
+    input_cast.inputs = {"conv_input"};
+    input_cast.outputs = {"conv_input_fp8"};
+    input_cast.attributes["to"] = onnx_fp8_type;
+
+    NodeDesc conv;
+    conv.name = "state_conv";
+    conv.op_type = "Conv2D";
+    conv.inputs = {"conv_input_fp8", "weight"};
+    conv.outputs = {"conv_out_fp8"};
+    conv.attributes["group"] = kChannels;
+    conv.attributes["stride_h"] = static_cast<int64_t>(1);
+    conv.attributes["stride_w"] = static_cast<int64_t>(1);
+    conv.attributes["pad_h"] = static_cast<int64_t>(0);
+    conv.attributes["pad_w"] = static_cast<int64_t>(0);
+    conv.attributes["dilation_h"] = static_cast<int64_t>(1);
+    conv.attributes["dilation_w"] = static_cast<int64_t>(1);
+
+    NodeDesc output_cast;
+    output_cast.name = "state_conv_to_bf16";
+    output_cast.op_type = "Cast";
+    output_cast.inputs = {"conv_out_fp8"};
+    output_cast.outputs = {"conv_out"};
+    output_cast.attributes["to"] = static_cast<int64_t>(16);
+
+    NodeDesc split;
+    split.name = "state_split";
+    split.op_type = "Split";
+    split.inputs = {"joined"};
+    split.outputs = {"discarded_prefix", "next_state"};
+    split.attributes["axis"] = static_cast<int64_t>(2);
+    split.attributes["split_sizes"] = std::vector<int64_t>{1, 3};
+
+    model.graph.nodes = {concat, reshape, input_cast, conv, output_cast, split};
+    return model;
+}
+
+void BindQwenFp8DepthwiseConvInputs(StaticGraph* graph, DataType fp8_dtype) {
+    constexpr int64_t kChannels = 3;
+    constexpr float kWeightScale = 0.125f;
+
+    std::vector<feather::BFloat16> state_values;
+    std::vector<feather::BFloat16> mixed_values;
+    state_values.reserve(static_cast<size_t>(kChannels * 3));
+    mixed_values.reserve(static_cast<size_t>(kChannels));
+    for (int64_t channel = 0; channel < kChannels; ++channel) {
+        for (int64_t offset = 0; offset < 3; ++offset) {
+            state_values.push_back(feather::BFloat16{feather::FloatToBFloat16(
+                0.125f * static_cast<float>(channel * 3 + offset - 4))});
+        }
+        mixed_values.push_back(
+            feather::BFloat16{feather::FloatToBFloat16(0.0625f * static_cast<float>(channel * 5 - 3))});
+    }
+
+    auto state = std::make_shared<Tensor>();
+    state->Assign<feather::BFloat16>(state_values, {1, kChannels, 3});
+    auto mixed = std::make_shared<Tensor>();
+    mixed->Assign<feather::BFloat16>(mixed_values, {1, kChannels, 1});
+    auto reshape_shape = std::make_shared<Tensor>();
+    reshape_shape->Assign<int64_t>({1, kChannels, 1, 4}, {4});
+    ASSERT_EQ(graph->SetTensor("state", state), 0);
+    ASSERT_EQ(graph->SetTensor("mixed", mixed), 0);
+    ASSERT_EQ(graph->SetTensor("reshape_shape", reshape_shape), 0);
+
+    auto weight = std::make_shared<Tensor>();
+    if (fp8_dtype == DataType::FP8E4M3) {
+        std::vector<feather::Fp8E4M3> values;
+        values.reserve(static_cast<size_t>(kChannels * 4));
+        for (int64_t index = 0; index < kChannels * 4; ++index) {
+            values.push_back(feather::Fp8E4M3{feather::FloatToFp8E4M3(
+                0.046875f * static_cast<float>(index - 5) / kWeightScale)});
+        }
+        weight->Assign<feather::Fp8E4M3>(values, {kChannels, 1, 1, 4});
+    } else {
+        std::vector<feather::Fp8E5M2> values;
+        values.reserve(static_cast<size_t>(kChannels * 4));
+        for (int64_t index = 0; index < kChannels * 4; ++index) {
+            values.push_back(feather::Fp8E5M2{feather::FloatToFp8E5M2(
+                0.046875f * static_cast<float>(index - 5) / kWeightScale)});
+        }
+        weight->Assign<feather::Fp8E5M2>(values, {kChannels, 1, 1, 4});
+    }
+    weight->set_quantization({true, kWeightScale});
+    ASSERT_EQ(graph->SetTensor("weight", weight), 0);
+}
+
 void BindQwenGatedDeltaInputs(StaticGraph* graph) {
     auto state = std::make_shared<Tensor>();
     state->Assign<float>({
@@ -1398,6 +1541,42 @@ TEST(static_graph_pass_test, QwenDepthwiseConvFusionPassRewritesStateConvOnX86) 
     EXPECT_EQ(graph.GetNode("state_concat"), nullptr);
     EXPECT_EQ(graph.GetNode("state_reshape"), nullptr);
     EXPECT_EQ(graph.GetNode("state_split"), nullptr);
+}
+
+TEST(static_graph_pass_test, QwenDepthwiseConvFusionPassRewritesFp8StateConvOnX86) {
+    for (const auto fp8_dtype : {DataType::FP8E4M3, DataType::FP8E5M2}) {
+        StaticGraph graph;
+        graph.SetKernelDevice(DeviceType::X86);
+        ASSERT_EQ(graph.SetModel(BuildQwenFp8DepthwiseConvModelDesc(fp8_dtype)), 0);
+        BindQwenFp8DepthwiseConvInputs(&graph, fp8_dtype);
+        ASSERT_EQ(graph.Build(), 0);
+
+        auto pass_manager = std::make_shared<PassManager>();
+        pass_manager->AddPass(std::make_unique<QwenDepthwiseConvFusionPass>());
+        graph.SetPassManager(pass_manager);
+        ASSERT_EQ(graph.ApplyPasses(), 0);
+
+        EXPECT_EQ(graph.NodeSize(), 1U) << "dtype=" << static_cast<int>(fp8_dtype);
+        EXPECT_EQ(graph.GetNode("state_conv"), nullptr);
+        EXPECT_EQ(graph.GetNode("state_conv_to_fp8"), nullptr);
+        EXPECT_EQ(graph.GetNode("state_reshape"), nullptr);
+        EXPECT_EQ(graph.GetNode("state_concat"), nullptr);
+        EXPECT_EQ(graph.GetNode("state_split"), nullptr);
+        const auto* fused = graph.GetNode("state_conv_to_bf16");
+        ASSERT_NE(fused, nullptr);
+        EXPECT_EQ(fused->op_type, "QwenDepthwiseConvState");
+        EXPECT_EQ(fused->inputs, (std::vector<std::string>{"state", "mixed", "weight"}));
+        EXPECT_EQ(fused->outputs,
+                  (std::vector<std::string>{"conv_out", "discarded_prefix", "next_state"}));
+        const auto desc = std::find_if(graph.model().graph.nodes.begin(), graph.model().graph.nodes.end(),
+                                       [](const NodeDesc& node) { return node.name == "state_conv_to_bf16"; });
+        ASSERT_NE(desc, graph.model().graph.nodes.end());
+        ASSERT_TRUE(desc->attributes.count("fp8_input_scale"));
+        ASSERT_TRUE(desc->attributes.count("fp8_output_scale"));
+        EXPECT_FLOAT_EQ(std::get<float>(desc->attributes.at("fp8_input_scale")), 0.25f);
+        EXPECT_FLOAT_EQ(std::get<float>(desc->attributes.at("fp8_output_scale")), 0.5f);
+        EXPECT_EQ(graph.GetTensor("conv_out")->data_type(), DataType::BF16);
+    }
 }
 
 #ifdef FEATHER_WITH_CUDA

@@ -54,6 +54,18 @@ int32_t PowKernel<DeviceType::X86, DataType::FP32>::compute() {
         return -1;
     }
 
+    if (exponent == 2.0f) {
+        int64_t index = 0;
+        for (; index + 8 <= numel; index += 8) {
+            const __m256 value = _mm256_loadu_ps(input + index);
+            _mm256_storeu_ps(output + index, _mm256_mul_ps(value, value));
+        }
+        for (; index < numel; ++index) {
+            output[index] = input[index] * input[index];
+        }
+        return 0;
+    }
+
     alignas(32) float values[8];
     int64_t i = 0;
     for (; i + 8 <= numel; i += 8) {
@@ -88,6 +100,22 @@ int32_t PowKernel<DeviceType::X86, DataType::FP16>::compute() {
     float exponent = param->exponent;
     if (param->exponent_tensor != nullptr && !ReadScalarFloatTensor(param->exponent_tensor.get(), &exponent)) {
         return -1;
+    }
+
+    if (exponent == 2.0f) {
+        int64_t index = 0;
+        for (; index + 8 <= numel; index += 8) {
+            const __m128i value_bits = _mm_loadu_si128(reinterpret_cast<const __m128i*>(input + index));
+            const __m256 value = _mm256_cvtph_ps(value_bits);
+            const __m128i squared =
+                _mm256_cvtps_ph(_mm256_mul_ps(value, value), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(output + index), squared);
+        }
+        for (; index < numel; ++index) {
+            const float value = HalfToFloat(input[index]);
+            output[index] = FloatToHalf(value * value);
+        }
+        return 0;
     }
 
     alignas(32) float values[8];

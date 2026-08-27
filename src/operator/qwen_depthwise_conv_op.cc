@@ -1,6 +1,7 @@
 #include "src/operator/qwen_depthwise_conv_op.h"
 
 #include <cstddef>
+#include <cmath>
 #include <vector>
 
 #include "core/operator_registry.h"
@@ -14,13 +15,35 @@ bool HasShape(const std::shared_ptr<Tensor>& tensor, const std::vector<int64_t>&
     return tensor != nullptr && tensor->dims().data() == shape;
 }
 
+bool IsFp8DataType(DataType data_type) {
+    return data_type == DataType::FP8E4M3 || data_type == DataType::FP8E5M2;
+}
+
+bool IsValidScale(float scale) { return std::isfinite(scale) && scale > 0.0f; }
+
 bool IsQwenDepthwiseConvStateShape(const QwenDepthwiseConvStateParam& param) {
     if (param.state == nullptr || param.mixed == nullptr || param.weight == nullptr || param.conv_out == nullptr ||
         param.discarded_prefix == nullptr || param.next_state == nullptr ||
         param.state->data_type() != DataType::BF16 || param.mixed->data_type() != DataType::BF16 ||
-        param.weight->data_type() != DataType::BF16 || param.conv_out->data_type() != DataType::BF16 ||
+        param.conv_out->data_type() != DataType::BF16 ||
         param.discarded_prefix->data_type() != DataType::BF16 || param.next_state->data_type() != DataType::BF16 ||
         param.state->dims().size() != 3 || param.mixed->dims().size() != 3 || param.weight->dims().size() != 4) {
+        return false;
+    }
+
+    const DataType weight_dtype = param.weight->data_type();
+    const DataType fp8_dtype = param.fp8_dtype == DataType::UNKNOWN ? weight_dtype : param.fp8_dtype;
+    if (weight_dtype == DataType::BF16) {
+        if (param.fp8_dtype != DataType::UNKNOWN) {
+            return false;
+        }
+    } else if (IsFp8DataType(weight_dtype)) {
+        if (fp8_dtype != weight_dtype || !HasCompatiblePerTensorQuantization(param.weight->quantization()) ||
+            !IsValidScale(param.weight->quantization_scale()) || !IsValidScale(param.fp8_input_scale) ||
+            !IsValidScale(param.fp8_output_scale)) {
+            return false;
+        }
+    } else {
         return false;
     }
 
@@ -64,14 +87,33 @@ std::shared_ptr<OpBase> BuildQwenDepthwiseConvStateOp(const model::NodeDesc& nod
     param.conv_out = tensors[node.outputs[0]];
     param.discarded_prefix = tensors[node.outputs[1]];
     param.next_state = tensors[node.outputs[2]];
+    if (param.weight != nullptr && IsFp8DataType(param.weight->data_type())) {
+        param.fp8_dtype = param.weight->data_type();
+        const auto input_scale_it = node.attributes.find("fp8_input_scale");
+        if (input_scale_it != node.attributes.end()) {
+            const auto* scale = std::get_if<float>(&input_scale_it->second);
+            if (scale == nullptr) {
+                return nullptr;
+            }
+            param.fp8_input_scale = *scale;
+        }
+        const auto output_scale_it = node.attributes.find("fp8_output_scale");
+        if (output_scale_it != node.attributes.end()) {
+            const auto* scale = std::get_if<float>(&output_scale_it->second);
+            if (scale == nullptr) {
+                return nullptr;
+            }
+            param.fp8_output_scale = *scale;
+        }
+    }
     auto op = std::make_shared<QwenDepthwiseConvStateOp>(
         node.name.empty() ? "qwen_depthwise_conv_state" : node.name, param);
     if (op->CheckShape() != 0 || op->InferOutputShapes() != 0) {
         return nullptr;
     }
     kernel::EnsureQwenDepthwiseConvStateKernelsRegistered();
-    auto kernel = CreateKernelForTensor(context.device, "QwenDepthwiseConvState",
-                                            {param.state, param.mixed, param.weight, param.conv_out}, DataType::BF16);
+    const DataType execution_dtype = IsFp8DataType(param.fp8_dtype) ? param.fp8_dtype : DataType::BF16;
+    auto kernel = CreateKernelForTensor(context.device, "QwenDepthwiseConvState", {param.weight}, execution_dtype);
     if (kernel == nullptr) {
         return nullptr;
     }

@@ -13,7 +13,8 @@ constexpr int kLinearTile = 16;
 
 template <typename T>
 __global__ void MatMulTiledKernelCuda(const T* a, const T* b, const T* bias, T* out, int64_t m, int64_t k, int64_t n,
-                                      int bias_mode) {
+                                      int bias_mode, float a_scale, float b_scale, float bias_scale, float out_scale,
+                                      float alpha, float beta, bool trans_b) {
     __shared__ float a_tile[kLinearTile][kLinearTile];
     __shared__ float b_tile[kLinearTile][kLinearTile];
 
@@ -24,8 +25,10 @@ __global__ void MatMulTiledKernelCuda(const T* a, const T* b, const T* bias, T* 
     for (int64_t tile = 0; tile < k; tile += kLinearTile) {
         const int64_t a_col = tile + threadIdx.x;
         const int64_t b_row = tile + threadIdx.y;
-        a_tile[threadIdx.y][threadIdx.x] = (row < m && a_col < k) ? ReadDevice(a, row * k + a_col) : 0.0f;
-        b_tile[threadIdx.y][threadIdx.x] = (b_row < k && col < n) ? ReadDevice(b, b_row * n + col) : 0.0f;
+        a_tile[threadIdx.y][threadIdx.x] =
+            (row < m && a_col < k) ? ReadDevice(a, row * k + a_col, a_scale) : 0.0f;
+        const int64_t b_offset = trans_b ? col * k + b_row : b_row * n + col;
+        b_tile[threadIdx.y][threadIdx.x] = (b_row < k && col < n) ? ReadDevice(b, b_offset, b_scale) : 0.0f;
         __syncthreads();
 
         for (int i = 0; i < kLinearTile; ++i) {
@@ -37,18 +40,32 @@ __global__ void MatMulTiledKernelCuda(const T* a, const T* b, const T* bias, T* 
     if (row < m && col < n) {
         const int64_t idx = row * n + col;
         if (bias != nullptr) {
-            sum += ReadDevice(bias, bias_mode == 1 ? col : idx);
+            sum = alpha * sum + beta * ReadDevice(bias, bias_mode == 1 ? col : idx, bias_scale);
+        } else {
+            sum *= alpha;
         }
-        WriteDevice(out, idx, sum);
+        WriteDevice(out, idx, sum, out_scale);
     }
 }
 
 template <typename T>
 inline void LaunchMatMulKernelCuda(const T* a, const T* b, const T* bias, T* out, int64_t m, int64_t k, int64_t n,
-                                   int bias_mode) {
+                                   int bias_mode, float a_scale = 1.0f, float b_scale = 1.0f,
+                                   float bias_scale = 1.0f, float out_scale = 1.0f, float alpha = 1.0f,
+                                   float beta = 1.0f, bool trans_b = false) {
     dim3 block(kLinearTile, kLinearTile);
     dim3 grid(static_cast<unsigned int>(DivUp(n, kLinearTile)), static_cast<unsigned int>(DivUp(m, kLinearTile)));
-    MatMulTiledKernelCuda<T><<<grid, block, 0, InferenceStream()>>>(a, b, bias, out, m, k, n, bias_mode);
+    MatMulTiledKernelCuda<T><<<grid, block, 0, InferenceStream()>>>(a, b, bias, out, m, k, n, bias_mode, a_scale,
+                                                                     b_scale, bias_scale, out_scale, alpha, beta,
+                                                                     trans_b);
+}
+
+template <typename T>
+inline void LaunchFp8MatMulKernelCuda(const T* a, const T* b, const T* bias, T* out, int64_t m, int64_t k, int64_t n,
+                                      int bias_mode, float a_scale, float b_scale, float bias_scale, float out_scale,
+                                      float alpha = 1.0f, float beta = 1.0f, bool trans_b = false) {
+    LaunchMatMulKernelCuda<T>(a, b, bias, out, m, k, n, bias_mode, a_scale, b_scale, bias_scale, out_scale, alpha,
+                              beta, trans_b);
 }
 
 template <typename T>

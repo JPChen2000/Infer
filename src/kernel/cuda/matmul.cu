@@ -1,6 +1,7 @@
 #include "src/kernel/matmul.h"
 
 #include <algorithm>
+#include <limits>
 #include <memory>
 
 #include "core/kernel.h"
@@ -31,11 +32,16 @@ bool g_cuda_matmul_kernels_registered = []() {
                               []() { return std::make_unique<MatMulKernel<DeviceType::CUDA, DataType::FP16>>(); });
     dispatcher.registerKernel(DeviceType::CUDA, DataType::BF16, "MatMul",
                               []() { return std::make_unique<MatMulKernel<DeviceType::CUDA, DataType::BF16>>(); });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::FP8E4M3, "MatMul",
+                              []() { return std::make_unique<MatMulKernel<DeviceType::CUDA, DataType::FP8E4M3>>(); });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::FP8E5M2, "MatMul",
+                              []() { return std::make_unique<MatMulKernel<DeviceType::CUDA, DataType::FP8E5M2>>(); });
     return true;
 }();
 
 template <typename T>
-__global__ void BatchedMatMulKernelCuda(const T* a, const T* b, T* out, CudaBatchedMatMulSpec spec) {
+__global__ void BatchedMatMulKernelCuda(const T* a, const T* b, T* out, CudaBatchedMatMulSpec spec,
+                                        float a_scale, float b_scale, float out_scale) {
     __shared__ float a_tile[cuda_detail::kLinearTile][cuda_detail::kLinearTile];
     __shared__ float b_tile[cuda_detail::kLinearTile][cuda_detail::kLinearTile];
 
@@ -70,12 +76,12 @@ __global__ void BatchedMatMulKernelCuda(const T* a, const T* b, T* out, CudaBatc
         a_tile[threadIdx.y][threadIdx.x] =
             row < spec.m && a_col < spec.k
                 ? cuda_detail::ReadDevice(a, a_batch_offset + row * spec.a_shape.strides[a_batch_rank] +
-                                                  a_col * spec.a_shape.strides[a_batch_rank + 1])
+                                                  a_col * spec.a_shape.strides[a_batch_rank + 1], a_scale)
                 : 0.0f;
         b_tile[threadIdx.y][threadIdx.x] =
             b_row < spec.k && col < spec.n
                 ? cuda_detail::ReadDevice(b, b_batch_offset + b_row * spec.b_shape.strides[b_batch_rank] +
-                                                  col * spec.b_shape.strides[b_batch_rank + 1])
+                                                  col * spec.b_shape.strides[b_batch_rank + 1], b_scale)
                 : 0.0f;
         __syncthreads();
 
@@ -86,13 +92,17 @@ __global__ void BatchedMatMulKernelCuda(const T* a, const T* b, T* out, CudaBatc
     }
 
     if (row < spec.m && col < spec.n) {
-        cuda_detail::WriteDevice(out, batch * spec.m * spec.n + row * spec.n + col, sum);
+        cuda_detail::WriteDevice(out, batch * spec.m * spec.n + row * spec.n + col, sum, out_scale);
     }
 }
 
 template <DataType dtype>
 int RunBatchedMatMul(feather::operators::MatMulParam* param) {
     using T = cuda_detail::StorageT<dtype>;
+    if (param == nullptr || param->a == nullptr || param->b == nullptr || param->out == nullptr ||
+        !cuda_detail::IsTensorReady<dtype>(param->a.get()) || !cuda_detail::IsTensorReady<dtype>(param->b.get())) {
+        return -1;
+    }
     const auto& a_dims = param->a->dims().data();
     const auto& b_dims = param->b->dims().data();
     const auto& out_dims = param->out->dims().data();
@@ -109,7 +119,9 @@ int RunBatchedMatMul(feather::operators::MatMulParam* param) {
         return -1;
     }
     spec.batch_rank = out_rank - 2;
-    if (spec.batch_rank != std::max(a_rank, b_rank) - 2 || a_dims[a_rank - 1] != b_dims[b_rank - 2] ||
+    if (spec.batch_rank != std::max(a_rank, b_rank) - 2 || a_dims[a_rank - 1] <= 0 ||
+        b_dims[b_rank - 2] <= 0 || a_dims[a_rank - 1] != b_dims[b_rank - 2] ||
+        a_dims[a_rank - 2] <= 0 || b_dims[b_rank - 1] <= 0 ||
         out_dims[out_rank - 2] != a_dims[a_rank - 2] || out_dims[out_rank - 1] != b_dims[b_rank - 1]) {
         return -1;
     }
@@ -136,6 +148,16 @@ int RunBatchedMatMul(feather::operators::MatMulParam* param) {
         batch_count *= expected_dim;
     }
 
+    if (batch_count <= 0 || spec.m <= 0 || spec.k <= 0 || spec.n <= 0 ||
+        batch_count > std::numeric_limits<int64_t>::max() / spec.m ||
+        batch_count * spec.m > std::numeric_limits<int64_t>::max() / spec.n) {
+        return -1;
+    }
+    const int64_t expected_numel = batch_count * spec.m * spec.n;
+    if (param->out->numel() != expected_numel || !cuda_detail::IsOutputReady<dtype>(param->out.get(), &out_dims)) {
+        return -1;
+    }
+
     cuda_detail::DeviceBuffer<T> a;
     cuda_detail::DeviceBuffer<T> b;
     cuda_detail::DeviceBuffer<T> out;
@@ -148,7 +170,9 @@ int RunBatchedMatMul(feather::operators::MatMulParam* param) {
     const dim3 grid(static_cast<unsigned int>(cuda_detail::DivUp(spec.n, cuda_detail::kLinearTile)),
                     static_cast<unsigned int>(cuda_detail::DivUp(spec.m, cuda_detail::kLinearTile)),
                     static_cast<unsigned int>(batch_count));
-    BatchedMatMulKernelCuda<T><<<grid, block, 0, cuda_detail::InferenceStream()>>>(a.get(), b.get(), out.get(), spec);
+    BatchedMatMulKernelCuda<T><<<grid, block, 0, cuda_detail::InferenceStream()>>>(
+        a.get(), b.get(), out.get(), spec, param->a->quantization_scale(), param->b->quantization_scale(),
+        param->out->quantization_scale());
     if (cuda_detail::CudaCheck(cudaGetLastError()) != 0) {
         return -1;
     }
@@ -188,6 +212,50 @@ int RunMatMul(feather::operators::MatMulParam* param, const char* timer_name) {
     return cuda_detail::CopyDeviceToTensor(&out, param->out.get());
 }
 
+template <DataType dtype>
+int RunFp8MatMul(feather::operators::MatMulParam* param, const char* timer_name) {
+    AutoTimer timer(timer_name);
+    using T = cuda_detail::StorageT<dtype>;
+    if (param == nullptr || param->a == nullptr || param->b == nullptr || param->out == nullptr ||
+        !cuda_detail::IsTensorReady<dtype>(param->a.get()) || !cuda_detail::IsTensorReady<dtype>(param->b.get())) {
+        return -1;
+    }
+    const auto& a_dims = param->a->dims().data();
+    const auto& b_dims = param->b->dims().data();
+    if (a_dims.size() < 2 || b_dims.size() < 2 || a_dims.back() != b_dims[b_dims.size() - 2]) {
+        return -1;
+    }
+    if (b_dims.size() != 2) {
+        return RunBatchedMatMul<dtype>(param);
+    }
+    if (a_dims.back() <= 0 || b_dims.back() <= 0) return -1;
+    const int64_t m = cuda_detail::ComputeProduct(a_dims, 0, a_dims.size() - 1);
+    const int64_t k = a_dims.back();
+    const int64_t n = b_dims.back();
+    if (m <= 0 || k <= 0 || n <= 0 || m > std::numeric_limits<int64_t>::max() / n ||
+        param->out->numel() != m * n) {
+        return -1;
+    }
+    auto expected_output_dims = a_dims;
+    expected_output_dims.back() = n;
+    if (!cuda_detail::IsOutputReady<dtype>(param->out.get(), &expected_output_dims)) return -1;
+    cuda_detail::DeviceBuffer<T> a;
+    cuda_detail::DeviceBuffer<T> b;
+    cuda_detail::DeviceBuffer<T> out;
+    if (cuda_detail::CopyTensorToDevice(param->a.get(), &a) != 0 ||
+        cuda_detail::CopyTensorToDevice(param->b.get(), &b) != 0 ||
+        cuda_detail::AllocateTensorOnDevice(param->out.get(), &out) != 0) {
+        return -1;
+    }
+    cuda_detail::LaunchFp8MatMulKernelCuda<T>(
+        a.get(), b.get(), nullptr, out.get(), m, k, n, 0, param->a->quantization_scale(),
+        param->b->quantization_scale(), 1.0f, param->out->quantization_scale());
+    if (cuda_detail::CudaCheck(cudaGetLastError()) != 0) {
+        return -1;
+    }
+    return cuda_detail::CopyDeviceToTensor(&out, param->out.get());
+}
+
 }  // namespace
 
 template <>
@@ -203,6 +271,18 @@ int32_t MatMulKernel<DeviceType::CUDA, DataType::FP16>::compute() {
 template <>
 int32_t MatMulKernel<DeviceType::CUDA, DataType::BF16>::compute() {
     return RunMatMul<DataType::BF16>(static_cast<feather::operators::MatMulParam*>(param_), "CUDA::MatMul::BF16");
+}
+
+template <>
+int32_t MatMulKernel<DeviceType::CUDA, DataType::FP8E4M3>::compute() {
+    return RunFp8MatMul<DataType::FP8E4M3>(static_cast<feather::operators::MatMulParam*>(param_),
+                                           "CUDA::MatMul::FP8E4M3");
+}
+
+template <>
+int32_t MatMulKernel<DeviceType::CUDA, DataType::FP8E5M2>::compute() {
+    return RunFp8MatMul<DataType::FP8E5M2>(static_cast<feather::operators::MatMulParam*>(param_),
+                                           "CUDA::MatMul::FP8E5M2");
 }
 
 void EnsureCudaMatMulKernelsRegistered() { (void)g_cuda_matmul_kernels_registered; }

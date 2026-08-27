@@ -1,6 +1,7 @@
 #include "core/tensor.h"
 #include "util/logger.h"
 #include "src/kernel/common/kernel_io.h"
+#include "src/kernel/fp8_host.h"
 #include "util/timer.h"
 #include "util/types.h"
 #include "src/kernel/fc.h"
@@ -18,20 +19,20 @@ bool g_fc_kernels_registered = []() {
                                                []() { return std::make_unique<FcKernel<DeviceType::COMMON, DataType::FP32>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP16, "FC",
                                                []() { return std::make_unique<FcKernel<DeviceType::COMMON, DataType::FP16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP8E4M3, "FC",
+                                               []() { return std::make_unique<FcKernel<DeviceType::COMMON, DataType::FP8E4M3>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP8E5M2, "FC",
+                                               []() { return std::make_unique<FcKernel<DeviceType::COMMON, DataType::FP8E5M2>>(); });
     return true;
 }();
 }  // namespace
 
 template <DataType dtype>
 int32_t ComputeFcCommon(feather::operators::FcParam* param) {
-    if (param == nullptr || param->input == nullptr || param->w == nullptr || param->out == nullptr) {
-        return -1;
-    }
-
-    const int64_t m = param->input->dims()[0];
-    const int64_t n = param->input->dims()[1];
-    const int64_t c = param->w->dims()[1];
-    param->out->set_data_type(dtype);
+    int64_t m = 0;
+    int64_t n = 0;
+    int64_t c = 0;
+    if (!fp8_host::ValidateFc<dtype>(param, &m, &n, &c)) return -1;
 
     for (int64_t i = 0; i < m; ++i) {
         for (int64_t j = 0; j < c; ++j) {
@@ -40,7 +41,7 @@ int32_t ComputeFcCommon(feather::operators::FcParam* param) {
                 sum += TensorIO<dtype>::Read(param->input.get(), i * n + k) *
                        TensorIO<dtype>::Read(param->w.get(), k * c + j);
             }
-            if (param->bias != nullptr && param->bias->IsInitialized()) {
+            if (param->bias != nullptr) {
                 if (param->bias->dims().size() == 1) {
                     sum += TensorIO<dtype>::Read(param->bias.get(), j);
                 } else {
@@ -64,6 +65,23 @@ template<>
 int32_t FcKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::FC::FP16");
     return ComputeFcCommon<DataType::FP16>(static_cast<FcParam*>(param_));
+}
+
+template <DataType dtype>
+int32_t ComputeCommonFp8Fc(feather::operators::FcParam* param) {
+    return ComputeFcCommon<dtype>(param);
+}
+
+template <>
+int32_t FcKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() {
+    AutoTimer timer("Common::FC::FP8E4M3");
+    return ComputeCommonFp8Fc<DataType::FP8E4M3>(static_cast<FcParam*>(param_));
+}
+
+template <>
+int32_t FcKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() {
+    AutoTimer timer("Common::FC::FP8E5M2");
+    return ComputeCommonFp8Fc<DataType::FP8E5M2>(static_cast<FcParam*>(param_));
 }
 typedef feather::kernel::FcKernel<DeviceType::COMMON, DataType::FP32> FcCommonFP32Kernel;
 REGISTER_KERNEL(COMMON, FP32, FC, FcCommonFP32Kernel);

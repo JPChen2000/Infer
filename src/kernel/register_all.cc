@@ -53,11 +53,16 @@
 namespace feather {
 namespace kernel {
 
+void EnsureCommonFp8KernelsRegistered();
+void EnsureX86Fp8KernelsRegistered();
+
 #ifdef FEATHER_WITH_CUDA
 void EnsureCudaKernelsRegistered();
 #endif
 
 void RegisterBuiltinKernels() {
+    EnsureCommonFp8KernelsRegistered();
+    EnsureX86Fp8KernelsRegistered();
     EnsureAddKernelsRegistered();
     EnsureBatchNormalizationKernelsRegistered();
     EnsureDivKernelsRegistered();

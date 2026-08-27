@@ -8,6 +8,7 @@ namespace feather {
 namespace kernel {
 
 void EnsureExpKernelsRegistered();
+void EnsureX86ExpKernelsRegistered();
 
 template <DeviceType dev, DataType dtype>
 class ExpKernel : public KernelBase {

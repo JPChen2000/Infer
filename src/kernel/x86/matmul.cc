@@ -6,7 +6,9 @@
 
 #include "src/kernel/x86/linear.h"
 #include "src/kernel/x86/linear_fp16.h"
+#include "src/kernel/x86/linear_fp8.h"
 #include "src/kernel/x86/linear_fp32.h"
+#include "src/kernel/fp8_host.h"
 #include "util/timer.h"
 
 namespace feather {
@@ -15,6 +17,7 @@ namespace kernel {
 namespace {
 
 constexpr int64_t kBf16PackedRhsMinimumMacs = 1 << 18;
+constexpr int64_t kFp8PackedRhsMinimumMacs = 1 << 18;
 
 std::vector<int64_t> ComputeStrides(const std::vector<int64_t>& dims) {
     std::vector<int64_t> strides(dims.size(), 1);
@@ -97,6 +100,14 @@ bool ShouldUsePackedBf16Rhs(const feather::operators::MatMulParam* param, const 
     return shape.k >= kBf16PackedRhsMinimumMacs / shape.n;
 }
 
+bool ShouldUsePackedFp8Rhs(const feather::operators::MatMulParam* param, const MatMulShape& shape) {
+    if (param == nullptr || param->b == nullptr || !param->b->is_immutable() || !shape.singleton_batch ||
+        shape.batch_count != 1 || shape.m != 1 || shape.k <= 0 || shape.n < 64) {
+        return false;
+    }
+    return shape.k >= kFp8PackedRhsMinimumMacs / shape.n;
+}
+
 template <typename T, typename MatrixCompute>
 int32_t ComputeBatchedMatMulX86(feather::operators::MatMulParam* param, MatrixCompute matrix_compute) {
     MatMulShape shape;
@@ -172,13 +183,65 @@ int32_t ComputeMatMulX86(feather::operators::MatMulParam* param) {
                 return x86::ComputeLinearRowMajorX86Fp16(lhs, rhs, nullptr, m, k, n, x86::LinearBiasType::kNone,
                                                          out);
             });
-    } else {
+    } else if constexpr (dtype == DataType::BF16) {
         return ComputeBatchedMatMulX86<uint16_t>(
             param, [](const uint16_t* lhs, const uint16_t* rhs, int64_t m, int64_t k, int64_t n, uint16_t* out) {
                 return x86::ComputeLinearRowMajorX86Bf16(lhs, rhs, nullptr, m, k, n, x86::LinearBiasType::kNone,
                                                          out);
             });
+    } else {
+        MatMulShape shape;
+        const auto expected_dims = param->out->dims().data();
+        if (!ValidateBatchedMatMulX86(param, &shape) || !fp8_host::IsTensor<dtype>(param->a.get()) ||
+            !fp8_host::IsTensor<dtype>(param->b.get()) ||
+            !fp8_host::PrepareOutput<dtype>(param->out.get(), &expected_dims)) {
+            return -1;
+        }
+        const float lhs_scale = param->a->quantization_scale();
+        const float rhs_scale = param->b->quantization_scale();
+        const float out_scale = param->out->quantization_scale();
+        const auto matrix_compute = [lhs_scale, rhs_scale, out_scale](const uint8_t* lhs, const uint8_t* rhs,
+                                                                        int64_t m, int64_t k, int64_t n,
+                                                                        uint8_t* out) {
+            return x86::ComputeLinearRowMajorX86Fp8(dtype, lhs, lhs_scale, rhs, rhs_scale, nullptr, 1.0f, m, k, n,
+                                                    x86::LinearBiasType::kNone, out, out_scale);
+        };
+        return ComputeBatchedMatMulX86<uint8_t>(param, matrix_compute);
     }
+}
+
+template <DataType dtype>
+int32_t ComputeFp8MatMulX86(feather::operators::MatMulParam* param, x86::PackedFp8Rhs* packed_rhs,
+                            x86::Fp8LinearWorkspace* workspace) {
+    if (param == nullptr || param->a == nullptr || param->b == nullptr || param->out == nullptr ||
+        !fp8_host::IsTensor<dtype>(param->a.get()) || !fp8_host::IsTensor<dtype>(param->b.get())) {
+        return -1;
+    }
+    MatMulShape shape;
+    const auto expected_dims = param->out->dims().data();
+    if (!ValidateBatchedMatMulX86(param, &shape) ||
+        !fp8_host::PrepareOutput<dtype>(param->out.get(), &expected_dims)) {
+        return -1;
+    }
+    const auto* lhs = static_cast<const uint8_t*>(param->a->raw_data());
+    const auto* rhs = static_cast<const uint8_t*>(param->b->raw_data());
+    auto* out = static_cast<uint8_t*>(param->out->raw_data());
+    const float lhs_scale = param->a->quantization_scale();
+    const float rhs_scale = param->b->quantization_scale();
+    const float out_scale = param->out->quantization_scale();
+    if (ShouldUsePackedFp8Rhs(param, shape) && packed_rhs != nullptr &&
+        packed_rhs->Matches(dtype, rhs, shape.k, shape.n, param->b->mutation_version())) {
+        return x86::ComputeLinearRowMajorX86Fp8PackedRhs(
+            dtype, lhs, lhs_scale, rhs, rhs_scale, *packed_rhs, nullptr, 1.0f, shape.m, shape.k, shape.n,
+            x86::LinearBiasType::kNone, out, out_scale, 1.0f, 1.0f, param->b->mutation_version(), workspace);
+    }
+    const auto matrix_compute = [lhs_scale, rhs_scale, out_scale](const uint8_t* matrix_lhs,
+                                                                    const uint8_t* matrix_rhs, int64_t m,
+                                                                    int64_t k, int64_t n, uint8_t* matrix_out) {
+        return x86::ComputeLinearRowMajorX86Fp8(dtype, matrix_lhs, lhs_scale, matrix_rhs, rhs_scale, nullptr, 1.0f,
+                                                m, k, n, x86::LinearBiasType::kNone, matrix_out, out_scale);
+    };
+    return ComputeBatchedMatMulX86<uint8_t>(param, matrix_compute);
 }
 
 int32_t ComputeBf16MatMulX86(feather::operators::MatMulParam* param, x86::Bf16LinearWorkspace* workspace,
@@ -224,6 +287,41 @@ int32_t MatMulKernel<DeviceType::X86, DataType::FP16>::compute() {
     return ComputeMatMulX86<DataType::FP16>(static_cast<feather::operators::MatMulParam*>(param_));
 }
 
+int32_t MatMulKernel<DeviceType::X86, DataType::FP8E4M3>::compute() {
+    AutoTimer timer("X86::MatMul::FP8E4M3");
+    auto* param = static_cast<feather::operators::MatMulParam*>(param_);
+    return ComputeFp8MatMulX86<DataType::FP8E4M3>(param, &packed_rhs_, &workspace_);
+}
+
+int32_t MatMulKernel<DeviceType::X86, DataType::FP8E5M2>::compute() {
+    AutoTimer timer("X86::MatMul::FP8E5M2");
+    auto* param = static_cast<feather::operators::MatMulParam*>(param_);
+    return ComputeFp8MatMulX86<DataType::FP8E5M2>(param, &packed_rhs_, &workspace_);
+}
+
+template <DataType dtype>
+int32_t PrepareFp8MatMulX86(feather::operators::MatMulParam* param, x86::PackedFp8Rhs* packed_rhs) {
+    if (param == nullptr || param->a == nullptr || param->b == nullptr || param->out == nullptr ||
+        !fp8_host::IsTensor<dtype>(param->a.get()) || !fp8_host::IsTensor<dtype>(param->b.get())) {
+        return 0;
+    }
+    MatMulShape shape;
+    if (!ValidateBatchedMatMulX86(param, &shape) || !ShouldUsePackedFp8Rhs(param, shape) || packed_rhs == nullptr) {
+        return 0;
+    }
+    (void)packed_rhs->Pack(dtype, static_cast<const uint8_t*>(param->b->raw_data()), shape.k, shape.n,
+                           param->b->mutation_version());
+    return 0;
+}
+
+int32_t MatMulKernel<DeviceType::X86, DataType::FP8E4M3>::Prepare() {
+    return PrepareFp8MatMulX86<DataType::FP8E4M3>(static_cast<feather::operators::MatMulParam*>(param_), &packed_rhs_);
+}
+
+int32_t MatMulKernel<DeviceType::X86, DataType::FP8E5M2>::Prepare() {
+    return PrepareFp8MatMulX86<DataType::FP8E5M2>(static_cast<feather::operators::MatMulParam*>(param_), &packed_rhs_);
+}
+
 int32_t MatMulKernel<DeviceType::X86, DataType::BF16>::Prepare() {
     auto* param = static_cast<feather::operators::MatMulParam*>(param_);
     MatMulShape shape;
@@ -258,6 +356,12 @@ void EnsureX86MatMulKernelsRegistered() {
         KernelDispatcher::instance().registerKernel(
             DeviceType::X86, DataType::BF16, "MatMul",
             []() { return std::make_unique<MatMulKernel<DeviceType::X86, DataType::BF16>>(); });
+        KernelDispatcher::instance().registerKernel(
+            DeviceType::X86, DataType::FP8E4M3, "MatMul",
+            []() { return std::make_unique<MatMulKernel<DeviceType::X86, DataType::FP8E4M3>>(); });
+        KernelDispatcher::instance().registerKernel(
+            DeviceType::X86, DataType::FP8E5M2, "MatMul",
+            []() { return std::make_unique<MatMulKernel<DeviceType::X86, DataType::FP8E5M2>>(); });
         return true;
     }();
     (void)registered;

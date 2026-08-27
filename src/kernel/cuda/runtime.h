@@ -8,6 +8,7 @@
 #endif
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 
 #include "core/tensor.h"
@@ -15,6 +16,13 @@
 namespace feather {
 namespace kernel {
 namespace cuda_detail {
+
+inline int64_t DivUp(int64_t value, int64_t divisor) {
+    if (value <= 0 || divisor <= 0) {
+        return 0;
+    }
+    return value / divisor + (value % divisor == 0 ? 0 : 1);
+}
 
 struct TensorCacheStats {
     size_t active_tensor_count{0};

@@ -18,6 +18,10 @@ bool g_cuda_mul_kernels_registered = []() {
                               []() { return std::make_unique<MulKernel<DeviceType::CUDA, DataType::FP16>>(); });
     dispatcher.registerKernel(DeviceType::CUDA, DataType::BF16, "Mul",
                               []() { return std::make_unique<MulKernel<DeviceType::CUDA, DataType::BF16>>(); });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::FP8E4M3, "Mul",
+                              []() { return std::make_unique<MulKernel<DeviceType::CUDA, DataType::FP8E4M3>>(); });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::FP8E5M2, "Mul",
+                              []() { return std::make_unique<MulKernel<DeviceType::CUDA, DataType::FP8E5M2>>(); });
     return true;
 }();
 
@@ -39,6 +43,21 @@ template <>
 int32_t MulKernel<DeviceType::CUDA, DataType::BF16>::compute() {
     return cuda_detail::RunBinary<DataType::BF16, 1>(static_cast<feather::operators::BinaryParam*>(param_),
                                                      "CUDA::Mul::BF16");
+}
+
+template <DataType dtype>
+int32_t ComputeCudaFp8Mul(feather::operators::BinaryParam* param) {
+    return cuda_detail::RunBinary<dtype, 1>(param, "CUDA::Mul::FP8");
+}
+
+template <>
+int32_t MulKernel<DeviceType::CUDA, DataType::FP8E4M3>::compute() {
+    return ComputeCudaFp8Mul<DataType::FP8E4M3>(static_cast<feather::operators::BinaryParam*>(param_));
+}
+
+template <>
+int32_t MulKernel<DeviceType::CUDA, DataType::FP8E5M2>::compute() {
+    return ComputeCudaFp8Mul<DataType::FP8E5M2>(static_cast<feather::operators::BinaryParam*>(param_));
 }
 
 void EnsureCudaMulKernelsRegistered() { (void)g_cuda_mul_kernels_registered; }

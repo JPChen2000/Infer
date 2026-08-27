@@ -8,6 +8,7 @@ namespace feather {
 namespace kernel {
 
 void EnsureErfKernelsRegistered();
+void EnsureX86ErfKernelsRegistered();
 
 template <DeviceType dev, DataType dtype>
 class ErfKernel : public KernelBase {
