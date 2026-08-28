@@ -155,6 +155,123 @@ int64_t SelectGreedyBf16(const BFloat16* values, int64_t count) {
 
 }  // namespace
 
+QwenRunner::~QwenRunner() {
+#ifdef FEATHER_WITH_CUDA
+    ResetCudaGraphs();
+#endif
+}
+
+int64_t QwenRunner::CudaGraphLaunchCount() const { return cuda_graph_launch_count_; }
+
+void QwenRunner::SetRuntimeProfilingEnabled(bool enabled) {
+#ifdef FEATHER_WITH_CUDA
+    ResetCudaGraphs();
+#endif
+    runtime_graph_.SetProfilingEnabled(enabled);
+}
+
+#ifdef FEATHER_WITH_CUDA
+void QwenRunner::ResetCudaGraphs() {
+    bool has_executable = false;
+    for (const auto& slot : cuda_graph_slots_) {
+        has_executable = has_executable || slot.executable != nullptr;
+    }
+    if (has_executable) {
+        (void)kernel::cuda_detail::SynchronizeInferenceStream();
+    }
+    for (auto& slot : cuda_graph_slots_) {
+        if (slot.executable != nullptr) {
+            (void)cudaGraphExecDestroy(slot.executable);
+            slot.executable = nullptr;
+        }
+        slot.logits_device = nullptr;
+        slot.logits_bytes = 0;
+    }
+    cuda_graph_slot_ = 0;
+    cuda_graph_capture_disabled_ = false;
+    cuda_graph_launch_count_ = 0;
+}
+
+int32_t QwenRunner::CaptureCudaGraph(int slot) {
+    if (slot < 0 || slot >= static_cast<int>(cuda_graph_slots_.size()) ||
+        cuda_graph_slots_[static_cast<size_t>(slot)].executable != nullptr) {
+        return -1;
+    }
+    const auto stream = kernel::cuda_detail::InferenceStream();
+    if (stream == nullptr || cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal) != cudaSuccess) {
+        (void)cudaGetLastError();
+        return 1;
+    }
+
+    const int32_t graph_status = runtime_graph_.Run();
+    cudaGraph_t graph = nullptr;
+    const auto capture_status = cudaStreamEndCapture(stream, &graph);
+    if (graph_status != 0 || capture_status != cudaSuccess || graph == nullptr) {
+        if (graph != nullptr) {
+            (void)cudaGraphDestroy(graph);
+        }
+        (void)cudaGetLastError();
+        return 1;
+    }
+
+    cudaGraphExec_t executable = nullptr;
+    const auto instantiate_status = cudaGraphInstantiate(&executable, graph, nullptr, nullptr, 0);
+    (void)cudaGraphDestroy(graph);
+    if (instantiate_status != cudaSuccess || executable == nullptr) {
+        if (executable != nullptr) {
+            (void)cudaGraphExecDestroy(executable);
+        }
+        (void)cudaGetLastError();
+        return 1;
+    }
+    auto logits = runtime_graph_.GetTensor(logits_output_name_);
+    const size_t logits_bytes = logits == nullptr ? 0 : TensorBytes(*logits);
+    void* logits_device = nullptr;
+    if (logits_bytes == 0 ||
+        kernel::cuda_detail::AcquireTensorDevice(logits.get(), logits_bytes, logits->raw_data(), &logits_device) != 0 ||
+        logits_device == nullptr) {
+        (void)cudaGraphExecDestroy(executable);
+        return 1;
+    }
+    auto& graph_slot = cuda_graph_slots_[static_cast<size_t>(slot)];
+    graph_slot.executable = executable;
+    graph_slot.logits_device = logits_device;
+    graph_slot.logits_bytes = logits_bytes;
+    return 0;
+}
+
+int32_t QwenRunner::LaunchCudaGraph(int slot) {
+    if (slot < 0 || slot >= static_cast<int>(cuda_graph_slots_.size())) {
+        return -1;
+    }
+    const auto executable = cuda_graph_slots_[static_cast<size_t>(slot)].executable;
+    const auto stream = kernel::cuda_detail::InferenceStream();
+    if (executable == nullptr || stream == nullptr || cudaGraphLaunch(executable, stream) != cudaSuccess) {
+        (void)cudaGetLastError();
+        return -1;
+    }
+    ++cuda_graph_launch_count_;
+    return 0;
+}
+
+int32_t QwenRunner::SyncCudaGraphLogits(int slot) {
+    if (slot < 0 || slot >= static_cast<int>(cuda_graph_slots_.size())) {
+        return -1;
+    }
+    const auto& graph_slot = cuda_graph_slots_[static_cast<size_t>(slot)];
+    auto logits = runtime_graph_.GetTensor(logits_output_name_);
+    const auto stream = kernel::cuda_detail::InferenceStream();
+    if (graph_slot.logits_device == nullptr || graph_slot.logits_bytes == 0 || logits == nullptr ||
+        graph_slot.logits_bytes != TensorBytes(*logits) || stream == nullptr ||
+        cudaMemcpyAsync(logits->raw_data(), graph_slot.logits_device, graph_slot.logits_bytes, cudaMemcpyDeviceToHost,
+                        stream) != cudaSuccess) {
+        (void)cudaGetLastError();
+        return -1;
+    }
+    return kernel::cuda_detail::SynchronizeInferenceStream();
+}
+#endif
+
 bool ParseQwenBackend(const std::string& value, QwenBackend* backend) {
     if (backend == nullptr) {
         return false;
@@ -201,6 +318,9 @@ const model::ValueDesc* QwenRunner::FindValueDesc(const std::string& name) const
 }
 
 int32_t QwenRunner::Load(const std::string& model_path, QwenBackend backend) {
+#ifdef FEATHER_WITH_CUDA
+    ResetCudaGraphs();
+#endif
     last_error_.clear();
     states_.clear();
     tokens_processed_ = 0;
@@ -326,6 +446,9 @@ int32_t QwenRunner::PrepareExecutableGraph() {
 }
 
 int32_t QwenRunner::Reset() {
+#ifdef FEATHER_WITH_CUDA
+    ResetCudaGraphs();
+#endif
     if (runtime_graph_.NodeSize() == 0) {
         last_error_ = "Qwen runner is not loaded";
         return -1;
@@ -553,16 +676,41 @@ int32_t QwenRunner::RunToken(int64_t token_id, int64_t* next_token_id) {
     const auto begin = std::chrono::steady_clock::now();
     int32_t run_status = 0;
 #ifdef FEATHER_WITH_CUDA
+    int cuda_graph_slot_used = -1;
     if (backend_device_ == DeviceType::CUDA) {
         {
             kernel::cuda_detail::DeferredHostSyncScope deferred_host_sync;
-            run_status = runtime_graph_.Run();
+            const bool use_cuda_graph = !runtime_graph_.ProfilingEnabled() && !cuda_graph_capture_disabled_ &&
+                                        tokens_processed_ > 1;
+            if (!use_cuda_graph) {
+                run_status = runtime_graph_.Run();
+            } else {
+                const int slot = cuda_graph_slot_;
+                if (cuda_graph_slots_[static_cast<size_t>(slot)].executable == nullptr) {
+                    const int32_t capture_status = CaptureCudaGraph(slot);
+                    if (capture_status != 0) {
+                        cuda_graph_capture_disabled_ = true;
+                        run_status = runtime_graph_.Run();
+                    }
+                }
+                if (run_status == 0 && !cuda_graph_capture_disabled_) {
+                    run_status = LaunchCudaGraph(slot);
+                    if (run_status == 0) {
+                        cuda_graph_slot_used = slot;
+                    }
+                    if (run_status != 0) {
+                        cuda_graph_capture_disabled_ = true;
+                        run_status = runtime_graph_.Run();
+                    }
+                }
+            }
         }
         if (run_status == 0 && kernel::cuda_detail::SynchronizeInferenceStream() != 0) {
             run_status = -1;
         }
         if (run_status == 0) {
-            run_status = SyncTensorFromCuda(runtime_graph_.GetTensor(logits_output_name_));
+            run_status = cuda_graph_slot_used >= 0 ? SyncCudaGraphLogits(cuda_graph_slot_used)
+                                                    : SyncTensorFromCuda(runtime_graph_.GetTensor(logits_output_name_));
         }
     } else
 #endif
@@ -581,6 +729,11 @@ int32_t QwenRunner::RunToken(int64_t token_id, int64_t* next_token_id) {
     if (UpdateStates() != 0) {
         return -1;
     }
+#ifdef FEATHER_WITH_CUDA
+    if (backend_device_ == DeviceType::CUDA) {
+        cuda_graph_slot_ = 1 - cuda_graph_slot_;
+    }
+#endif
     *next_token_id = SelectGreedyToken();
     if (*next_token_id < 0) {
         last_error_ = "Qwen logits are unavailable";

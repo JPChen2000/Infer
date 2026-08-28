@@ -232,6 +232,24 @@ graph.write_fth(r'{output}', 'atomic')
                         for node in fp8_graph.nodes),
                     0,
                 )
+                for stem in ("layer_0_linear_mlp_product", "layer_1_full_mlp_product"):
+                    products = [node for node in fp8_graph.nodes
+                                if node.op_type == "Mul" and any(
+                                    output.startswith(f"{stem}_") for output in node.outputs)]
+                    self.assertEqual(len(products), 1, msg=f"missing FP8 {stem}")
+                    product = products[0]
+                    self.assertEqual(fp8_graph.value_info[product.outputs[0]][1], fp8_dtype)
+                    self.assertTrue(all(fp8_graph.value_info[input_name][1] == fp8_dtype
+                                        for input_name in product.inputs))
+                self.assertFalse(any(node.op_type == "Cast" and any(
+                    output.startswith("embedding_to_bf16_") for output in node.outputs)
+                    for node in fp8_graph.nodes))
+                conv_squeezes = [node for node in fp8_graph.nodes
+                                 if node.op_type == "Reshape" and any(
+                                     output.startswith("layer_0_linear_conv_squeeze_")
+                                     for output in node.outputs)]
+                self.assertEqual(len(conv_squeezes), 1)
+                self.assertEqual(fp8_graph.value_info[conv_squeezes[0].outputs[0]][1], fp8_dtype)
                 logits_casts = [node for node in fp8_graph.nodes
                                 if node.op_type == "Cast" and node.outputs == ["logits"]]
                 self.assertEqual(len(logits_casts), 1)

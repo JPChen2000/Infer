@@ -236,9 +236,13 @@ __global__ void Fp8CopyKernelCuda(const T* input, T* output, int64_t numel, floa
     if (index < numel) cuda_detail::WriteDevice(output, index, cuda_detail::ReadDevice(input, index, input_scale), output_scale);
 }
 
+struct Fp8TransposePerm {
+    int values[cuda_detail::kMaxCudaRank]{};
+};
+
 template <typename T>
 __global__ void Fp8TransposeKernelCuda(const T* input, T* output, int64_t numel, cuda_detail::CudaShape input_shape,
-                                       cuda_detail::CudaShape output_shape, int perm[cuda_detail::kMaxCudaRank],
+                                       cuda_detail::CudaShape output_shape, Fp8TransposePerm perm,
                                        float input_scale, float output_scale) {
     const int64_t linear = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (linear >= numel) return;
@@ -247,7 +251,7 @@ __global__ void Fp8TransposeKernelCuda(const T* input, T* output, int64_t numel,
     for (int axis = 0; axis < output_shape.rank; ++axis) {
         const int64_t coordinate = remaining / output_shape.strides[axis];
         remaining %= output_shape.strides[axis];
-        input_offset += coordinate * input_shape.strides[perm[axis]];
+        input_offset += coordinate * input_shape.strides[perm.values[axis]];
     }
     cuda_detail::WriteDevice(output, linear, cuda_detail::ReadDevice(input, input_offset, input_scale), output_scale);
 }
@@ -713,8 +717,8 @@ int32_t RunFp8Transpose(operators::TransposeParam* param, const char* timer_name
     if (!cuda_detail::MakeCudaShape(param->input->dims().data(), &input_shape) || !cuda_detail::MakeCudaShape(param->out->dims().data(), &output_shape)) return -1;
     cuda_detail::DeviceBuffer<T> input, output;
     if (cuda_detail::CopyTensorToDevice(param->input.get(), &input) != 0 || cuda_detail::AllocateTensorOnDevice(param->out.get(), &output) != 0) return -1;
-    int perm[cuda_detail::kMaxCudaRank]{};
-    for (size_t i = 0; i < param->perm.size(); ++i) perm[i] = static_cast<int>(param->perm[i]);
+    Fp8TransposePerm perm{};
+    for (size_t i = 0; i < param->perm.size(); ++i) perm.values[i] = static_cast<int>(param->perm[i]);
     Fp8TransposeKernelCuda<T><<<static_cast<int>(cuda_detail::DivUp(param->out->numel(), cuda_detail::kCudaThreads)),
                                 cuda_detail::kCudaThreads, 0, cuda_detail::InferenceStream()>>>(
         input.get(), output.get(), param->out->numel(), input_shape, output_shape, perm,

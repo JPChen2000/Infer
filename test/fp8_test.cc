@@ -820,6 +820,38 @@ TEST(fp8_test, CudaFp8KernelsAreRegisteredWithoutFallback) {
     }
 }
 
+template <typename T>
+void VerifyCudaFp8TransposePermutesRankThreeTensor() {
+    const DataType dtype = feather::DataTypeTrait<T>::type();
+    auto input = MakeFp8Tensor<T>({0.0f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f}, {1, 2, 3}, 0.25f);
+    auto output = std::make_shared<Tensor>(std::vector<int64_t>{1, 3, 2});
+    output->set_data_type(dtype);
+    output->set_quantization({true, 0.25f});
+
+    auto kernel = feather::KernelDispatcher::instance().create(DeviceType::CUDA, dtype, "Transpose");
+    ASSERT_NE(kernel, nullptr);
+    ASSERT_EQ(kernel->device(), DeviceType::CUDA);
+    feather::operators::TransposeParam param{};
+    param.input = input;
+    param.out = output;
+    param.perm = {0, 2, 1};
+    kernel->SetParam(&param);
+    ASSERT_EQ(kernel->compute(), 0);
+
+    const std::vector<float> expected{0.0f, 3.0f, 1.0f, 4.0f, 2.0f, 5.0f};
+    for (size_t index = 0; index < expected.size(); ++index) {
+        EXPECT_NEAR(ReadFp8Value<T>(*output, static_cast<int64_t>(index)), expected[index], 0.25f);
+    }
+}
+
+TEST(fp8_test, CudaFp8TransposePermutesRankThreeTensor) {
+    if (!HasCudaFp8TestDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+    VerifyCudaFp8TransposePermutesRankThreeTensor<Fp8E4M3>();
+    VerifyCudaFp8TransposePermutesRankThreeTensor<Fp8E5M2>();
+}
+
 TEST(fp8_test, CudaFp8CastRejectsOutputContractMismatch) {
     if (!HasCudaFp8TestDevice()) {
         GTEST_SKIP() << "CUDA device is not available";
@@ -1329,6 +1361,69 @@ TEST(fp8_test, CudaFp8MatMulGemmAndFcUseFp32Accumulation) {
         EXPECT_NEAR(feather::Fp8E5M2ToFloat(fc_out->data<Fp8E5M2>()[i].bits) * 0.25f, expected[i], 3.0f);
     }
 }
+
+TEST(fp8_test, CudaFp8MatMulUsesCublasLtOnSm89) {
+#if !defined(FEATHER_WITH_CUDA) || !defined(FEATHER_WITH_CUBLASLT)
+    GTEST_SKIP() << "CUDA FP8 cuBLASLt kernels are not built";
+#else
+    if (!HasCudaFp8TestDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+    cudaDeviceProp properties{};
+    ASSERT_EQ(cudaGetDeviceProperties(&properties, 0), cudaSuccess);
+    if (properties.major < 8 || (properties.major == 8 && properties.minor < 9)) {
+        GTEST_SKIP() << "native FP8 Tensor Cores require SM89 or later";
+    }
+
+    constexpr int64_t k = 1024;
+    constexpr int64_t n = 1024;
+    std::vector<float> lhs_values(static_cast<size_t>(k));
+    std::vector<float> rhs_values(static_cast<size_t>(k * n));
+    for (int64_t row = 0; row < k; ++row) {
+        const float activation = row < k / 2 ? 0.5f : -0.5f;
+        lhs_values[static_cast<size_t>(row)] = activation;
+        for (int64_t column = 0; column < n; ++column) {
+            float weight = 0.25f;
+            switch (column % 4) {
+                case 1:
+                    weight = activation > 0.0f ? 0.25f : -0.25f;
+                    break;
+                case 2:
+                    weight = activation > 0.0f ? -0.25f : 0.25f;
+                    break;
+                case 3:
+                    weight = 0.5f;
+                    break;
+                default:
+                    break;
+            }
+            rhs_values[static_cast<size_t>(row * n + column)] = weight;
+        }
+    }
+    auto lhs = MakeFp8Tensor<Fp8E4M3>(lhs_values, {1, k}, 0.5f);
+    auto rhs = MakeFp8Tensor<Fp8E4M3>(rhs_values, {k, n}, 0.25f);
+    auto out = std::make_shared<Tensor>(std::vector<int64_t>{1, n});
+    out->set_data_type(DataType::FP8E4M3);
+    out->set_quantization({true, 1.0f});
+
+    feather::operators::MatMulParam param{};
+    param.a = lhs;
+    param.b = rhs;
+    param.out = out;
+    auto kernel = feather::KernelDispatcher::instance().create(DeviceType::CUDA, DataType::FP8E4M3, "MatMul");
+    ASSERT_NE(kernel, nullptr);
+    feather::kernel::cuda_detail::ResetLastCudaFp8MatmulBackend();
+    kernel->SetParam(&param);
+    ASSERT_EQ(kernel->compute(), 0);
+    EXPECT_EQ(feather::kernel::cuda_detail::LastCudaFp8MatmulBackend(),
+              feather::kernel::cuda_detail::CudaFp8MatmulBackend::kCublasLt);
+    EXPECT_EQ(out->data<Fp8E4M3>()[0].bits, 0x00U);
+    EXPECT_EQ(out->data<Fp8E4M3>()[1].bits, 0x70U);
+    EXPECT_EQ(out->data<Fp8E4M3>()[2].bits, 0xf0U);
+    EXPECT_EQ(out->data<Fp8E4M3>()[3].bits, 0x00U);
+#endif
+}
+
 #endif
 
 }  // namespace

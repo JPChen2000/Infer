@@ -1,6 +1,7 @@
 #include "src/kernel/cuda/runtime.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -82,6 +83,28 @@ std::once_flag& CublasCreateOnceFlag() {
 int& CublasCreateStatus() {
     static int status = -1;
     return status;
+}
+
+#ifdef FEATHER_WITH_CUBLASLT
+cublasLtHandle_t& CublasLtHandleStorage() {
+    static cublasLtHandle_t handle = nullptr;
+    return handle;
+}
+
+std::once_flag& CublasLtCreateOnceFlag() {
+    static std::once_flag once;
+    return once;
+}
+
+int& CublasLtCreateStatus() {
+    static int status = -1;
+    return status;
+}
+#endif
+
+std::atomic<int>& LastFp8MatmulBackendStorage() {
+    static std::atomic<int> backend{static_cast<int>(CudaFp8MatmulBackend::kUnknown)};
+    return backend;
 }
 
 #ifdef FEATHER_WITH_CUDNN
@@ -169,6 +192,16 @@ void CreateCublasHandleOnce() {
     }
 }
 
+#ifdef FEATHER_WITH_CUBLASLT
+void CreateCublasLtHandleOnce() {
+    if (EnsureInferenceStreamCreated() != 0) {
+        CublasLtCreateStatus() = -1;
+        return;
+    }
+    CublasLtCreateStatus() = CublasStatus(cublasLtCreate(&CublasLtHandleStorage()));
+}
+#endif
+
 #ifdef FEATHER_WITH_CUDNN
 void CreateCudnnHandleOnce() {
     if (EnsureInferenceStreamCreated() != 0) {
@@ -194,6 +227,13 @@ int EnsureCublasHandleCreated() {
     }
     return CublasStatus(cublasSetStream(CublasHandleStorage(), StreamStorage()));
 }
+
+#ifdef FEATHER_WITH_CUBLASLT
+int EnsureCublasLtHandleCreated() {
+    std::call_once(CublasLtCreateOnceFlag(), CreateCublasLtHandleOnce);
+    return CublasLtCreateStatus();
+}
+#endif
 
 #ifdef FEATHER_WITH_CUDNN
 int EnsureCudnnHandleCreated() {
@@ -698,6 +738,28 @@ cublasHandle_t CublasHandle() {
         return nullptr;
     }
     return CublasHandleStorage();
+}
+
+#ifdef FEATHER_WITH_CUBLASLT
+cublasLtHandle_t CublasLtHandle() {
+    if (EnsureCublasLtHandleCreated() != 0) {
+        return nullptr;
+    }
+    return CublasLtHandleStorage();
+}
+#endif
+
+void ResetLastCudaFp8MatmulBackend() {
+    LastFp8MatmulBackendStorage().store(static_cast<int>(CudaFp8MatmulBackend::kUnknown),
+                                        std::memory_order_relaxed);
+}
+
+void SetLastCudaFp8MatmulBackend(CudaFp8MatmulBackend backend) {
+    LastFp8MatmulBackendStorage().store(static_cast<int>(backend), std::memory_order_relaxed);
+}
+
+CudaFp8MatmulBackend LastCudaFp8MatmulBackend() {
+    return static_cast<CudaFp8MatmulBackend>(LastFp8MatmulBackendStorage().load(std::memory_order_relaxed));
 }
 
 #ifdef FEATHER_WITH_CUDNN

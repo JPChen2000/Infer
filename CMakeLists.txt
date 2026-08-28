@@ -5,7 +5,13 @@ option(BUILD_UNITTEST "BUILD UNITTEST" OFF)
 option(FEATHER_DEBUG "Enable Feather debug logging and operator timers" OFF)
 option(FEATHER_ENABLE_CUDA "Enable CUDA kernels when a CUDA compiler is available" ON)
 option(FEATHER_ENABLE_CUDNN "Enable cuDNN acceleration when cuDNN is available" ON)
+option(FEATHER_ENABLE_CUBLASLT "Enable cuBLASLt acceleration when available" ON)
 option(FEATHER_ENABLE_OPENMP "Enable OpenMP acceleration for CPU kernels" ON)
+set(FEATHER_CUDA_ARCHITECTURES "89" CACHE STRING "CUDA architectures used for CUDA targets")
+if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES OR CMAKE_CUDA_ARCHITECTURES STREQUAL "")
+    set(CMAKE_CUDA_ARCHITECTURES "${FEATHER_CUDA_ARCHITECTURES}" CACHE STRING
+        "CUDA architectures used for CUDA targets" FORCE)
+endif()
 if (DEFINED FEATHER_WITH_CUDA)
     # Preserve the historical command-line spelling while keeping
     # FEATHER_WITH_CUDA as the detected backend state below.
@@ -33,6 +39,7 @@ endif()
 
 set(FEATHER_WITH_CUDA OFF)
 set(FEATHER_WITH_CUDNN OFF)
+set(FEATHER_WITH_CUBLASLT OFF)
 if (FEATHER_ENABLE_CUDA)
     include(CheckLanguage)
     check_language(CUDA)
@@ -40,14 +47,21 @@ if (FEATHER_ENABLE_CUDA)
         enable_language(CUDA)
         find_package(CUDAToolkit REQUIRED)
         set(FEATHER_WITH_CUDA ON)
+        if (FEATHER_ENABLE_CUBLASLT AND TARGET CUDA::cublasLt)
+            set(FEATHER_WITH_CUBLASLT ON)
+        endif()
         if (FEATHER_ENABLE_CUDNN)
             find_path(CUDNN_INCLUDE_DIR cudnn.h
                 HINTS
+                ${CUDAToolkit_ROOT}/include
+                ${CUDAToolkit_ROOT}/targets/x86_64-linux/include
                 ${CUDAToolkit_INCLUDE_DIRS}
                 /usr/local/cuda/include
                 /usr/include)
             find_library(CUDNN_LIBRARY cudnn
                 HINTS
+                ${CUDAToolkit_ROOT}/lib64
+                ${CUDAToolkit_ROOT}/targets/x86_64-linux/lib
                 /usr/local/cuda/targets/x86_64-linux/lib
                 /usr/local/cuda/lib64
                 /usr/lib/x86_64-linux-gnu)
@@ -394,6 +408,10 @@ if (FEATHER_WITH_CUDA)
     target_link_libraries(infer_core PUBLIC CUDA::cudart CUDA::cublas)
     target_compile_definitions(infer_backend PUBLIC FEATHER_WITH_CUDA)
     target_link_libraries(infer_backend PUBLIC CUDA::cudart CUDA::cublas)
+    if (FEATHER_WITH_CUBLASLT)
+        target_compile_definitions(infer_backend PUBLIC FEATHER_WITH_CUBLASLT)
+        target_link_libraries(infer_backend PUBLIC CUDA::cublasLt)
+    endif()
     if (FEATHER_WITH_CUDNN)
         target_compile_definitions(infer_backend PUBLIC FEATHER_WITH_CUDNN)
         target_include_directories(infer_backend PUBLIC ${CUDNN_INCLUDE_DIR})
@@ -526,4 +544,11 @@ message("unittest: " ${BUILD_UNITTEST})
 message("debug: " ${FEATHER_DEBUG})
 message("cuda: " ${FEATHER_WITH_CUDA})
 message("cudnn: " ${FEATHER_WITH_CUDNN})
+message("cublasLt: " ${FEATHER_WITH_CUBLASLT})
+if (FEATHER_WITH_CUDA)
+    message("cuda toolkit root: " ${CUDAToolkit_ROOT})
+    message("cuda architectures: " ${CMAKE_CUDA_ARCHITECTURES})
+    message("cudnn include: " ${CUDNN_INCLUDE_DIR})
+    message("cudnn library: " ${CUDNN_LIBRARY})
+endif()
 message("\n")

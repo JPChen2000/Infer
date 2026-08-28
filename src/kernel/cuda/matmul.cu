@@ -247,10 +247,10 @@ int RunFp8MatMul(feather::operators::MatMulParam* param, const char* timer_name)
         cuda_detail::AllocateTensorOnDevice(param->out.get(), &out) != 0) {
         return -1;
     }
-    cuda_detail::LaunchFp8MatMulKernelCuda<T>(
-        a.get(), b.get(), nullptr, out.get(), m, k, n, 0, param->a->quantization_scale(),
-        param->b->quantization_scale(), 1.0f, param->out->quantization_scale());
-    if (cuda_detail::CudaCheck(cudaGetLastError()) != 0) {
+    if (cuda_detail::LaunchFp8MatMulKernelCuda<T>(
+            a.get(), b.get(), param->b.get(), nullptr, out.get(), m, k, n, 0, param->a->quantization_scale(),
+            param->b->quantization_scale(), 1.0f, param->out->quantization_scale()) != 0 ||
+        cuda_detail::CudaCheck(cudaGetLastError()) != 0) {
         return -1;
     }
     return cuda_detail::CopyDeviceToTensor(&out, param->out.get());

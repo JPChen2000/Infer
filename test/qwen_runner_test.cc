@@ -314,6 +314,25 @@ TEST(qwen_runner_test, CudaPreservesPingPongStateAndResetWhenNextStateUsesIdenti
     ASSERT_EQ(runner.Generate({0}, 2, {}, &generated), 0) << runner.LastError();
     EXPECT_EQ(generated, (std::vector<int64_t>{1, 2}));
 }
+
+TEST(qwen_runner_test, CudaGraphPreservesPingPongStateAcrossAlternatingExecutions) {
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
+    const auto model_path = WriteStateTransitionFixture();
+    feather::demo::QwenRunner runner;
+    ASSERT_EQ(runner.Load(model_path.string(), feather::demo::QwenBackend::kCuda), 0) << runner.LastError();
+
+    std::vector<int64_t> generated;
+    ASSERT_EQ(runner.Generate({0}, 4, {}, &generated), 0) << runner.LastError();
+    SCOPED_TRACE("cuda graph launches=" + std::to_string(runner.CudaGraphLaunchCount()));
+    EXPECT_EQ(generated, (std::vector<int64_t>{1, 2, 1, 2}));
+    EXPECT_GE(runner.CudaGraphLaunchCount(), 2);
+
+    runner.SetRuntimeProfilingEnabled(true);
+    EXPECT_EQ(runner.CudaGraphLaunchCount(), 0);
+}
 #endif
 
 TEST(qwen_runner_test, SelectsFirstFiniteMaximumFromBf16Logits) {
@@ -424,5 +443,22 @@ TEST(qwen_runner_test, CudaBackendMatchesCommonForReferenceFirstDecodeToken) {
 
     EXPECT_EQ(common_generated, (std::vector<int64_t>{10748}));
     EXPECT_EQ(cuda_generated, common_generated);
+}
+
+TEST(qwen_runner_test, CudaFp8BackendCapturesDecodeGraphAfterWarmup) {
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+    const auto model_path = QwenModelDirectory() / "qwen3.5-0.8b_decode_fp8e4m3_ctx128.fth";
+    if (!std::filesystem::is_regular_file(model_path)) {
+        GTEST_SKIP() << "FP8 E4M3 Qwen FTH asset is not present";
+    }
+
+    feather::demo::QwenRunner runner;
+    ASSERT_EQ(runner.Load(model_path.string(), feather::demo::QwenBackend::kCuda), 0) << runner.LastError();
+    std::vector<int64_t> generated;
+    ASSERT_EQ(runner.Generate({151644}, 3, {}, &generated), 0) << runner.LastError();
+    ASSERT_EQ(generated.size(), 3U);
+    EXPECT_GT(runner.CudaGraphLaunchCount(), 0);
 }
 #endif

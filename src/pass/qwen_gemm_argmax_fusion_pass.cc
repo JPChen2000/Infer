@@ -146,6 +146,11 @@ int32_t QwenGemmArgmaxFusionPass::Run(StaticGraph* graph) {
         if (!IsFp8LogitsCast(*graph, node, &gemm, &output_scale)) {
             continue;
         }
+        if (graph->KernelDevice() == DeviceType::CUDA) {
+            // CUDA only has a BF16 QwenGemmArgmax kernel. Keep the supported
+            // FP8 Gemm + Cast path intact until an FP8 fused kernel exists.
+            continue;
+        }
         model::NodeDesc replacement;
         replacement.name = node.name;
         replacement.op_type = "QwenGemmArgmax";

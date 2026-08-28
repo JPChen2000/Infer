@@ -1,6 +1,8 @@
 #ifndef FEATHER_DEMO_QWEN_RUNNER_H
 #define FEATHER_DEMO_QWEN_RUNNER_H
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -11,6 +13,10 @@
 #include "core/graph_lowering.h"
 #include "core/static_graph.h"
 #include "model/model_io.h"
+
+#ifdef FEATHER_WITH_CUDA
+#include <cuda_runtime_api.h>
+#endif
 
 namespace feather {
 namespace demo {
@@ -27,6 +33,8 @@ const char* QwenBackendName(QwenBackend backend);
 
 class QwenRunner {
    public:
+    ~QwenRunner();
+
     int32_t Load(const std::string& model_path, QwenBackend backend = QwenBackend::kCommon);
     int32_t Reset();
     int32_t Consume(const std::vector<int64_t>& token_ids);
@@ -43,7 +51,8 @@ class QwenRunner {
     const std::string& LastError() const { return last_error_; }
     const std::string& DescribeLastBuild() const { return last_build_summary_; }
     const std::string& DescribeLastRun() const { return last_run_summary_; }
-    void SetRuntimeProfilingEnabled(bool enabled) { runtime_graph_.SetProfilingEnabled(enabled); }
+    int64_t CudaGraphLaunchCount() const;
+    void SetRuntimeProfilingEnabled(bool enabled);
     const std::vector<RuntimeProfileSummary>& RuntimeProfileSummaries() const {
         return runtime_graph_.ProfileSummaries();
     }
@@ -67,6 +76,19 @@ class QwenRunner {
     int32_t CopyState(const StateBinding& binding);
     int64_t SelectGreedyToken() const;
 
+#ifdef FEATHER_WITH_CUDA
+    struct CudaGraphSlot {
+        cudaGraphExec_t executable{nullptr};
+        const void* logits_device{nullptr};
+        size_t logits_bytes{};
+    };
+
+    int32_t CaptureCudaGraph(int slot);
+    int32_t LaunchCudaGraph(int slot);
+    int32_t SyncCudaGraphLogits(int slot);
+    void ResetCudaGraphs();
+#endif
+
     model::ModelLoader loader_;
     StaticGraph static_graph_;
     RuntimeGraph runtime_graph_;
@@ -80,9 +102,15 @@ class QwenRunner {
     DeviceType backend_device_{DeviceType::COMMON};
     int64_t max_context_{};
     int64_t tokens_processed_{};
+    int64_t cuda_graph_launch_count_{};
     std::string last_error_;
     std::string last_build_summary_;
     std::string last_run_summary_;
+#ifdef FEATHER_WITH_CUDA
+    std::array<CudaGraphSlot, 2> cuda_graph_slots_{};
+    int cuda_graph_slot_{};
+    bool cuda_graph_capture_disabled_{false};
+#endif
 };
 
 }  // namespace demo

@@ -116,11 +116,11 @@ int RunFp8Fc(feather::operators::FcParam* param, const char* timer_name) {
         }
         bias_ptr = bias.get();
     }
-    cuda_detail::LaunchFp8MatMulKernelCuda<T>(
-        input.get(), weight.get(), bias_ptr, out.get(), m, k, n, bias_mode, param->input->quantization_scale(),
-        param->w->quantization_scale(), param->bias != nullptr ? param->bias->quantization_scale() : 1.0f,
-        param->out->quantization_scale());
-    if (cuda_detail::CudaCheck(cudaGetLastError()) != 0) {
+    if (cuda_detail::LaunchFp8MatMulKernelCuda<T>(
+            input.get(), weight.get(), param->w.get(), bias_ptr, out.get(), m, k, n, bias_mode,
+            param->input->quantization_scale(), param->w->quantization_scale(),
+            param->bias != nullptr ? param->bias->quantization_scale() : 1.0f, param->out->quantization_scale()) != 0 ||
+        cuda_detail::CudaCheck(cudaGetLastError()) != 0) {
         return -1;
     }
     return cuda_detail::CopyDeviceToTensor(&out, param->out.get());

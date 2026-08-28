@@ -702,7 +702,20 @@ class QwenBuilder:
             self.cast_cache[key] = self.g.cast(x, shape, dtype, stem, quantization_scale=quantization_scale)
         return self.cast_cache[key]
 
+    def fp8_activation(self, x, stem):
+        """Enter the shared FP8 activation domain when FP8 export is active."""
+        if self.fp8_dtype is None:
+            return x
+        return self.cast(x, self.fp8_dtype, stem, self.fp8_activation_scale)
+
+    def compute_dtype(self):
+        return self.fp8_dtype if self.fp8_dtype is not None else BF16
+
     def rms_norm(self, x, weight_key, stem):
+        # Keep the norm fusion's BF16 interface.  The surrounding compute path
+        # re-enters FP8 once the numerically sensitive reduction has completed.
+        if self.fp8_dtype is not None and is_fp8_dtype(self.g.value_info[x][1]):
+            x = self.cast(x, BF16, f"{stem}_input_to_bf16")
         shape = self.g.value_info[x][0]
         x32 = self.cast(x, FP32, f"{stem}_to_fp32")
         square = self.g.binary("Mul", x32, x32, shape, FP32, f"{stem}_square")
@@ -739,9 +752,9 @@ class QwenBuilder:
         if self.fp8_dtype is None:
             w = self.weight(key, transpose=True)
             return self.g.node("MatMul", [x, w], self.g.fresh(stem), [out_shape], BF16)
-        fp8_input = self.cast(x, self.fp8_dtype, f"{stem}_to_fp8", self.fp8_activation_scale)
+        fp8_input = self.fp8_activation(x, f"{stem}_to_fp8")
         fp8_weight = self.weight(key, transpose=True, force_dtype=self.fp8_dtype)
-        fp8_output = self.g.node(
+        return self.g.node(
             "MatMul",
             [fp8_input, fp8_weight],
             self.g.fresh(stem),
@@ -749,7 +762,6 @@ class QwenBuilder:
             self.fp8_dtype,
             quantization_scales=self.fp8_activation_scale,
         )
-        return self.cast(fp8_output, BF16, f"{stem}_to_bf16")
 
     def silu(self, x, stem):
         shape = self.g.value_info[x][0]
@@ -764,7 +776,11 @@ class QwenBuilder:
         mixed = self.projection(hidden, f"model.language_model.layers.{layer}.linear_attn.in_proj_qkv.weight", self.conv_dim, f"{stem}_qkv_proj")
         mixed_t = self.g.transpose(mixed, [0, 2, 1], [1, self.conv_dim, 1], f"{stem}_qkv_transpose")
         state = f"conv_state_{layer}"
-        joined = self.g.concat([state, mixed_t], 2, [1, self.conv_dim, 4], BF16, f"{stem}_state_join")
+        # The rolling convolution state remains BF16, so it is one of the
+        # deliberate FP8 boundaries.  Everything following the Conv stays in
+        # FP8 until it enters the recurrent FP32 update below.
+        mixed_t_state = self.cast(mixed_t, BF16, f"{stem}_qkv_to_state_bf16")
+        joined = self.g.concat([state, mixed_t_state], 2, [1, self.conv_dim, 4], BF16, f"{stem}_state_join")
         joined_2d = self.g.reshape(joined, [1, self.conv_dim, 1, 4], f"{stem}_conv_input")
         conv_weight = self.g.reshape(
             self.weight(
@@ -796,8 +812,6 @@ class QwenBuilder:
             dilations=[1, 1],
             group=self.conv_dim,
         )
-        if self.fp8_dtype is not None:
-            conv = self.cast(conv, BF16, f"{stem}_conv_to_bf16")
         conv = self.g.reshape(conv, [1, self.conv_dim, 1], f"{stem}_conv_squeeze")
         conv = self.silu(conv, f"{stem}_conv_activation")
         _, next_conv_state = self.g.split(joined, [1, 3], 2, [[1, self.conv_dim, 1], [1, self.conv_dim, 3]], f"{stem}_state_split")
@@ -868,19 +882,19 @@ class QwenBuilder:
         z32 = self.cast(z, FP32, f"{stem}_gate_to_fp32")
         z_silu = self.silu(z32, f"{stem}_gate_silu")
         gated = self.g.binary("Mul", normalized, z_silu, [1, self.linear_heads, self.linear_value_dim], FP32, f"{stem}_gated")
-        gated = self.cast(gated, BF16, f"{stem}_gated_to_bf16")
+        gated = self.fp8_activation(gated, f"{stem}_gated_to_fp8")
         gated = self.g.reshape(gated, [1, 1, self.linear_heads * self.linear_value_dim], f"{stem}_gated_flat")
         mixed_out = self.projection(gated, f"model.language_model.layers.{layer}.linear_attn.out_proj.weight", self.hidden, f"{stem}_out_proj")
-        hidden = self.g.binary("Add", residual, mixed_out, [1, 1, self.hidden], BF16, f"{stem}_residual")
+        hidden = self.g.binary("Add", residual, mixed_out, [1, 1, self.hidden], self.compute_dtype(), f"{stem}_residual")
 
         residual = hidden
         hidden = self.rms_norm(hidden, f"model.language_model.layers.{layer}.post_attention_layernorm.weight", f"{stem}_post_norm")
         gate = self.projection(hidden, f"model.language_model.layers.{layer}.mlp.gate_proj.weight", self.intermediate, f"{stem}_mlp_gate")
         up = self.projection(hidden, f"model.language_model.layers.{layer}.mlp.up_proj.weight", self.intermediate, f"{stem}_mlp_up")
         gate = self.silu(gate, f"{stem}_mlp_silu")
-        product = self.g.binary("Mul", gate, up, [1, 1, self.intermediate], BF16, f"{stem}_mlp_product")
+        product = self.g.binary("Mul", gate, up, [1, 1, self.intermediate], self.compute_dtype(), f"{stem}_mlp_product")
         down = self.projection(product, f"model.language_model.layers.{layer}.mlp.down_proj.weight", self.hidden, f"{stem}_mlp_down")
-        hidden = self.g.binary("Add", residual, down, [1, 1, self.hidden], BF16, f"{stem}_mlp_residual")
+        hidden = self.g.binary("Add", residual, down, [1, 1, self.hidden], self.compute_dtype(), f"{stem}_mlp_residual")
         return hidden, next_conv_state, next_state
 
     def rope(self, x, position, stem):
@@ -943,7 +957,7 @@ class QwenBuilder:
         q = self.rope(q, position, f"{stem}_q_rope")
         k = self.rope(k, position, f"{stem}_k_rope")
         current_k = k
-        current_v = v
+        current_v = self.cast(v, BF16, f"{stem}_v_to_cache_bf16")
 
         k_cache = self.g.concat(
             [f"k_cache_{layer}", current_k], 2,
@@ -969,20 +983,21 @@ class QwenBuilder:
         attended = self.g.node("MatMul", [probs, v_cache], self.g.fresh(f"{stem}_attended"), [[1, self.full_heads, 1, self.head_dim]], BF16)
         attended = self.g.transpose(attended, [0, 2, 1, 3], [1, 1, self.full_heads, self.head_dim], f"{stem}_attended_transpose")
         attended = self.g.reshape(attended, [1, 1, self.full_heads * self.head_dim], f"{stem}_attended_reshape")
+        attended = self.fp8_activation(attended, f"{stem}_attended_to_fp8")
         gate = self.g.unary(
-            "Sigmoid", gate, [1, 1, self.full_heads * self.head_dim], BF16, f"{stem}_gate_sigmoid"
+            "Sigmoid", gate, [1, 1, self.full_heads * self.head_dim], self.compute_dtype(), f"{stem}_gate_sigmoid"
         )
-        attended = self.g.binary("Mul", attended, gate, [1, 1, self.full_heads * self.head_dim], BF16, f"{stem}_gate_mul")
+        attended = self.g.binary("Mul", attended, gate, [1, 1, self.full_heads * self.head_dim], self.compute_dtype(), f"{stem}_gate_mul")
         attended = self.projection(attended, f"model.language_model.layers.{layer}.self_attn.o_proj.weight", self.hidden, f"{stem}_out_proj")
-        hidden = self.g.binary("Add", residual, attended, [1, 1, self.hidden], BF16, f"{stem}_residual")
+        hidden = self.g.binary("Add", residual, attended, [1, 1, self.hidden], self.compute_dtype(), f"{stem}_residual")
 
         residual = hidden
         hidden = self.rms_norm(hidden, f"model.language_model.layers.{layer}.post_attention_layernorm.weight", f"{stem}_post_norm")
         gate = self.silu(self.projection(hidden, f"model.language_model.layers.{layer}.mlp.gate_proj.weight", self.intermediate, f"{stem}_mlp_gate"), f"{stem}_mlp_silu")
         up = self.projection(hidden, f"model.language_model.layers.{layer}.mlp.up_proj.weight", self.intermediate, f"{stem}_mlp_up")
-        product = self.g.binary("Mul", gate, up, [1, 1, self.intermediate], BF16, f"{stem}_mlp_product")
+        product = self.g.binary("Mul", gate, up, [1, 1, self.intermediate], self.compute_dtype(), f"{stem}_mlp_product")
         down = self.projection(product, f"model.language_model.layers.{layer}.mlp.down_proj.weight", self.hidden, f"{stem}_mlp_down")
-        hidden = self.g.binary("Add", residual, down, [1, 1, self.hidden], BF16, f"{stem}_mlp_residual")
+        hidden = self.g.binary("Add", residual, down, [1, 1, self.hidden], self.compute_dtype(), f"{stem}_mlp_residual")
         return hidden, current_k, current_v
 
     def build(self):
@@ -1009,8 +1024,6 @@ class QwenBuilder:
             quantization_scales=self.fp8_activation_scale if self.fp8_dtype is not None else None,
             axis=0,
         )
-        if self.fp8_dtype is not None:
-            hidden = self.cast(hidden, BF16, "embedding_to_bf16")
         for layer in range(self.layers):
             if self.text["layer_types"][layer] == "linear_attention":
                 hidden, next_conv, next_state = self.build_linear_layer(layer, hidden)

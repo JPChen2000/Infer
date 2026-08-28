@@ -1,2 +1,7 @@
 .conan_local/
 .codex/
+.codegraph/
+build*
+models/
+.clang-format
+*.jpg

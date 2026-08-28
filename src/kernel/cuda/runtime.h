@@ -2,6 +2,9 @@
 #define FEATHER_KERNEL_CUDA_RUNTIME_H
 
 #include <cublas_v2.h>
+#ifdef FEATHER_WITH_CUBLASLT
+#include <cublasLt.h>
+#endif
 #include <cuda_runtime.h>
 #ifdef FEATHER_WITH_CUDNN
 #include <cudnn.h>
@@ -32,6 +35,13 @@ struct TensorCacheStats {
     size_t pooled_bytes{0};
 };
 
+enum class CudaFp8MatmulBackend {
+    kUnknown = 0,
+    kCublasLt,
+    kBf16TensorCoreFallback,
+    kScalarFallback,
+};
+
 void SetDeferredHostSync(bool enabled);
 bool DeferredHostSyncEnabled();
 int WarmupCudaRuntime();
@@ -54,6 +64,12 @@ int AliasTensorDeviceStorage(const Tensor* input, Tensor* output, size_t bytes);
 int SwapTensorDeviceStorage(Tensor* input, Tensor* output);
 int AppendTensorStateOnDevice(Tensor* input, const Tensor* output, int axis);
 cublasHandle_t CublasHandle();
+#ifdef FEATHER_WITH_CUBLASLT
+cublasLtHandle_t CublasLtHandle();
+#endif
+void ResetLastCudaFp8MatmulBackend();
+void SetLastCudaFp8MatmulBackend(CudaFp8MatmulBackend backend);
+CudaFp8MatmulBackend LastCudaFp8MatmulBackend();
 #ifdef FEATHER_WITH_CUDNN
 cudnnHandle_t CudnnHandle();
 #endif

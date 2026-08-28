@@ -8,6 +8,7 @@
 #ifdef FEATHER_WITH_CUDA
 #include <cuda_runtime.h>
 #include "core/graph_lowering.h"
+#include "src/kernel/cuda/runtime.h"
 #endif
 
 #include "core/static_graph.h"
@@ -538,6 +539,155 @@ TEST(qwen_gemm_argmax_test, QwenPassFusesFp8GemmCastIntoArgmax) {
 }
 
 #ifdef FEATHER_WITH_CUDA
+TEST(qwen_gemm_argmax_test, QwenPassKeepsCudaFp8LinearAsGenericOps) {
+    feather::model::ModelDesc model;
+    model.name = "qwen_cuda_cast_matmul_fixture";
+    model.graph.name = "decode";
+    model.graph.outputs = {"output_bf16"};
+
+    feather::model::ValueDesc input_value;
+    input_value.tensor = {"input_bf16", {1, 2}, feather::DataType::BF16};
+    feather::model::ValueDesc fp8_input_value;
+    fp8_input_value.tensor = {"input_fp8", {1, 2}, feather::DataType::FP8E4M3};
+    fp8_input_value.tensor.quantization = {true, 0.25f};
+    feather::model::ValueDesc weight_value;
+    weight_value.tensor = {"weight_fp8", {2, 3}, feather::DataType::FP8E4M3};
+    weight_value.tensor.quantization = {true, 0.5f};
+    weight_value.constant = true;
+    feather::model::ValueDesc fp8_output_value;
+    fp8_output_value.tensor = {"output_fp8", {1, 3}, feather::DataType::FP8E4M3};
+    fp8_output_value.tensor.quantization = {true, 0.125f};
+    feather::model::ValueDesc output_value;
+    output_value.tensor = {"output_bf16", {1, 3}, feather::DataType::BF16};
+    model.graph.values = {input_value, fp8_input_value, weight_value, fp8_output_value, output_value};
+
+    feather::model::NodeDesc input_cast;
+    input_cast.name = "input_cast";
+    input_cast.op_type = "Cast";
+    input_cast.inputs = {"input_bf16"};
+    input_cast.outputs = {"input_fp8"};
+    input_cast.attributes["to"] = int64_t{17};
+    feather::model::NodeDesc projection;
+    projection.name = "projection";
+    projection.op_type = "MatMul";
+    projection.inputs = {"input_fp8", "weight_fp8"};
+    projection.outputs = {"output_fp8"};
+    feather::model::NodeDesc output_cast;
+    output_cast.name = "output_cast";
+    output_cast.op_type = "Cast";
+    output_cast.inputs = {"output_fp8"};
+    output_cast.outputs = {"output_bf16"};
+    output_cast.attributes["to"] = int64_t{16};
+    model.graph.nodes = {input_cast, projection, output_cast};
+
+    feather::StaticGraph graph;
+    graph.SetKernelDevice(feather::DeviceType::CUDA);
+    ASSERT_EQ(graph.SetModel(model), 0);
+    ASSERT_EQ(graph.SetTensor("input_bf16", MakeBf16({1.0f, -2.0f}, {1, 2})), 0);
+    auto weight = MakeFp8<feather::DataType::FP8E4M3>({1.0f, 0.5f, -0.5f, 2.0f, -1.0f, 0.25f}, {2, 3}, 0.5f);
+    weight->set_immutable(true);
+    ASSERT_EQ(graph.SetTensor("weight_fp8", weight), 0);
+    ASSERT_EQ(graph.Build(), 0);
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+
+    const auto* input_cast_node = graph.GetNode("input_cast");
+    ASSERT_NE(input_cast_node, nullptr);
+    EXPECT_EQ(input_cast_node->op_type, "Cast");
+    const auto* projection_node = graph.GetNode("projection");
+    ASSERT_NE(projection_node, nullptr);
+    EXPECT_EQ(projection_node->op_type, "MatMul");
+    const auto* output_cast_node = graph.GetNode("output_cast");
+    ASSERT_NE(output_cast_node, nullptr);
+    EXPECT_EQ(output_cast_node->op_type, "Cast");
+    ASSERT_NE(graph.GetTensor("output_bf16"), nullptr);
+    EXPECT_EQ(graph.GetTensor("output_bf16")->data_type(), feather::DataType::BF16);
+
+    feather::RuntimeGraph runtime;
+    feather::GraphLowering lowering;
+    ASSERT_EQ(lowering.Lower(graph, &runtime), 0);
+    {
+        feather::kernel::cuda_detail::DeferredHostSyncScope deferred_host_sync;
+        ASSERT_EQ(runtime.Run(), 0);
+    }
+    auto output = runtime.GetTensor("output_bf16");
+    ASSERT_NE(output, nullptr);
+    ASSERT_EQ(feather::kernel::cuda_detail::SyncTensorToHost(
+                  output.get(), output->numel() * sizeof(feather::BFloat16), output->raw_data()), 0);
+    ASSERT_EQ(output->numel(), 3);
+    EXPECT_EQ(output->data<feather::BFloat16>()[0].bits, feather::FloatToBFloat16(-3.0f));
+    EXPECT_EQ(output->data<feather::BFloat16>()[1].bits, feather::FloatToBFloat16(2.5f));
+    EXPECT_EQ(output->data<feather::BFloat16>()[2].bits, feather::FloatToBFloat16(-1.0f));
+}
+
+TEST(qwen_gemm_argmax_test, QwenPassKeepsFp8LogitsGemmUnfusedOnCuda) {
+    feather::model::ModelDesc model;
+    model.name = "qwen_argmax_fp8_cuda_fixture";
+    model.graph.name = "decode";
+    model.graph.outputs = {"logits"};
+
+    feather::model::ValueDesc hidden_value;
+    hidden_value.tensor = {"hidden_fp8", {1, 2}, feather::DataType::FP8E4M3};
+    hidden_value.tensor.quantization = {true, 0.25f};
+    feather::model::ValueDesc weight_value;
+    weight_value.tensor = {"lm_head_fp8", {3, 2}, feather::DataType::FP8E4M3};
+    weight_value.tensor.quantization = {true, 0.5f};
+    weight_value.constant = true;
+    feather::model::ValueDesc fp8_logits_value;
+    fp8_logits_value.tensor = {"logits_fp8", {1, 3}, feather::DataType::FP8E4M3};
+    fp8_logits_value.tensor.quantization = {true, 0.125f};
+    feather::model::ValueDesc logits_value;
+    logits_value.tensor = {"logits", {1, 3}, feather::DataType::BF16};
+    model.graph.values = {hidden_value, weight_value, fp8_logits_value, logits_value};
+
+    feather::model::NodeDesc gemm;
+    gemm.name = "lm_head_gemm";
+    gemm.op_type = "Gemm";
+    gemm.inputs = {"hidden_fp8", "lm_head_fp8"};
+    gemm.outputs = {"logits_fp8"};
+    gemm.attributes["transB"] = int64_t{1};
+    feather::model::NodeDesc cast;
+    cast.name = "logits_cast";
+    cast.op_type = "Cast";
+    cast.inputs = {"logits_fp8"};
+    cast.outputs = {"logits"};
+    cast.attributes["to"] = int64_t{16};
+    model.graph.nodes = {gemm, cast};
+
+    feather::StaticGraph graph;
+    graph.SetKernelDevice(feather::DeviceType::CUDA);
+    ASSERT_EQ(graph.SetModel(model), 0);
+    ASSERT_EQ(graph.SetTensor("hidden_fp8", MakeFp8<feather::DataType::FP8E4M3>({1.0f, 2.0f}, {1, 2}, 0.25f)), 0);
+    ASSERT_EQ(graph.SetTensor("lm_head_fp8",
+                             MakeFp8<feather::DataType::FP8E4M3>({1.0f, 0.0f, 0.0f, 1.0f, 0.5f, 0.5f},
+                                                                  {3, 2}, 0.5f)),
+              0);
+    ASSERT_EQ(graph.Build(), 0);
+
+    auto passes = std::make_shared<feather::PassManager>();
+    passes->AddPass(std::make_unique<feather::QwenGemmArgmaxFusionPass>());
+    graph.SetPassManager(passes);
+    ASSERT_EQ(graph.ApplyPasses(), 0);
+
+    const auto* gemm_node = graph.GetNode("lm_head_gemm");
+    ASSERT_NE(gemm_node, nullptr);
+    EXPECT_EQ(gemm_node->op_type, "Gemm");
+    const auto* cast_node = graph.GetNode("logits_cast");
+    ASSERT_NE(cast_node, nullptr);
+    EXPECT_EQ(cast_node->op_type, "Cast");
+    ASSERT_NE(graph.GetTensor("logits"), nullptr);
+    EXPECT_EQ(graph.GetTensor("logits")->data_type(), feather::DataType::BF16);
+
+    feather::RuntimeGraph runtime;
+    feather::GraphLowering lowering;
+    ASSERT_EQ(lowering.Lower(graph, &runtime), 0);
+    const auto* runtime_gemm = runtime.GetNode("lm_head_gemm");
+    ASSERT_NE(runtime_gemm, nullptr);
+    EXPECT_EQ(runtime_gemm->kernel_device, feather::DeviceType::CUDA);
+    const auto* runtime_cast = runtime.GetNode("logits_cast");
+    ASSERT_NE(runtime_cast, nullptr);
+    EXPECT_EQ(runtime_cast->kernel_device, feather::DeviceType::CUDA);
+}
+
 TEST(qwen_gemm_argmax_test, QwenPassLowersFinalLogitsGemmToCuda) {
     feather::model::ModelDesc model;
     model.name = "qwen_argmax_cuda_fixture";
