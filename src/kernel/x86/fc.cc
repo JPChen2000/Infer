@@ -10,6 +10,8 @@
 namespace feather {
 namespace kernel {
 
+void EnsureX86Int8KernelsRegistered();
+
 namespace {
 
 constexpr int64_t kFp8PackedRhsMinimumMacs = 1 << 18;
@@ -144,7 +146,10 @@ int32_t FcKernel<DeviceType::X86, DataType::FP8E5M2>::Prepare() {
     return PrepareFp8Fc<DataType::FP8E5M2>(static_cast<feather::operators::FcParam*>(param_), &packed_rhs_);
 }
 
-void EnsureX86FcKernelsRegistered() { (void)g_fc_x86_kernels_registered; }
+void EnsureX86FcKernelsRegistered() {
+    (void)g_fc_x86_kernels_registered;
+    EnsureX86Int8KernelsRegistered();
+}
 
 }  // namespace kernel
 }  // namespace feather

@@ -74,7 +74,16 @@ inline bool InferBroadcastShape(const std::vector<int64_t>& lhs_dims, const std:
     for (size_t i = 0; i < out_rank; ++i) {
         const int64_t lhs_dim = i < out_rank - lhs_dims.size() ? 1 : lhs_dims[i - (out_rank - lhs_dims.size())];
         const int64_t rhs_dim = i < out_rank - rhs_dims.size() ? 1 : rhs_dims[i - (out_rank - rhs_dims.size())];
-        if (lhs_dim <= 0 || rhs_dim <= 0 || (lhs_dim != rhs_dim && lhs_dim != 1 && rhs_dim != 1)) {
+        if (lhs_dim < 0 || rhs_dim < 0) {
+            return false;
+        }
+        if (lhs_dim == 0 || rhs_dim == 0) {
+            // Zero is the graph's unknown-dimension placeholder. Preserve it
+            // until runtime rather than treating it as a zero-sized tensor.
+            (*out_dims)[i] = 0;
+            continue;
+        }
+        if (lhs_dim != rhs_dim && lhs_dim != 1 && rhs_dim != 1) {
             return false;
         }
         (*out_dims)[i] = std::max(lhs_dim, rhs_dim);
@@ -85,7 +94,7 @@ inline bool InferBroadcastShape(const std::vector<int64_t>& lhs_dims, const std:
 inline size_t NumelForShape(const std::vector<int64_t>& shape) {
     size_t numel = 1;
     for (const auto dim : shape) {
-        if (dim <= 0) {
+        if (dim < 0) {
             return 0;
         }
         numel *= static_cast<size_t>(dim);
@@ -97,21 +106,54 @@ inline std::shared_ptr<Tensor> AllocateOutput(const std::shared_ptr<Tensor>& out
                                                const std::vector<int64_t>& shape, DataType data_type) {
     const size_t numel = NumelForShape(shape);
     const size_t element_bytes = DataTypeBytes(data_type);
-    if (numel == 0 || element_bytes == 0) {
+    if (element_bytes == 0) {
         return nullptr;
     }
     const size_t bytes = numel * element_bytes;
     auto result = output;
-    if (result == nullptr || !result->IsInitialized() || result->memory_size() < bytes) {
-        result = std::make_shared<Tensor>(bytes);
+    const QuantizationParams quantization = result == nullptr ? QuantizationParams{} : result->quantization();
+    const DataLayout layout = result == nullptr ? DataLayout::ND : result->layout();
+    if (numel == 0) {
+        if (result == nullptr) {
+            result = std::make_shared<Tensor>();
+        }
+        result->Resize(shape);
+        result->set_data_type(data_type);
+        result->set_quantization(quantization);
+        result->set_layout(layout);
+        return result;
+    }
+    if (result == nullptr) {
+        result = std::make_shared<Tensor>();
+    }
+    if (!result->IsInitialized() || result->memory_size() < bytes) {
+        result->ResetBuffer(std::make_shared<Buffer>(bytes), bytes);
     }
     result->Resize(shape);
     result->set_data_type(data_type);
+    result->set_quantization(quantization);
+    result->set_layout(layout);
     return result;
 }
 
 inline bool ReadShapeValues(const std::shared_ptr<Tensor>& shape_tensor, std::vector<int64_t>* shape) {
     return ReadIntegerTensor(shape_tensor, shape);
+}
+
+inline int32_t InferSameTypeOutput(const std::shared_ptr<Tensor>& input, std::shared_ptr<Tensor>* output,
+                                   const std::vector<int64_t>& shape) {
+    if (input == nullptr || output == nullptr) return -1;
+    const DataType output_data_type = input->data_type() == DataType::UNKNOWN ? DataType::FP32 : input->data_type();
+    const QuantizationParams output_quantization =
+        *output != nullptr && (*output)->quantization().enabled ? (*output)->quantization() : input->quantization();
+    const DataLayout output_layout =
+        *output != nullptr && (*output)->layout() != DataLayout::ND ? (*output)->layout() : input->layout();
+    auto result = AllocateOutput(*output, shape, output_data_type);
+    if (result == nullptr) return -1;
+    result->set_quantization(output_quantization);
+    result->set_layout(output_layout);
+    *output = std::move(result);
+    return 0;
 }
 
 inline int32_t InferAxesOutputShape(AxesParam* param, bool unsqueeze) {
@@ -162,17 +204,17 @@ inline int32_t InferAxesOutputShape(AxesParam* param, bool unsqueeze) {
         out_shape = squeezed.empty() ? std::vector<int64_t>{1} : std::move(squeezed);
     }
 
-    const size_t numel = NumelForShape(out_shape);
-    const size_t element_bytes = DataTypeBytes(param->input->data_type());
-    if (numel == 0 || element_bytes == 0) {
-        return -1;
-    }
-    const size_t required_bytes = numel * element_bytes;
-    if (!param->out->IsInitialized() || param->out->memory_size() < required_bytes) {
-        param->out = std::make_shared<Tensor>(required_bytes);
-    }
+    const QuantizationParams output_quantization =
+        param->out->quantization().enabled ? param->out->quantization() : param->input->quantization();
+    const DataLayout output_layout =
+        param->out->layout() != DataLayout::ND ? param->out->layout() : param->input->layout();
+    auto resolved_output = AllocateOutput(param->out, out_shape, param->input->data_type());
+    if (resolved_output == nullptr) return -1;
+    param->out = std::move(resolved_output);
     param->out->Resize(out_shape);
     param->out->set_data_type(param->input->data_type());
+    param->out->set_quantization(output_quantization);
+    param->out->set_layout(output_layout);
     return 0;
 }
 
@@ -181,19 +223,8 @@ inline int32_t InferIdentityOutputShape(const std::shared_ptr<Tensor>& input, co
     if (input == nullptr || output == nullptr || resolved_output == nullptr) {
         return -1;
     }
-    const size_t bytes = static_cast<size_t>(input->numel()) * DataTypeBytes(input->data_type());
-    if (bytes == 0) {
-        return -1;
-    }
-    auto result = output;
-    if (!result->IsInitialized() || result->memory_size() < bytes) {
-        result = std::make_shared<Tensor>(bytes);
-    }
-    result->Resize(input->dims().data());
-    result->set_data_type(input->data_type());
-    result->set_layout(input->layout());
-    *resolved_output = std::move(result);
-    return 0;
+    *resolved_output = output;
+    return InferSameTypeOutput(input, resolved_output, input->dims().data());
 }
 
 }  // namespace tensor_op_detail

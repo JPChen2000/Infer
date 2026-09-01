@@ -17,8 +17,24 @@ uint64_t NextMutationVersion() {
 
 void Tensor::set_quantization(const QuantizationParams& quantization) {
   m_quantization = quantization;
+  if (!m_quantization.scales.empty()) {
+    m_quantization.scale = m_quantization.scales.front();
+  }
   if (!(m_quantization.scale > 0.0f) || !std::isfinite(m_quantization.scale)) {
     m_quantization.scale = 1.0f;
+  }
+  if (m_quantization.scales.empty()) {
+    m_quantization.scales.push_back(m_quantization.scale);
+  } else {
+    m_quantization.scales.front() = m_quantization.scale;
+  }
+  if (!m_quantization.zero_points.empty()) {
+    m_quantization.zero_point = m_quantization.zero_points.front();
+  }
+  if (m_quantization.zero_points.empty()) {
+    m_quantization.zero_points.push_back(m_quantization.zero_point);
+  } else {
+    m_quantization.zero_points.front() = m_quantization.zero_point;
   }
 }
 

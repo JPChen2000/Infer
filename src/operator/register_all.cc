@@ -1,4 +1,6 @@
 #include "core/operator_registry.h"
+#include "src/operator/quantize_linear_op.h"
+#include "src/operator/dequantize_linear_op.h"
 
 namespace feather {
 namespace operators {
@@ -87,6 +89,8 @@ void RegisterBuiltinOperators() {
     EnsureUnsqueezeOperatorRegistered();
     EnsureSqueezeOperatorRegistered();
     EnsureCastOperatorRegistered();
+    EnsureQuantizeLinearOperatorRegistered();
+    EnsureDequantizeLinearOperatorRegistered();
     EnsureReduceMeanOperatorRegistered();
     EnsureReduceSumOperatorRegistered();
     EnsureGatherOperatorRegistered();

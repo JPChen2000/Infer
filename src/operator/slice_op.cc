@@ -7,6 +7,8 @@
 #include <utility>
 
 #include "core/operator_registry.h"
+#include "src/operator/tensor_op_utils.h"
+#include "src/operator/tensor_op_utils.h"
 #include "src/operator/control_tensor.h"
 #include "util/types.h"
 
@@ -157,17 +159,7 @@ int32_t SliceOp::InferOutputShapes() {
     start = std::max<int64_t>(0, start);
     end = std::min<int64_t>(dim, end);
     out_shape[axis] = end - start;
-    const size_t required_bytes =
-        static_cast<size_t>(std::max<int64_t>(1, std::accumulate(out_shape.begin(), out_shape.end(), int64_t{1},
-                                                                 std::multiplies<int64_t>()))) *
-        DataTypeBytes(ResolveExecutionDataType({param_.input}, DataType::FP32));
-    if (param_.out == nullptr || !param_.out->IsInitialized() || param_.out->memory_size() < required_bytes) {
-        param_.out = std::make_shared<Tensor>(required_bytes);
-        param_.out->Resize(out_shape);
-    } else {
-        param_.out->Resize(out_shape);
-    }
-    param_.out->set_data_type(param_.input->data_type());
+    if (tensor_op_detail::InferSameTypeOutput(param_.input, &param_.out, out_shape) != 0) return -1;
     SyncIO();
     return 0;
 }

@@ -1,8 +1,10 @@
 #include "src/operator/reshape_op.h"
 
+#include <limits>
 #include <utility>
 
 #include "core/operator_registry.h"
+#include "src/operator/tensor_op_utils.h"
 #include "src/operator/control_tensor.h"
 #include "util/types.h"
 
@@ -37,29 +39,52 @@ bool ResolveTargetShape(const std::shared_ptr<Tensor>& input, const std::shared_
         return false;
     }
 
+    const auto input_dims = input->dims().data();
+    bool input_shape_known = true;
+    int64_t input_numel = 1;
+    for (const auto input_dim : input_dims) {
+        if (input_dim <= 0) {
+            input_shape_known = false;
+            break;
+        }
+        if (input_numel > std::numeric_limits<int64_t>::max() / input_dim) {
+            return false;
+        }
+        input_numel *= input_dim;
+    }
+
     target_shape->clear();
     target_shape->reserve(raw_shape.size());
     int64_t known_numel = 1;
     int64_t infer_axis = -1;
-    const auto input_dims = input->dims().data();
     for (size_t axis = 0; axis < raw_shape.size(); ++axis) {
         int64_t dim = raw_shape[axis];
         if (dim == 0) {
-            if (axis >= input_dims.size() || input_dims[axis] <= 0) {
+            if (axis >= input_dims.size() || input_dims[axis] < 0) {
                 return false;
             }
             dim = input_dims[axis];
+            if (dim == 0) {
+                target_shape->push_back(0);
+                continue;
+            }
         } else if (dim == -1) {
             if (infer_axis >= 0) {
                 return false;
             }
             infer_axis = static_cast<int64_t>(axis);
-            target_shape->push_back(-1);
+            // The inferred dimension is not knowable until the input shape is
+            // refreshed at runtime when the input contains unknown dimensions.
+            target_shape->push_back(0);
             continue;
-        } else if (dim <= 0) {
+        } else if (dim < 0) {
             return false;
         }
-        if (known_numel > input->numel() / dim) {
+        if (dim == 0) {
+            target_shape->push_back(0);
+            continue;
+        }
+        if (known_numel > std::numeric_limits<int64_t>::max() / dim) {
             return false;
         }
         known_numel *= dim;
@@ -67,20 +92,33 @@ bool ResolveTargetShape(const std::shared_ptr<Tensor>& input, const std::shared_
     }
 
     if (infer_axis >= 0) {
-        if (known_numel == 0 || input->numel() % known_numel != 0) {
-            return false;
+        if (input_shape_known) {
+            if (known_numel == 0 || input_numel % known_numel != 0) {
+                return false;
+            }
+            const int64_t inferred_dim = input_numel / known_numel;
+            if (inferred_dim <= 0) {
+                return false;
+            }
+            (*target_shape)[static_cast<size_t>(infer_axis)] = inferred_dim;
         }
-        (*target_shape)[static_cast<size_t>(infer_axis)] = input->numel() / known_numel;
+    }
+
+    // Zero dimensions in the model are placeholders for runtime dimensions,
+    // not real zero-element tensors. Defer the exact element-count check until
+    // the input has been populated with its runtime shape.
+    if (!input_shape_known) {
+        return true;
     }
 
     int64_t target_numel = 1;
     for (const auto dim : *target_shape) {
-        if (dim <= 0 || target_numel > input->numel() / dim) {
+        if (dim <= 0 || target_numel > std::numeric_limits<int64_t>::max() / dim) {
             return false;
         }
         target_numel *= dim;
     }
-    return target_numel == input->numel();
+    return target_numel == input_numel;
 }
 
 std::shared_ptr<OpBase> BuildReshapeOp(const model::NodeDesc& node, OperatorRegistry::TensorMap& tensors, const OperatorRegistry::BuildContext& context) {
@@ -160,7 +198,7 @@ int32_t ReshapeOp::InferOutputShapes() {
     // CUDA keeps separate host storage but shares the device allocation in its
     // view kernel, so output lifetime remains independent of host metadata.
     const auto device = execution_device_explicit_ ? execution_device_ : ActiveKernelDevice();
-    if (device != DeviceType::CUDA) {
+    if (device != DeviceType::CUDA && param_.input->data_type() != DataType::INT8) {
         param_.out->ShareDataWith(*param_.input);
         param_.out->Resize(target_shape);
         param_.out->set_data_type(param_.input->data_type());
@@ -169,16 +207,7 @@ int32_t ReshapeOp::InferOutputShapes() {
         return 0;
     }
 
-    const size_t required_bytes =
-        static_cast<size_t>(param_.input->numel()) *
-        DataTypeBytes(ResolveExecutionDataType({param_.input, param_.out}, DataType::FP32));
-    if (param_.out == nullptr || !param_.out->IsInitialized() || param_.out->memory_size() < required_bytes) {
-        param_.out = std::make_shared<Tensor>(target_shape);
-    } else {
-        param_.out->Resize(target_shape);
-    }
-    param_.out->set_data_type(param_.input->data_type());
-    param_.out->set_layout(param_.input->layout());
+    if (tensor_op_detail::InferSameTypeOutput(param_.input, &param_.out, target_shape) != 0) return -1;
     SyncIO();
     return 0;
 }

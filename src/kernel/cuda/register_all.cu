@@ -1,4 +1,5 @@
 #include "core/kernel.h"
+#include "src/kernel/common/int8_fused.h"
 
 namespace feather {
 namespace kernel {
@@ -15,6 +16,8 @@ void EnsureCudaSoftplusKernelsRegistered();
 void EnsureCudaConcatKernelsRegistered();
 void EnsureCudaConv2DKernelsRegistered();
 void EnsureCudaFcKernelsRegistered();
+void EnsureCudaInt8KernelsRegistered();
+void EnsureCudaStandardInt8KernelsRegistered();
 void EnsureCudaFlattenKernelsRegistered();
 void EnsureCudaGemmKernelsRegistered();
 void EnsureCudaGlobalAveragePoolKernelsRegistered();
@@ -51,6 +54,7 @@ void EnsureCudaQwenDepthwiseConvStateKernelsRegistered();
 void EnsureCudaQwenGatedDeltaKernelsRegistered();
 void EnsureCudaQwenGemmArgmaxKernelsRegistered();
 void EnsureCudaFp8KernelsRegistered();
+void EnsureCudaInt8FusedKernelsRegistered();
 
 void EnsureCudaKernelsRegistered() {
     EnsureCudaAddKernelsRegistered();
@@ -65,6 +69,8 @@ void EnsureCudaKernelsRegistered() {
     EnsureCudaConcatKernelsRegistered();
     EnsureCudaConv2DKernelsRegistered();
     EnsureCudaFcKernelsRegistered();
+    EnsureCudaInt8KernelsRegistered();
+    EnsureCudaStandardInt8KernelsRegistered();
     EnsureCudaFlattenKernelsRegistered();
     EnsureCudaGemmKernelsRegistered();
     EnsureCudaGlobalAveragePoolKernelsRegistered();
@@ -101,6 +107,7 @@ void EnsureCudaKernelsRegistered() {
     EnsureCudaQwenGatedDeltaKernelsRegistered();
     EnsureCudaQwenGemmArgmaxKernelsRegistered();
     EnsureCudaFp8KernelsRegistered();
+    EnsureCudaInt8FusedKernelsRegistered();
 }
 
 }  // namespace kernel

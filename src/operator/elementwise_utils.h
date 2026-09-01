@@ -50,17 +50,26 @@ inline int32_t InferBinaryOutput(BinaryParam* param) {
         return -1;
     }
     const auto dtype = ResolveExecutionDataType({param->lhs, param->rhs, param->out}, DataType::FP32);
+    const auto output_quantization = param->out->quantization().enabled
+                                         ? param->out->quantization()
+                                         : (param->lhs->quantization().enabled ? param->lhs->quantization()
+                                                                                : param->rhs->quantization());
+    const auto output_layout = param->out->layout();
     const size_t required_bytes =
         static_cast<size_t>(std::max<int64_t>(1, std::accumulate(out_shape.begin(), out_shape.end(), int64_t{1},
                                                                  std::multiplies<int64_t>()))) *
         DataTypeBytes(dtype);
     if (!param->out->IsInitialized() || param->out->memory_size() < required_bytes) {
         param->out = std::make_shared<Tensor>(out_shape);
+        param->out->set_quantization(output_quantization);
     } else {
         param->out->Resize(out_shape);
     }
     param->out->set_data_type(dtype);
-    param->out->set_layout(param->lhs->layout() != DataLayout::ND ? param->lhs->layout() : param->rhs->layout());
+    param->out->set_quantization(output_quantization);
+    param->out->set_layout(output_layout != DataLayout::ND
+                               ? output_layout
+                               : (param->lhs->layout() != DataLayout::ND ? param->lhs->layout() : param->rhs->layout()));
     return 0;
 }
 
@@ -73,14 +82,20 @@ inline int32_t InferUnaryOutput(UnaryParam* param) {
         return -1;
     }
     const auto dtype = ResolveExecutionDataType({param->input, param->out}, DataType::FP32);
+    const auto output_quantization = param->out->quantization().enabled
+                                         ? param->out->quantization()
+                                         : param->input->quantization();
+    const auto output_layout = param->out->layout();
     const size_t required_bytes = static_cast<size_t>(std::max<int64_t>(1, param->input->numel())) * DataTypeBytes(dtype);
     if (!param->out->IsInitialized() || param->out->memory_size() < required_bytes) {
         param->out = std::make_shared<Tensor>(param->input->dims().data());
+        param->out->set_quantization(output_quantization);
     } else {
         param->out->Resize(param->input->dims().data());
     }
     param->out->set_data_type(dtype);
-    param->out->set_layout(param->input->layout());
+    param->out->set_quantization(output_quantization);
+    param->out->set_layout(output_layout != DataLayout::ND ? output_layout : param->input->layout());
     return 0;
 }
 

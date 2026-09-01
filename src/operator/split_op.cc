@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "core/operator_registry.h"
+#include "src/operator/tensor_op_utils.h"
 #include "src/operator/control_tensor.h"
 #include "util/types.h"
 
@@ -152,16 +153,8 @@ int32_t SplitOp::InferOutputShapes() {
         if (out_shape.empty()) {
             return -1;
         }
-        const size_t required_bytes =
-            static_cast<size_t>(ComputeNumel(out_shape)) *
-            DataTypeBytes(ResolveExecutionDataType({param_.input, param_.outputs[i]}, DataType::FP32));
-        if (param_.outputs[i] == nullptr || !param_.outputs[i]->IsInitialized() ||
-            param_.outputs[i]->memory_size() < required_bytes) {
-            param_.outputs[i] = std::make_shared<Tensor>(out_shape);
-        } else {
-            param_.outputs[i]->Resize(out_shape);
-        }
-        param_.outputs[i]->set_layout(param_.input->layout());
+        if (param_.outputs[i] == nullptr) return -1;
+        if (tensor_op_detail::InferSameTypeOutput(param_.input, &param_.outputs[i], out_shape) != 0) return -1;
     }
     SyncIO();
     return 0;

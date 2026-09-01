@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "core/operator_registry.h"
+#include "src/operator/tensor_op_utils.h"
 #include "util/types.h"
 
 namespace feather {
@@ -167,14 +168,7 @@ int32_t AvgPoolOp::InferOutputShapes() {
         return -1;
     }
     const auto out_shape = InferPoolOutputShape(param_);
-    const size_t required_bytes =
-        static_cast<size_t>(ComputeNumel(out_shape)) *
-        DataTypeBytes(ResolveExecutionDataType({param_.input, param_.out}, DataType::FP32));
-    if (param_.out == nullptr || !param_.out->IsInitialized() || param_.out->memory_size() < required_bytes) {
-        param_.out = std::make_shared<Tensor>(out_shape);
-    } else {
-        param_.out->Resize(out_shape);
-    }
+    if (tensor_op_detail::InferSameTypeOutput(param_.input, &param_.out, out_shape) != 0) return -1;
     param_.out->set_layout(param_.input->dims().size() == 4 ? NormalizeDataLayout(param_.input->layout()) : DataLayout::ND);
     SyncIO();
     return 0;
@@ -209,14 +203,7 @@ int32_t MaxPoolOp::InferOutputShapes() {
         return -1;
     }
     const auto out_shape = InferPoolOutputShape(param_);
-    const size_t required_bytes =
-        static_cast<size_t>(ComputeNumel(out_shape)) *
-        DataTypeBytes(ResolveExecutionDataType({param_.input, param_.out}, DataType::FP32));
-    if (param_.out == nullptr || !param_.out->IsInitialized() || param_.out->memory_size() < required_bytes) {
-        param_.out = std::make_shared<Tensor>(out_shape);
-    } else {
-        param_.out->Resize(out_shape);
-    }
+    if (tensor_op_detail::InferSameTypeOutput(param_.input, &param_.out, out_shape) != 0) return -1;
     param_.out->set_layout(param_.input->dims().size() == 4 ? NormalizeDataLayout(param_.input->layout()) : DataLayout::ND);
     SyncIO();
     return 0;

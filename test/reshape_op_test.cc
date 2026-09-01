@@ -75,3 +75,38 @@ TEST(reshape_op_test, ReshapePreservesDataAndChangesShapeFP16) {
                     feather::HalfToFloat(input->data<uint16_t>()[i]), 1e-3f);
     }
 }
+
+TEST(reshape_op_test, AllowsUnknownBuildShapeAndRefreshesAtRuntime) {
+    auto input = std::make_shared<Tensor>(std::vector<int64_t>{0, 8, 12, 64});
+    input->set_data_type(DataType::FP32);
+
+    auto shape = std::make_shared<Tensor>();
+    shape->Assign<int64_t>({1, -1, 768}, {3});
+
+    auto out = std::make_shared<Tensor>(std::vector<int64_t>{1, 0, 768});
+    out->set_data_type(DataType::FP32);
+
+    ReshapeParam param;
+    param.input = input;
+    param.shape = shape;
+    param.out = out;
+
+    feather::operators::ReshapeOp op("reshape_dynamic", param);
+    ASSERT_EQ(op.CheckShape(), 0);
+    ASSERT_EQ(op.InferOutputShapes(), 0);
+    ASSERT_EQ(op.outputs().front()->dims().data(), std::vector<int64_t>({1, 0, 768}));
+    const auto output_handle = op.outputs().front();
+
+    std::vector<float> values(1 * 8 * 12 * 64, 1.0f);
+    input->Assign<float>(values, {1, 8, 12, 64});
+
+    ASSERT_EQ(op.InferOutputShapes(), 0);
+    EXPECT_EQ(op.outputs().front().get(), output_handle.get());
+    EXPECT_EQ(op.outputs().front()->dims().data(), std::vector<int64_t>({1, 8, 768}));
+
+    auto kernel = KernelDispatcher::instance().create(DeviceType::X86, DataType::FP32, "Reshape");
+    ASSERT_NE(kernel, nullptr);
+    op.AttachKernel(std::move(kernel));
+    ASSERT_EQ(op.Run(), 0);
+    EXPECT_FLOAT_EQ(op.outputs().front()->data<float>()[0], 1.0f);
+}

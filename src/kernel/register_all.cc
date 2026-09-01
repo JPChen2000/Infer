@@ -1,4 +1,5 @@
 #include "core/kernel.h"
+#include "src/kernel/common/int8_fused.h"
 
 #include "src/kernel/add.h"
 #include "src/kernel/batch_normalization.h"
@@ -49,18 +50,24 @@
 #include "src/kernel/qwen_depthwise_conv.h"
 #include "src/kernel/qwen_rms_norm.h"
 #include "src/kernel/yolo_decode.h"
+#include "src/kernel/quantize_linear.h"
+#include "src/kernel/dequantize_linear.h"
 
 namespace feather {
 namespace kernel {
 
 void EnsureCommonFp8KernelsRegistered();
 void EnsureX86Fp8KernelsRegistered();
+void EnsureStandardCommonInt8KernelsRegistered();
+void EnsureStandardX86Int8KernelsRegistered();
 
 #ifdef FEATHER_WITH_CUDA
 void EnsureCudaKernelsRegistered();
 #endif
 
 void RegisterBuiltinKernels() {
+    EnsureStandardCommonInt8KernelsRegistered();
+    EnsureStandardX86Int8KernelsRegistered();
     EnsureCommonFp8KernelsRegistered();
     EnsureX86Fp8KernelsRegistered();
     EnsureAddKernelsRegistered();
@@ -99,6 +106,8 @@ void RegisterBuiltinKernels() {
     EnsureUnsqueezeKernelsRegistered();
     EnsureSqueezeKernelsRegistered();
     EnsureCastKernelsRegistered();
+    EnsureQuantizeLinearKernelsRegistered();
+    EnsureDequantizeLinearKernelsRegistered();
     EnsureReduceMeanKernelsRegistered();
     EnsureReduceSumKernelsRegistered();
     EnsureGatherKernelsRegistered();
@@ -115,6 +124,9 @@ void RegisterBuiltinKernels() {
 #ifdef FEATHER_WITH_CUDA
     EnsureCudaKernelsRegistered();
 #endif
+
+    EnsureCommonInt8FusedKernelsRegistered();
+    EnsureX86Int8FusedKernelsRegistered();
 }
 
 void EnsureBuiltinKernelsRegistered() { RegisterBuiltinKernels(); }

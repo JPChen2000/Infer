@@ -304,6 +304,23 @@ struct YoloDecodeParam : ParamBase {
     std::shared_ptr<Tensor> out;
 };
 
+struct QuantizeLinearParam : ParamBase {
+    std::shared_ptr<Tensor> input;
+    std::shared_ptr<Tensor> scale;
+    std::shared_ptr<Tensor> zero_point;
+    std::shared_ptr<Tensor> out;
+    int64_t axis{-1};
+};
+
+struct DequantizeLinearParam : ParamBase {
+    std::shared_ptr<Tensor> input;
+    std::shared_ptr<Tensor> scale;
+    std::shared_ptr<Tensor> zero_point;
+    std::shared_ptr<Tensor> out;
+    DataType to{DataType::FP32};
+    int64_t axis{-1};
+};
+
 }  // namespace operators
 }  // namespace feather
 #endif  // FtEATHER_OPERATOR_OP_PARAMS_H

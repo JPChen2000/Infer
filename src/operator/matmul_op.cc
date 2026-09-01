@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "core/operator_registry.h"
+#include "src/operator/tensor_op_utils.h"
 #include "util/types.h"
 
 namespace feather {
@@ -81,7 +82,9 @@ int32_t MatMulOp::CheckShape() const {
     if (param_.a->dims().size() < 2 || param_.b->dims().size() < 2) {
         return -1;
     }
-    return param_.a->dims()[param_.a->dims().size() - 1] == param_.b->dims()[param_.b->dims().size() - 2] ? 0 : -1;
+    const int64_t a_k = param_.a->dims()[param_.a->dims().size() - 1];
+    const int64_t b_k = param_.b->dims()[param_.b->dims().size() - 2];
+    return a_k < 0 || b_k < 0 || a_k == 0 || b_k == 0 || a_k == b_k ? 0 : -1;
 }
 
 int32_t MatMulOp::InferOutputShapes() {
@@ -100,28 +103,49 @@ int32_t MatMulOp::InferOutputShapes() {
     for (size_t i = 0; i < batch_rank; ++i) {
         const int64_t a_dim = i < batch_rank - (a_rank - 2) ? 1 : a_dims[i - (batch_rank - (a_rank - 2))];
         const int64_t b_dim = i < batch_rank - (b_rank - 2) ? 1 : b_dims[i - (batch_rank - (b_rank - 2))];
-        if (a_dim != b_dim && a_dim != 1 && b_dim != 1) {
+        if (a_dim < 0 || b_dim < 0) {
             return -1;
         }
-        out_shape[i] = std::max(a_dim, b_dim);
+        if (a_dim != b_dim && a_dim != 0 && b_dim != 0 && a_dim != 1 && b_dim != 1) {
+            return -1;
+        }
+        out_shape[i] = a_dim == 0 || b_dim == 0 ? 0 : std::max(a_dim, b_dim);
     }
     out_shape.push_back(a_dims[a_rank - 2]);
     out_shape.push_back(b_dims[b_rank - 1]);
     int64_t output_numel = 1;
     for (const auto dim : out_shape) {
-        if (dim <= 0 || output_numel > std::numeric_limits<int64_t>::max() / dim) {
+        if (dim < 0) {
+            return -1;
+        }
+        if (dim == 0) {
+            output_numel = 0;
+            continue;
+        }
+        if (output_numel != 0 && output_numel > std::numeric_limits<int64_t>::max() / dim) {
             return -1;
         }
         output_numel *= dim;
     }
-    const size_t required_bytes =
-        static_cast<size_t>(output_numel) *
-        DataTypeBytes(ResolveExecutionDataType({param_.a, param_.b, param_.out}, DataType::FP32));
-    if (param_.out == nullptr || !param_.out->IsInitialized() || param_.out->memory_size() < required_bytes) {
-        param_.out = std::make_shared<Tensor>(out_shape);
-    } else {
-        param_.out->Resize(out_shape);
+    const DataType output_data_type =
+        param_.out != nullptr && param_.out->data_type() != DataType::UNKNOWN
+            ? param_.out->data_type()
+            : ResolveExecutionDataType({param_.a, param_.b}, DataType::FP32);
+    const QuantizationParams output_quantization =
+        param_.out != nullptr && param_.out->quantization().enabled ? param_.out->quantization()
+                                                                     : param_.a->quantization();
+    const DataLayout output_layout =
+        param_.out != nullptr && param_.out->layout() != DataLayout::ND ? param_.out->layout() : param_.a->layout();
+    auto resolved_output = tensor_op_detail::AllocateOutput(param_.out, out_shape, output_data_type);
+    if (resolved_output == nullptr) {
+        return -1;
     }
+    param_.out = std::move(resolved_output);
+    param_.out->set_data_type(output_data_type);
+    if (output_quantization.enabled) {
+        param_.out->set_quantization(output_quantization);
+    }
+    param_.out->set_layout(output_layout);
     SyncIO();
     UpdateShapeCache();
     return 0;

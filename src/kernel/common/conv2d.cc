@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "src/kernel/common/kernel_io.h"
+#include "src/kernel/common/int8_kernel_utils.h"
 
 using feather::DataType;
 using feather::Tensor;
@@ -27,6 +28,8 @@ bool g_conv2d_kernels_registered = []() {
                                                []() { return std::make_unique<Conv2DKernel<DeviceType::COMMON, DataType::FP16>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::BF16, "Conv2D",
                                                []() { return std::make_unique<Conv2DKernel<DeviceType::COMMON, DataType::BF16>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::INT8, "Conv2D",
+                                               []() { return std::make_unique<Conv2DKernel<DeviceType::COMMON, DataType::INT8>>(); });
     return true;
 }();
 
@@ -460,5 +463,110 @@ void EnsureConv2DKernelsRegistered() {
     EnsureCommonConv2DKernelsRegistered();
     EnsureX86Conv2DKernelsRegistered();
 }
+template <>
+int32_t Conv2DKernel<DeviceType::COMMON, DataType::INT8>::compute() {
+    AutoTimer timer("Common::Conv2D::INT8");
+    auto* param = static_cast<feather::operators::Conv2dParam*>(param_);
+    if (param == nullptr || param->input == nullptr || param->w == nullptr || param->out == nullptr ||
+        param->input->dims().size() != 4 || param->w->dims().size() != 4 || param->out->dims().size() != 4 ||
+        param->stride_h <= 0 || param->stride_w <= 0 || param->dilation_h <= 0 || param->dilation_w <= 0 ||
+        param->group <= 0) {
+        return -1;
+    }
+    ImageShape4D input_shape;
+    ImageShape4D output_shape;
+    if (!DecodeImageShape4D(param->input->dims().data(), param->input->layout(), &input_shape) ||
+        !DecodeImageShape4D(param->out->dims().data(), param->out->layout(), &output_shape)) {
+        return -1;
+    }
+    const int64_t out_channels = param->w->dims()[0];
+    const int64_t input_channels_per_group = param->w->dims()[1];
+    const int64_t kernel_h = param->w->dims()[2];
+    const int64_t kernel_w = param->w->dims()[3];
+    if (input_shape.n <= 0 || input_shape.c <= 0 || input_shape.h <= 0 || input_shape.w <= 0 ||
+        out_channels <= 0 || input_channels_per_group <= 0 || kernel_h <= 0 || kernel_w <= 0 ||
+        input_shape.c % param->group != 0 || out_channels % param->group != 0 ||
+        input_channels_per_group != input_shape.c / param->group) {
+        return -1;
+    }
+    const int64_t expected_h = (input_shape.h + 2 * param->pad_h -
+                                param->dilation_h * (kernel_h - 1) - 1) /
+                                   param->stride_h +
+                               1;
+    const int64_t expected_w = (input_shape.w + 2 * param->pad_w -
+                                param->dilation_w * (kernel_w - 1) - 1) /
+                                   param->stride_w +
+                               1;
+    if (expected_h <= 0 || expected_w <= 0 || output_shape.n != input_shape.n || output_shape.c != out_channels ||
+        output_shape.h != expected_h || output_shape.w != expected_w) {
+        return -1;
+    }
+
+    int8_detail::QuantizationView input_quantization;
+    int8_detail::QuantizationView weight_quantization;
+    int8_detail::QuantizationView output_quantization;
+    if (!int8_detail::BuildInputQuantizationView(param->input, &input_quantization) ||
+        !int8_detail::BuildWeightQuantizationView(param->w, 0, out_channels, &weight_quantization) ||
+        !int8_detail::BuildOutputQuantizationView(param->out, &output_quantization) ||
+        !int8_detail::ValidateConvBias(param->bias, out_channels)) {
+        return -1;
+    }
+
+    const DataLayout input_layout = NormalizeDataLayout(param->input->layout());
+    const DataLayout output_layout = NormalizeDataLayout(param->out->layout());
+    const int64_t output_channels_per_group = out_channels / param->group;
+    const int8_t* input = param->input->data<int8_t>();
+    const int8_t* weight = param->w->data<int8_t>();
+    int8_t* output = param->out->mutable_data<int8_t>();
+    for (int64_t batch = 0; batch < input_shape.n; ++batch) {
+        for (int64_t group = 0; group < param->group; ++group) {
+            for (int64_t channel = 0; channel < output_channels_per_group; ++channel) {
+                const int64_t output_channel = group * output_channels_per_group + channel;
+                const int32_t weight_zero_point = weight_quantization.zero_point_for(static_cast<size_t>(output_channel));
+                const double scale = static_cast<double>(input_quantization.scale) *
+                                     weight_quantization.scale_for(static_cast<size_t>(output_channel));
+                for (int64_t output_h = 0; output_h < output_shape.h; ++output_h) {
+                    for (int64_t output_w = 0; output_w < output_shape.w; ++output_w) {
+                        int64_t accumulator = int8_detail::ReadConvBias(param->bias, output_channel);
+                        for (int64_t input_channel = 0; input_channel < input_channels_per_group; ++input_channel) {
+                            const int64_t global_input_channel = group * input_channels_per_group + input_channel;
+                            for (int64_t kernel_y = 0; kernel_y < kernel_h; ++kernel_y) {
+                                const int64_t input_y = output_h * param->stride_h + kernel_y * param->dilation_h - param->pad_h;
+                                if (input_y < 0 || input_y >= input_shape.h) continue;
+                                for (int64_t kernel_x = 0; kernel_x < kernel_w; ++kernel_x) {
+                                    const int64_t input_x = output_w * param->stride_w + kernel_x * param->dilation_w - param->pad_w;
+                                    if (input_x < 0 || input_x >= input_shape.w) continue;
+                                    const int64_t input_offset = OffsetForImage4D(
+                                        input_layout, batch, global_input_channel, input_y, input_x,
+                                        input_shape.c, input_shape.h, input_shape.w);
+                                    const int64_t weight_offset =
+                                        ((output_channel * input_channels_per_group + input_channel) * kernel_h + kernel_y) *
+                                            kernel_w +
+                                        kernel_x;
+                                    accumulator += static_cast<int64_t>(
+                                        static_cast<int32_t>(input[input_offset]) - input_quantization.zero_point) *
+                                        (static_cast<int32_t>(weight[weight_offset]) - weight_zero_point);
+                                    if (!int8_detail::FitsInt32(accumulator)) return -1;
+                                }
+                            }
+                        }
+                        const int64_t output_offset = OffsetForImage4D(
+                            output_layout, batch, output_channel, output_h, output_w,
+                            output_shape.c, output_shape.h, output_shape.w);
+                        if (!int8_detail::QuantizeAccumulator(accumulator, scale, output_quantization,
+                                                              &output[output_offset])) {
+                            return -1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+typedef feather::kernel::Conv2DKernel<DeviceType::COMMON, DataType::INT8> Conv2DCommonINT8Kernel;
+REGISTER_KERNEL(COMMON, INT8, Conv2D, Conv2DCommonINT8Kernel);
+
 }  // namespace kernel
 }  // namespace feather

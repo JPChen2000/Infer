@@ -146,6 +146,14 @@ int32_t Conv2dOp::InferOutputShapes() {
     if (CheckShape() != 0) {
         return -1;
     }
+    // Shape inference may need to grow the output buffer at runtime. Keep the
+    // existing Tensor object (the graph's value map owns that handle) and
+    // preserve its execution and quantization contract while replacing only
+    // the backing storage. Constructing a new Tensor here would default it to
+    // FP32 with disabled quantization and disconnect the operator from the
+    // graph's original output value.
+    const DataType declared_output_data_type = param_.out->data_type();
+    const DataLayout output_layout = param_.out->layout();
     std::vector<int64_t> out_shape;
     if (param_.input->dims().size() == 2) {
         const int64_t out_h =
@@ -164,15 +172,23 @@ int32_t Conv2dOp::InferOutputShapes() {
             ImageShape4D{param_.input->dims()[0], param_.w->dims()[0], out_h, out_w},
             NormalizeDataLayout(param_.input->layout()));
     }
+    const DataType execution_data_type =
+        declared_output_data_type != DataType::UNKNOWN
+            ? declared_output_data_type
+            : ResolveExecutionDataType({param_.input, param_.w, param_.bias, param_.out}, DataType::FP32);
     const size_t required_bytes =
-        static_cast<size_t>(std::max<int64_t>(1, ComputeNumel(out_shape))) *
-        DataTypeBytes(ResolveExecutionDataType({param_.input, param_.w, param_.bias, param_.out}, DataType::FP32));
-    if (param_.out == nullptr || !param_.out->IsInitialized() || param_.out->memory_size() < required_bytes) {
-        param_.out = std::make_shared<Tensor>(out_shape);
-    } else {
-        param_.out->Resize(out_shape);
+        static_cast<size_t>(std::max<int64_t>(1, ComputeNumel(out_shape))) * DataTypeBytes(execution_data_type);
+    if (!param_.out->IsInitialized() || param_.out->memory_size() < required_bytes) {
+        param_.out->ResetBuffer(std::make_shared<Buffer>(required_bytes), required_bytes);
     }
-    param_.out->set_layout(param_.input->dims().size() == 4 ? NormalizeDataLayout(param_.input->layout()) : DataLayout::ND);
+    param_.out->Resize(out_shape);
+    if (declared_output_data_type == DataType::UNKNOWN) {
+        param_.out->set_data_type(execution_data_type);
+    }
+    param_.out->set_layout(param_.input->dims().size() == 4 ? NormalizeDataLayout(output_layout == DataLayout::ND
+                                                                                       ? param_.input->layout()
+                                                                                       : output_layout)
+                                                               : DataLayout::ND);
     SyncIO();
     return 0;
 }

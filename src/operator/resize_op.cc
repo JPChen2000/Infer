@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "core/operator_registry.h"
+#include "src/operator/tensor_op_utils.h"
 #include "src/operator/control_tensor.h"
 #include "util/types.h"
 

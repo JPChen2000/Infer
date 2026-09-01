@@ -4,6 +4,7 @@
 #include <numeric>
 
 #include "src/kernel/common/kernel_io.h"
+#include "src/kernel/common/int8_kernel_utils.h"
 #include "src/operator/params.h"
 #include "util/timer.h"
 
@@ -36,6 +37,8 @@ bool g_gemm_kernels_registered = []() {
                                                 []() { return std::make_unique<GemmKernel<DeviceType::COMMON, DataType::FP8E4M3>>(); });
     KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::FP8E5M2, "Gemm",
                                                 []() { return std::make_unique<GemmKernel<DeviceType::COMMON, DataType::FP8E5M2>>(); });
+    KernelDispatcher::instance().registerKernel(DeviceType::COMMON, DataType::INT8, "Gemm",
+                                                []() { return std::make_unique<GemmKernel<DeviceType::COMMON, DataType::INT8>>(); });
     return true;
 }();
 
@@ -115,6 +118,70 @@ int32_t GemmKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() {
     return ComputeCommonFp8Gemm<DataType::FP8E5M2>(static_cast<feather::operators::GemmParam*>(param_));
 }
 
+template <>
+int32_t GemmKernel<DeviceType::COMMON, DataType::INT8>::compute() {
+    AutoTimer timer("Common::Gemm::INT8");
+    auto* param = static_cast<feather::operators::GemmParam*>(param_);
+    if (param == nullptr || param->a == nullptr || param->b == nullptr || param->out == nullptr ||
+        param->a->dims().size() < 2 || param->b->dims().size() != 2 || param->trans_a ||
+        !std::isfinite(param->alpha) || !std::isfinite(param->beta)) {
+        return -1;
+    }
+    const auto& a_dims = param->a->dims().data();
+    const auto& b_dims = param->b->dims().data();
+    const int64_t k = a_dims.back();
+    const int64_t rows = param->a->numel() / k;
+    const int64_t b_k = param->trans_b ? b_dims[1] : b_dims[0];
+    const int64_t channels = param->trans_b ? b_dims[0] : b_dims[1];
+    std::vector<int64_t> expected_output = a_dims;
+    expected_output.back() = channels;
+    if (k <= 0 || rows <= 0 || channels <= 0 || b_k != k || param->out->dims().data() != expected_output) {
+        return -1;
+    }
+
+    int8_detail::QuantizationView input_quantization;
+    int8_detail::QuantizationView weight_quantization;
+    int8_detail::QuantizationView output_quantization;
+    const int64_t weight_axis = param->trans_b ? 0 : 1;
+    if (!int8_detail::BuildInputQuantizationView(param->a, &input_quantization) ||
+        !int8_detail::BuildWeightQuantizationView(param->b, weight_axis, channels, &weight_quantization) ||
+        !int8_detail::BuildOutputQuantizationView(param->out, &output_quantization) ||
+        !int8_detail::ValidateLinearBias(param->bias, rows, channels)) {
+        return -1;
+    }
+
+    const int8_t* lhs = param->a->data<int8_t>();
+    const int8_t* rhs = param->b->data<int8_t>();
+    int8_t* output = param->out->mutable_data<int8_t>();
+    for (int64_t row = 0; row < rows; ++row) {
+        for (int64_t channel = 0; channel < channels; ++channel) {
+            int64_t dot = 0;
+            const int32_t weight_zero_point = weight_quantization.zero_point_for(static_cast<size_t>(channel));
+            for (int64_t index = 0; index < k; ++index) {
+                const int64_t rhs_offset = param->trans_b ? channel * k + index : index * channels + channel;
+                dot += static_cast<int64_t>(static_cast<int32_t>(lhs[row * k + index]) - input_quantization.zero_point) *
+                       (static_cast<int32_t>(rhs[rhs_offset]) - weight_zero_point);
+                if (!int8_detail::FitsInt32(dot)) {
+                    return -1;
+                }
+            }
+            const int32_t bias = int8_detail::ReadLinearBias(param->bias, row, channel, channels);
+            if (!int8_detail::FitsInt32(bias)) {
+                return -1;
+            }
+            const double accumulator = static_cast<double>(param->alpha) * static_cast<double>(dot) +
+                                       static_cast<double>(param->beta) * static_cast<double>(bias);
+            const double scale = static_cast<double>(input_quantization.scale) *
+                                 weight_quantization.scale_for(static_cast<size_t>(channel));
+            if (!int8_detail::QuantizeReal(accumulator * scale, output_quantization,
+                                           &output[row * channels + channel])) {
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
 typedef feather::kernel::GemmKernel<DeviceType::COMMON, DataType::FP32> GemmCommonFP32Kernel;
 REGISTER_KERNEL(COMMON, FP32, Gemm, GemmCommonFP32Kernel);
 
@@ -123,6 +190,9 @@ REGISTER_KERNEL(COMMON, FP16, Gemm, GemmCommonFP16Kernel);
 
 typedef feather::kernel::GemmKernel<DeviceType::COMMON, DataType::BF16> GemmCommonBF16Kernel;
 REGISTER_KERNEL(COMMON, BF16, Gemm, GemmCommonBF16Kernel);
+
+typedef feather::kernel::GemmKernel<DeviceType::COMMON, DataType::INT8> GemmCommonINT8Kernel;
+REGISTER_KERNEL(COMMON, INT8, Gemm, GemmCommonINT8Kernel);
 
 void EnsureCommonGemmKernelsRegistered() { (void)g_gemm_kernels_registered; }
 

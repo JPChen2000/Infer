@@ -18,7 +18,7 @@ bool InferExpandedShape(const std::vector<int64_t>& input_shape, const std::vect
     for (size_t i = 0; i < target_shape.size(); ++i) {
         const int64_t input_dim = i < rank_gap ? 1 : input_shape[i - rank_gap];
         const int64_t target_dim = target_shape[i];
-        if (input_dim <= 0 || target_dim <= 0 ||
+        if (input_dim < 0 || target_dim < 0 ||
             (input_dim != target_dim && input_dim != 1 && target_dim != 1)) {
             return false;
         }
@@ -84,6 +84,18 @@ int32_t ExpandOp::InferOutputShapes() {
     if (!tensor_op_detail::ReadShapeValues(param_.shape, &target_shape) || target_shape.empty()) {
         return -1;
     }
+    if (std::any_of(target_shape.begin(), target_shape.end(), [](int64_t dim) { return dim == 0; })) {
+        const auto output_quantization = param_.out->quantization().enabled
+                                             ? param_.out->quantization()
+                                             : param_.input->quantization();
+        const auto output_layout = param_.out->layout() != DataLayout::ND ? param_.out->layout() : param_.input->layout();
+        param_.out->Resize(target_shape);
+        param_.out->set_data_type(param_.input->data_type());
+        param_.out->set_quantization(output_quantization);
+        param_.out->set_layout(output_layout);
+        SyncIO();
+        return 0;
+    }
     std::vector<int64_t> output_shape;
     if (!InferExpandedShape(param_.input->dims().data(), target_shape, &output_shape)) {
         return -1;
@@ -92,7 +104,7 @@ int32_t ExpandOp::InferOutputShapes() {
     if (param_.out == nullptr) {
         return -1;
     }
-    param_.out->set_layout(param_.input->layout());
+    param_.out->set_layout(param_.out->layout() != DataLayout::ND ? param_.out->layout() : param_.input->layout());
     SyncIO();
     return 0;
 }

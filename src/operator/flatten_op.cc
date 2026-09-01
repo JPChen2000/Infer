@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "core/operator_registry.h"
+#include "src/operator/tensor_op_utils.h"
 #include "util/types.h"
 
 namespace feather {
@@ -84,14 +85,7 @@ int32_t FlattenOp::InferOutputShapes() {
         param_.input->dims().count(0, param_.axis),
         param_.input->dims().count(param_.axis, static_cast<int>(param_.input->dims().size())),
     };
-    const size_t required_bytes =
-        static_cast<size_t>(param_.input->numel()) *
-        DataTypeBytes(ResolveExecutionDataType({param_.input, param_.out}, DataType::FP32));
-    if (param_.out == nullptr || !param_.out->IsInitialized() || param_.out->memory_size() < required_bytes) {
-        param_.out = std::make_shared<Tensor>(out_shape);
-    } else {
-        param_.out->Resize(out_shape);
-    }
+    if (tensor_op_detail::InferSameTypeOutput(param_.input, &param_.out, out_shape) != 0) return -1;
     SyncIO();
     return 0;
 }

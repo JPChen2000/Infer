@@ -6,7 +6,7 @@
 #include <utility>
 
 #include "core/operator_registry.h"
-#include "util/types.h"
+#include "src/operator/elementwise_utils.h"
 
 namespace feather {
 namespace operators {
@@ -84,26 +84,9 @@ void AddOp::SyncIO() {
 int32_t AddOp::CheckShape() const { return CheckBinaryShape(param_) ? 0 : -1; }
 
 int32_t AddOp::InferOutputShapes() {
-    if (CheckShape() != 0) {
-        return -1;
-    }
-
-    std::vector<int64_t> out_shape;
-    if (!InferBroadcastShape(param_.lhs->dims().data(), param_.rhs->dims().data(), &out_shape)) {
-        return -1;
-    }
-    const size_t required_bytes =
-        static_cast<size_t>(std::max<int64_t>(1, std::accumulate(out_shape.begin(), out_shape.end(), int64_t{1},
-                                                                 std::multiplies<int64_t>()))) *
-        DataTypeBytes(ResolveExecutionDataType({param_.lhs, param_.rhs, param_.out}, DataType::FP32));
-    if (param_.out == nullptr || !param_.out->IsInitialized() || param_.out->memory_size() < required_bytes) {
-        param_.out = std::make_shared<Tensor>(out_shape);
-    } else {
-        param_.out->Resize(out_shape);
-    }
-    param_.out->set_layout(param_.lhs->layout() != DataLayout::ND ? param_.lhs->layout() : param_.rhs->layout());
-    SyncIO();
-    return 0;
+    const int32_t status = elementwise_detail::InferBinaryOutput(&param_);
+    if (status == 0) SyncIO();
+    return status;
 }
 
 void AddOp::AttachKernel(std::unique_ptr<KernelBase> kernel) {

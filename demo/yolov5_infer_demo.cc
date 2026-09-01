@@ -4,6 +4,8 @@
 #include <iomanip>
 #include <iostream>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "demo/image_io.h"
@@ -30,6 +32,33 @@ void PrintRuntimeProfile(const feather::demo::Yolov5Runner& runner, size_t limit
         std::cout << "[profile] #" << (i + 1)
                   << " node=" << item.node_name
                   << " op=" << item.op_type
+                  << " calls=" << item.call_count
+                  << " total_ms=" << item.total_ms
+                  << " avg_ms=" << item.avg_ms << '\n';
+    }
+
+    std::unordered_map<std::string, feather::RuntimeProfileSummary> by_op;
+    for (const auto& item : summaries) {
+        auto& aggregate = by_op[item.op_type];
+        aggregate.op_type = item.op_type;
+        aggregate.call_count += item.call_count;
+        aggregate.total_ms += item.total_ms;
+    }
+    std::vector<feather::RuntimeProfileSummary> op_summaries;
+    op_summaries.reserve(by_op.size());
+    for (auto& item : by_op) {
+        item.second.avg_ms = item.second.call_count == 0
+                                 ? 0.0
+                                 : item.second.total_ms / static_cast<double>(item.second.call_count);
+        op_summaries.push_back(std::move(item.second));
+    }
+    std::sort(op_summaries.begin(), op_summaries.end(),
+              [](const feather::RuntimeProfileSummary& lhs, const feather::RuntimeProfileSummary& rhs) {
+                  return lhs.total_ms > rhs.total_ms;
+              });
+    std::cout << "[profile] op_totals=" << op_summaries.size() << '\n';
+    for (const auto& item : op_summaries) {
+        std::cout << "[profile] op=" << item.op_type
                   << " calls=" << item.call_count
                   << " total_ms=" << item.total_ms
                   << " avg_ms=" << item.avg_ms << '\n';

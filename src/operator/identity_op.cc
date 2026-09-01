@@ -3,6 +3,7 @@
 #include <utility>
 
 #include "core/operator_registry.h"
+#include "src/operator/tensor_op_utils.h"
 #include "util/types.h"
 
 namespace feather {
@@ -69,7 +70,7 @@ int32_t IdentityOp::InferOutputShapes() {
     // Identity has view semantics on host backends. CUDA keeps separate host
     // Tensor storage but shares the device allocation in its view kernel.
     const auto device = execution_device_explicit_ ? execution_device_ : ActiveKernelDevice();
-    if (device != DeviceType::CUDA) {
+    if (device != DeviceType::CUDA && param_.input->data_type() != DataType::INT8) {
         param_.out->ShareDataWith(*param_.input);
         param_.out->Resize(param_.input->dims().data());
         param_.out->set_data_type(param_.input->data_type());
@@ -78,16 +79,7 @@ int32_t IdentityOp::InferOutputShapes() {
         return 0;
     }
 
-    const auto& out_shape = param_.input->dims().data();
-    const size_t required_bytes =
-        static_cast<size_t>(param_.input->numel()) *
-        DataTypeBytes(ResolveExecutionDataType({param_.input, param_.out}, DataType::FP32));
-    if (param_.out == nullptr || !param_.out->IsInitialized() || param_.out->memory_size() < required_bytes) {
-        param_.out = std::make_shared<Tensor>(out_shape);
-    } else {
-        param_.out->Resize(out_shape);
-    }
-    param_.out->set_layout(param_.input->layout());
+    if (tensor_op_detail::InferSameTypeOutput(param_.input, &param_.out, param_.input->dims().data()) != 0) return -1;
     SyncIO();
     return 0;
 }

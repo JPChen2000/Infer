@@ -212,6 +212,11 @@ struct CudaStorage<DataType::INT32> {
 };
 
 template <>
+struct CudaStorage<DataType::INT8> {
+    using Type = int8_t;
+};
+
+template <>
 struct CudaStorage<DataType::INT64> {
     using Type = int64_t;
 };

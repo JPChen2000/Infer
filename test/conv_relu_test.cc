@@ -173,6 +173,57 @@ TEST(conv_relu_test, Conv2dRunsFastPathOnNchw3x3) {
     }
 }
 
+TEST(conv_relu_test, Conv2dPreservesInt8OutputMetadataWhenGrowingOutput) {
+    auto input = std::make_shared<Tensor>();
+    input->Assign<int8_t>({1, 2, 3, 4, 5, 6, 7, 8, 9}, {1, 1, 3, 3});
+    input->set_layout(feather::DataLayout::NCHW);
+
+    auto weight = std::make_shared<Tensor>();
+    weight->Assign<int8_t>({1}, {1, 1, 1, 1});
+
+    auto bias = std::make_shared<Tensor>();
+    bias->Assign<int32_t>({0}, {1});
+
+    // Deliberately provide a too-small INT8 buffer so InferOutputShapes must
+    // allocate a replacement instead of merely resizing the existing Tensor.
+    auto output = std::make_shared<Tensor>(std::vector<int64_t>{1, 1, 1, 1});
+    output->set_data_type(feather::DataType::INT8);
+    output->set_layout(feather::DataLayout::NCHW);
+    feather::QuantizationParams quantization;
+    quantization.enabled = true;
+    quantization.scale = 0.25f;
+    quantization.zero_point = -7;
+    output->set_quantization(quantization);
+
+    feather::operators::Conv2dParam param{};
+    param.input = input;
+    param.w = weight;
+    param.bias = bias;
+    param.out = output;
+    param.stride_h = 1;
+    param.stride_w = 1;
+    param.pad_h = 0;
+    param.pad_w = 0;
+    param.dilation_h = 1;
+    param.dilation_w = 1;
+    param.group = 1;
+
+    feather::operators::Conv2dOp op("conv_int8_metadata", param);
+    ASSERT_EQ(op.CheckShape(), 0);
+    ASSERT_EQ(op.InferOutputShapes(), 0);
+
+    // Shape inference must preserve the graph-owned Tensor handle and only
+    // replace its backing storage when the existing allocation is too small.
+    ASSERT_EQ(op.outputs().front(), output);
+    EXPECT_EQ(op.outputs().front()->data_type(), feather::DataType::INT8);
+    EXPECT_EQ(op.outputs().front()->layout(), feather::DataLayout::NCHW);
+    EXPECT_TRUE(op.outputs().front()->quantization().enabled);
+    EXPECT_FLOAT_EQ(op.outputs().front()->quantization().scale, 0.25f);
+    EXPECT_EQ(op.outputs().front()->quantization().zero_point, -7);
+    EXPECT_EQ(op.outputs().front()->dims().data(), std::vector<int64_t>({1, 1, 3, 3}));
+    EXPECT_EQ(op.outputs().front()->memory_size(), 9U);
+}
+
 TEST(conv_relu_test, Conv2dRunsFastPathOnPointwise1x1) {
     auto input = std::make_shared<Tensor>();
     input->Assign<float>({

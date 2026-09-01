@@ -2,6 +2,9 @@
 
 #include <immintrin.h>
 
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstring>
 #include <future>
 #include <vector>
@@ -214,6 +217,111 @@ int32_t ConcatKernel<DeviceType::X86, DataType::BF16>::compute() {
                                       });
 }
 
+template <>
+int32_t ConcatKernel<DeviceType::X86, DataType::INT8>::compute() {
+    AutoTimer timer("X86::Concat::INT8");
+    auto* param = static_cast<feather::operators::ConcatParam*>(param_);
+    if (!AllInputsMatchType<int8_t>(param, DataType::INT8) || param->out == nullptr ||
+        param->out->data_type() != DataType::INT8 || param->inputs.size() < 2) return -1;
+
+    const auto& out_dims = param->out->dims().data();
+    int32_t axis = param->axis < 0 ? param->axis + static_cast<int32_t>(out_dims.size()) : param->axis;
+    if (axis < 0 || axis >= static_cast<int32_t>(out_dims.size())) return -1;
+    const auto& output_quantization = param->out->quantization();
+    if (!output_quantization.enabled || output_quantization.granularity != QuantizationGranularity::kPerTensor ||
+        !std::isfinite(output_quantization.scale_at(0)) || output_quantization.scale_at(0) <= 0.0f) return -1;
+
+    const size_t input_count = param->inputs.size();
+    std::vector<float> input_scales(input_count);
+    std::vector<int32_t> input_zero_points(input_count);
+    std::vector<bool> input_matches_output(input_count, false);
+    bool same_quantization = true;
+    for (size_t input_index = 0; input_index < input_count; ++input_index) {
+        const auto& input = param->inputs[input_index];
+        if (input == nullptr || input->dims().size() != out_dims.size()) return -1;
+        for (size_t dim = 0; dim < out_dims.size(); ++dim) {
+            if (static_cast<int32_t>(dim) != axis && input->dims()[dim] != out_dims[dim]) return -1;
+        }
+        const auto& input_quantization = input->quantization();
+        if (!input_quantization.enabled || input_quantization.granularity != QuantizationGranularity::kPerTensor ||
+            !std::isfinite(input_quantization.scale_at(0)) || input_quantization.scale_at(0) <= 0.0f) return -1;
+        input_scales[input_index] = input_quantization.scale_at(0);
+        input_zero_points[input_index] = input_quantization.zero_point_at(0);
+        input_matches_output[input_index] =
+            input_scales[input_index] == output_quantization.scale_at(0) &&
+            input_zero_points[input_index] == output_quantization.zero_point_at(0);
+        same_quantization = same_quantization && input_matches_output[input_index];
+    }
+    if (same_quantization) {
+        return ComputeConcatRaw<int8_t>(param, DataType::INT8,
+                                         [](const int8_t* src, int8_t* dst, int64_t count) {
+                                             std::memcpy(dst, src, static_cast<size_t>(count));
+                                         });
+    }
+
+    // Concat only changes placement. Precompute one byte-to-byte table per
+    // input so differing calibration scales do not trigger floating-point
+    // division and rounding for every copied element.
+    std::vector<std::array<int32_t, 256>> lookup(input_count);
+    const double output_scale = static_cast<double>(output_quantization.scale_at(0));
+    const int32_t output_zero_point = output_quantization.zero_point_at(0);
+    for (size_t input_index = 0; input_index < input_count; ++input_index) {
+        for (int32_t value = -128; value <= 127; ++value) {
+            const double transformed =
+                (static_cast<double>(value - input_zero_points[input_index]) *
+                 static_cast<double>(input_scales[input_index])) /
+                    output_scale + static_cast<double>(output_zero_point);
+            if (!std::isfinite(transformed)) return -1;
+            const double rounded = std::round(transformed);
+            lookup[input_index][static_cast<size_t>(value + 128)] =
+                static_cast<int32_t>(std::max(-128.0, std::min(127.0, rounded)));
+        }
+    }
+
+    const int64_t outer = ComputeProduct(out_dims, 0, static_cast<size_t>(axis));
+    const int64_t inner = ComputeProduct(out_dims, static_cast<size_t>(axis) + 1, out_dims.size());
+    const int64_t output_axis = out_dims[static_cast<size_t>(axis)];
+    int8_t* output = param->out->mutable_data<int8_t>();
+    param->out->set_data_type(DataType::INT8);
+    ParallelForConcat(outer, outer * output_axis * inner, [&](int64_t begin, int64_t end) {
+        for (int64_t outer_index = begin; outer_index < end; ++outer_index) {
+            int64_t axis_offset = 0;
+            for (size_t input_index = 0; input_index < input_count; ++input_index) {
+                const auto& input = param->inputs[input_index];
+                const int64_t input_axis = input->dims()[static_cast<size_t>(axis)];
+                const int64_t count = input_axis * inner;
+                const int64_t input_base = outer_index * count;
+                const int64_t output_base = (outer_index * output_axis + axis_offset) * inner;
+                const int8_t* input_data = input->data<int8_t>();
+                if (input_matches_output[input_index]) {
+                    std::memcpy(output + output_base, input_data + input_base, static_cast<size_t>(count));
+                } else {
+                    const auto& input_lookup = lookup[input_index];
+                    int64_t index = 0;
+                    for (; index + 8 <= count; index += 8) {
+                        const __m128i input_bytes = _mm_loadl_epi64(
+                            reinterpret_cast<const __m128i*>(input_data + input_base + index));
+                        const __m256i indices = _mm256_add_epi32(
+                            _mm256_cvtepi8_epi32(input_bytes), _mm256_set1_epi32(128));
+                        const __m256i gathered = _mm256_i32gather_epi32(input_lookup.data(), indices, 4);
+                        const __m128i low = _mm256_castsi256_si128(gathered);
+                        const __m128i high = _mm256_extracti128_si256(gathered, 1);
+                        const __m128i packed16 = _mm_packs_epi32(low, high);
+                        const __m128i packed8 = _mm_packs_epi16(packed16, packed16);
+                        _mm_storel_epi64(reinterpret_cast<__m128i*>(output + output_base + index), packed8);
+                    }
+                    for (; index < count; ++index) {
+                        output[output_base + index] = input_lookup[static_cast<size_t>(
+                            static_cast<int32_t>(input_data[input_base + index]) + 128)];
+                    }
+                }
+                axis_offset += input_axis;
+            }
+        }
+    });
+    return 0;
+}
+
 void EnsureX86ConcatKernelsRegistered() {
     static bool registered = []() {
         KernelDispatcher::instance().registerKernel(
@@ -225,6 +333,9 @@ void EnsureX86ConcatKernelsRegistered() {
         KernelDispatcher::instance().registerKernel(
             DeviceType::X86, DataType::BF16, "Concat",
             []() { return std::make_unique<ConcatKernel<DeviceType::X86, DataType::BF16>>(); });
+        KernelDispatcher::instance().registerKernel(
+            DeviceType::X86, DataType::INT8, "Concat",
+            []() { return std::make_unique<ConcatKernel<DeviceType::X86, DataType::INT8>>(); });
         return true;
     }();
     (void)registered;

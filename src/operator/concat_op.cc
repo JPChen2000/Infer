@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "core/operator_registry.h"
+#include "src/operator/tensor_op_utils.h"
 #include "util/types.h"
 
 namespace feather {
@@ -124,16 +125,8 @@ int32_t ConcatOp::InferOutputShapes() {
     }
 
     const auto out_shape = InferConcatOutputShape(param_);
-    const size_t required_bytes =
-        static_cast<size_t>(ComputeNumel(out_shape)) *
-        DataTypeBytes(ResolveExecutionDataType(param_.inputs, DataType::FP32));
-    if (param_.out == nullptr || !param_.out->IsInitialized() || param_.out->memory_size() < required_bytes) {
-        param_.out = std::make_shared<Tensor>(required_bytes);
-        param_.out->Resize(out_shape);
-    } else {
-        param_.out->Resize(out_shape);
-    }
-    param_.out->set_data_type(ResolveExecutionDataType(param_.inputs, DataType::FP32));
+    if (param_.inputs.empty() || param_.inputs.front() == nullptr) return -1;
+    if (tensor_op_detail::InferSameTypeOutput(param_.inputs.front(), &param_.out, out_shape) != 0) return -1;
     param_.out->set_layout(param_.inputs.empty() || param_.inputs[0] == nullptr ? DataLayout::ND : param_.inputs[0]->layout());
     SyncIO();
     return 0;

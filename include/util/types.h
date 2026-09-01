@@ -43,6 +43,31 @@ struct QuantizationParams {
     QuantizationGranularity granularity{QuantizationGranularity::kPerTensor};
     int64_t axis{-1};
     int64_t block_size{0};
+    // Keep the original five aggregate-initializer fields above stable for
+    // existing FP8 callers. INT8 extends the metadata after that boundary.
+    int32_t zero_point{0};
+    std::vector<float> scales{};
+    std::vector<int32_t> zero_points{};
+
+    float scale_at(size_t index = 0) const {
+        if (!enabled) {
+            return 1.0f;
+        }
+        if (scales.empty() || scales.size() == 1) {
+            return scales.empty() ? scale : scales.front();
+        }
+        return scales.at(index);
+    }
+
+    int32_t zero_point_at(size_t index = 0) const {
+        if (!enabled) {
+            return 0;
+        }
+        if (zero_points.empty() || zero_points.size() == 1) {
+            return zero_points.empty() ? zero_point : zero_points.front();
+        }
+        return zero_points.at(index);
+    }
 };
 
 // FP8 kernels consume one scalar scale for an entire tensor. Disabled

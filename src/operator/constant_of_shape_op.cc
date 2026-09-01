@@ -40,7 +40,7 @@ std::shared_ptr<OpBase> BuildConstantOfShapeOp(const model::NodeDesc& node, Oper
         return nullptr;
     }
     kernel::EnsureConstantOfShapeKernelsRegistered();
-    auto kernel = CreateKernelForTensor(DeviceType::COMMON, "ConstantOfShape", {param.out}, param.output_type);
+    auto kernel = CreateKernelForTensor(context.device, "ConstantOfShape", {param.out}, param.output_type);
     if (kernel == nullptr) {
         return nullptr;
     }

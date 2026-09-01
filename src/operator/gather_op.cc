@@ -55,7 +55,8 @@ void GatherOp::SyncIO() {
 
 int32_t GatherOp::CheckShape() const {
     if (param_.data == nullptr || param_.indices == nullptr || param_.out == nullptr ||
-        !tensor_op_detail::IsFloatingPointDataType(param_.data->data_type()) ||
+        !(tensor_op_detail::IsFloatingPointDataType(param_.data->data_type()) ||
+          param_.data->data_type() == DataType::INT8) ||
         (param_.indices->data_type() != DataType::INT32 && param_.indices->data_type() != DataType::INT64)) {
         return -1;
     }
@@ -83,7 +84,7 @@ int32_t GatherOp::InferOutputShapes() {
     if (param_.out == nullptr) {
         return -1;
     }
-    param_.out->set_layout(param_.data->layout());
+    param_.out->set_layout(param_.out->layout() != DataLayout::ND ? param_.out->layout() : param_.data->layout());
     SyncIO();
     return 0;
 }

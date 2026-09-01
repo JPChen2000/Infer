@@ -540,6 +540,10 @@ TEST(qwen_gemm_argmax_test, QwenPassFusesFp8GemmCastIntoArgmax) {
 
 #ifdef FEATHER_WITH_CUDA
 TEST(qwen_gemm_argmax_test, QwenPassKeepsCudaFp8LinearAsGenericOps) {
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
     feather::model::ModelDesc model;
     model.name = "qwen_cuda_cast_matmul_fixture";
     model.graph.name = "decode";

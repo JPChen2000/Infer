@@ -73,7 +73,11 @@ std::shared_ptr<OpBase> BuildCastOp(const model::NodeDesc& node, OperatorRegistr
         context.device == DeviceType::CUDA && param.input != nullptr &&
         (param.input->data_type() == DataType::INT32 || param.input->data_type() == DataType::INT64) &&
         tensor_op_detail::IsFloatingPointDataType(param.to);
-    if (floating_cast || cuda_integer_to_float) {
+    if (param.input != nullptr && param.input->data_type() == DataType::INT8) {
+        kernel = CreateKernelForTensor(context.device, "Cast", {param.input}, DataType::INT8);
+    } else if (floating_cast) {
+        kernel = CreateKernelForTensor(context.device, "Cast", {param.input}, param.input->data_type());
+    } else if (cuda_integer_to_float) {
         kernel = CreateKernelForTensor(context.device, "Cast", {param.input}, DataType::FP32);
     } else {
         kernel = CreateKernelForTensor(DeviceType::COMMON, "Cast", {}, DataType::FP32);
@@ -112,13 +116,18 @@ int32_t CastOp::InferOutputShapes() {
         return -1;
     }
     const auto out_shape = param_.input->dims().data();
+    const auto output_quantization = param_.out->quantization();
+    const auto output_layout = param_.out->layout();
     const size_t required_bytes = static_cast<size_t>(param_.input->numel()) * DataTypeBytes(param_.to);
-    if (!param_.out->IsInitialized() || param_.out->memory_size() < required_bytes) {
+    if (param_.out == nullptr) {
         param_.out = std::make_shared<Tensor>(required_bytes);
+    } else if (!param_.out->IsInitialized() || param_.out->memory_size() < required_bytes) {
+        param_.out->ResetBuffer(std::make_shared<Buffer>(required_bytes), required_bytes);
     }
     param_.out->Resize(out_shape);
     param_.out->set_data_type(param_.to);
-    param_.out->set_layout(param_.input->layout());
+    param_.out->set_quantization(output_quantization);
+    param_.out->set_layout(output_layout != DataLayout::ND ? output_layout : param_.input->layout());
     SyncIO();
     return 0;
 }

@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "core/operator_registry.h"
+#include "src/operator/tensor_op_utils.h"
 #include "util/types.h"
 
 namespace feather {
@@ -71,16 +72,7 @@ int32_t GlobalAveragePoolOp::InferOutputShapes() {
         return -1;
     }
     const std::vector<int64_t> out_shape = {param_.input->dims()[0], param_.input->dims()[1], 1, 1};
-    const int64_t out_numel = out_shape[0] * out_shape[1] * out_shape[2] * out_shape[3];
-    const size_t required_bytes =
-        static_cast<size_t>(out_numel) *
-        DataTypeBytes(ResolveExecutionDataType({param_.input, param_.out}, DataType::FP32));
-    if (param_.out == nullptr || !param_.out->IsInitialized() || param_.out->memory_size() < required_bytes) {
-        param_.out = std::make_shared<Tensor>(out_shape);
-    } else {
-        param_.out->Resize(out_shape);
-    }
-    param_.out->set_layout(param_.input->layout());
+    if (tensor_op_detail::InferSameTypeOutput(param_.input, &param_.out, out_shape) != 0) return -1;
     SyncIO();
     return 0;
 }

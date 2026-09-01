@@ -75,7 +75,7 @@ int32_t WhereOp::InferOutputShapes() {
     if (param_.out == nullptr) {
         return -1;
     }
-    param_.out->set_layout(param_.x->layout());
+    param_.out->set_layout(param_.out->layout() != DataLayout::ND ? param_.out->layout() : param_.x->layout());
     SyncIO();
     return 0;
 }

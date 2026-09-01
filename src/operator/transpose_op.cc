@@ -3,6 +3,7 @@
 #include <utility>
 
 #include "core/operator_registry.h"
+#include "src/operator/tensor_op_utils.h"
 #include "util/types.h"
 
 namespace feather {
@@ -128,7 +129,7 @@ int32_t TransposeOp::InferOutputShapes() {
     }
 
     const auto device = execution_device_explicit_ ? execution_device_ : ActiveKernelDevice();
-    if (device != DeviceType::CUDA &&
+    if (device != DeviceType::CUDA && param_.input->data_type() != DataType::INT8 &&
         IsContiguousViewPermutation(param_.input->dims().data(), param_.perm)) {
         param_.out->ShareDataWith(*param_.input);
         param_.out->Resize(out_shape);
@@ -138,14 +139,7 @@ int32_t TransposeOp::InferOutputShapes() {
         return 0;
     }
 
-    const size_t required_bytes =
-        static_cast<size_t>(param_.input->numel()) *
-        DataTypeBytes(ResolveExecutionDataType({param_.input, param_.out}, DataType::FP32));
-    if (param_.out == nullptr || !param_.out->IsInitialized() || param_.out->memory_size() < required_bytes) {
-        param_.out = std::make_shared<Tensor>(out_shape);
-    } else {
-        param_.out->Resize(out_shape);
-    }
+    if (tensor_op_detail::InferSameTypeOutput(param_.input, &param_.out, out_shape) != 0) return -1;
     SyncIO();
     return 0;
 }

@@ -4,6 +4,7 @@
 
 #include "core/operator_registry.h"
 #include "src/operator/elementwise_utils.h"
+#include "src/operator/elementwise_utils.h"
 
 namespace feather {
 namespace operators {

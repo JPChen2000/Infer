@@ -56,7 +56,8 @@ void ReduceSumOp::SyncIO() { SetInputs({param_.input}); SetOutputs({param_.out})
 
 int32_t ReduceSumOp::CheckShape() const {
     if (param_.input == nullptr || param_.out == nullptr ||
-        !tensor_op_detail::IsFloatingPointDataType(param_.input->data_type())) {
+        !(tensor_op_detail::IsFloatingPointDataType(param_.input->data_type()) ||
+          param_.input->data_type() == DataType::INT8)) {
         return -1;
     }
     const auto axes = ResolveAxes(param_);

@@ -99,6 +99,12 @@ class KernelDispatcher {
                 return kernel;
             }
         }
+        // An INT8 CUDA request must be backed by an explicitly registered CUDA
+        // implementation.  Do not silently execute it through the Common
+        // backend, because that hides incomplete CUDA coverage.
+        if (dev == DeviceType::CUDA && dtype == DataType::INT8) {
+            return nullptr;
+        }
         if (dev != DeviceType::COMMON) {
             if (auto kernel = createExact(DeviceType::COMMON, dtype, layout, op_type); kernel != nullptr) {
                 kernel->SetMetadata(DeviceType::COMMON, dtype, layout, op_type);

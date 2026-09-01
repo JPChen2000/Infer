@@ -3,6 +3,7 @@
 #include <utility>
 
 #include "core/operator_registry.h"
+#include "src/operator/elementwise_utils.h"
 #include "src/operator/control_tensor.h"
 #include "util/types.h"
 
@@ -93,20 +94,13 @@ int32_t PowOp::CheckShape() const {
 }
 
 int32_t PowOp::InferOutputShapes() {
-    if (CheckShape() != 0) {
-        return -1;
-    }
-    const auto& out_shape = param_.input->dims().data();
-    const size_t required_bytes =
-        static_cast<size_t>(param_.input->numel()) *
-        DataTypeBytes(ResolveExecutionDataType({param_.input, param_.out}, DataType::FP32));
-    if (param_.out == nullptr || !param_.out->IsInitialized() || param_.out->memory_size() < required_bytes) {
-        param_.out = std::make_shared<Tensor>(out_shape);
-    } else {
-        param_.out->Resize(out_shape);
-    }
-    SyncIO();
-    return 0;
+    UnaryParam unary;
+    unary.input = param_.input;
+    unary.out = param_.out;
+    const int32_t status = elementwise_detail::InferUnaryOutput(&unary);
+    param_.out = unary.out;
+    if (status == 0) SyncIO();
+    return status;
 }
 
 void PowOp::AttachKernel(std::unique_ptr<KernelBase> kernel) {

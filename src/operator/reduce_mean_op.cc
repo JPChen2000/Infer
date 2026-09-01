@@ -57,7 +57,8 @@ void ReduceMeanOp::SyncIO() {
 
 int32_t ReduceMeanOp::CheckShape() const {
     return param_.input != nullptr && param_.out != nullptr &&
-                   tensor_op_detail::IsFloatingPointDataType(param_.input->data_type())
+                   (tensor_op_detail::IsFloatingPointDataType(param_.input->data_type()) ||
+                    param_.input->data_type() == DataType::INT8)
                ? 0
                : -1;
 }

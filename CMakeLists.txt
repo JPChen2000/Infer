@@ -128,6 +128,7 @@ list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 set(SRC "src/core/memory.cc"
     "src/core/dim.cc"
     "src/core/tensor.cc"
+    "src/quant/static_quantizer.cc"
     "src/core/graph.cc"
     "src/core/graph_lowering.cc"
     "src/core/operator_registry.cc"
@@ -184,6 +185,8 @@ set(SRC "src/core/memory.cc"
     "src/operator/unsqueeze_op.cc"
     "src/operator/squeeze_op.cc"
     "src/operator/cast_op.cc"
+    "src/operator/quantize_linear_op.cc"
+    "src/operator/dequantize_linear_op.cc"
     "src/operator/reduce_mean_op.cc"
     "src/operator/reduce_sum_op.cc"
     "src/operator/gather_op.cc"
@@ -232,6 +235,10 @@ set(SRC "src/core/memory.cc"
     "src/kernel/common/unsqueeze.cc"
     "src/kernel/common/squeeze.cc"
     "src/kernel/common/cast.cc"
+    "src/kernel/common/quantize_linear.cc"
+    "src/kernel/common/dequantize_linear.cc"
+    "src/kernel/common/int8_standard.cc"
+    src/kernel/common/int8_fused.cc
     "src/kernel/common/reduce_mean.cc"
     "src/kernel/common/reduce_sum.cc"
     "src/kernel/common/gather.cc"
@@ -261,6 +268,7 @@ set(SRC "src/core/memory.cc"
     "src/kernel/x86/direct_conv_fp32.cc"
     "src/kernel/x86/expand.cc"
     "src/kernel/x86/fc.cc"
+    "src/kernel/x86/int8.cc"
     "src/kernel/x86/flatten.cc"
     "src/kernel/x86/gemm.cc"
     "src/kernel/x86/identity.cc"
@@ -292,6 +300,7 @@ set(SRC "src/core/memory.cc"
     "src/kernel/x86/qwen_depthwise_conv.cc"
     "src/kernel/x86/qwen_rms_norm.cc"
     "src/kernel/x86/yolo_decode.cc"
+    src/kernel/x86/int8_fused.cc
     "src/kernel/x86/fp8.cc"
     "src/demo/classification_demo.cc"
     "src/demo/classification_runner.cc"
@@ -316,6 +325,9 @@ set(CUDA_SRC
     "src/kernel/cuda/concat.cu"
     "src/kernel/cuda/conv2d.cu"
     "src/kernel/cuda/fc.cu"
+    "src/kernel/cuda/int8.cu"
+    "src/kernel/cuda/int8_standard.cu"
+    src/kernel/cuda/int8_fused.cu
     "src/kernel/cuda/flatten.cu"
     "src/kernel/cuda/gemm.cu"
     "src/kernel/cuda/global_average_pool.cu"
@@ -429,11 +441,23 @@ add_executable(resnet_demo demo/resnet_infer_demo.cc)
 add_executable(resent_demo demo/resent_infer_demo.cc)
 add_executable(repvgg_demo demo/repvgg_infer_demo.cc)
 add_executable(vit_demo demo/vit_infer_demo.cc)
-add_executable(qwen_demo demo/qwen_infer_demo.cc)
+add_executable(qwen_demo demo/qwen_infer_demo.cc src/demo/qwen_demo.cc)
 add_executable(fth_layout_convert demo/fth_layout_convert_demo.cc)
 add_executable(x86_conv_benchmark_demo demo/x86_conv_benchmark_demo.cc)
 add_executable(x86_linear_benchmark_demo demo/x86_linear_benchmark_demo.cc)
 add_executable(x86_softmax_benchmark_demo demo/x86_softmax_benchmark_demo.cc)
+add_executable(int8_quantize tools/int8_quantize.cc)
+target_include_directories(int8_quantize PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(int8_quantize infer)
+add_executable(int8_calibrate tools/int8_calibrate.cc)
+target_include_directories(int8_calibrate PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(int8_calibrate infer)
+add_executable(int8_compare tools/int8_compare.cc)
+target_include_directories(int8_compare PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(int8_compare infer)
+add_executable(int8_trace tools/int8_trace.cc)
+target_include_directories(int8_trace PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(int8_trace infer)
 if (FEATHER_DEBUG)
     target_compile_definitions(infer_core PUBLIC FEATHER_DEBUG)
     target_compile_definitions(infer_backend PUBLIC FEATHER_DEBUG)
@@ -481,8 +505,13 @@ set_source_files_properties(
     src/kernel/x86/qwen_depthwise_conv.cc
     src/kernel/x86/qwen_rms_norm.cc
     src/kernel/x86/yolo_decode.cc
-    src/kernel/x86/fp8.cc
-    PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-mf16c")
+   src/kernel/x86/fp8.cc
+   PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-mf16c")
+
+# The INT8 X86 convolution has an AVX2 microkernel. Keep the ISA requirement
+# local to this source so the rest of the backend retains its existing build
+# portability and runtime dispatch behavior.
+set_source_files_properties(src/kernel/x86/int8.cc PROPERTIES COMPILE_OPTIONS "-mavx2")
 target_include_directories(yolov5_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(yolov5_demo infer)

@@ -188,6 +188,15 @@ class Conv2DKernel : public KernelBase {
     std::vector<float> cached_direct_bias_oc8_buffer_;
     std::vector<float> cached_winograd_weight_oc8_buffer_;
     std::vector<float> cached_winograd_weight_buffer_;
+    const Tensor* cached_int8_weight_tensor_{nullptr};
+    std::vector<int8_t> cached_int8_weight_oc8_buffer_;
+    const Tensor* cached_int8_maddubs_weight_tensor_{nullptr};
+    std::vector<int8_t> cached_int8_maddubs_weight_buffer_;
+    const Tensor* cached_int8_pointwise_maddubs_weight_tensor_{nullptr};
+    std::vector<int8_t> cached_int8_pointwise_maddubs_weight_buffer_;
+    const Tensor* cached_int8_vnni_weight_tensor_{nullptr};
+    std::vector<int8_t> cached_int8_weight_vnni_buffer_;
+    std::vector<int32_t> cached_int8_weight_vnni_sums_;
 };
 }  // namespace kernel
 }  // namespace feather
