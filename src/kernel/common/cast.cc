@@ -114,19 +114,19 @@ int32_t ComputeCast(feather::operators::CastParam* param) {
 template <>
 int32_t CastKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Cast::FP32");
-    return ComputeCast(static_cast<feather::operators::CastParam*>(param_));
+    return ComputeCast(ParamAs<feather::operators::CastParam>());
 }
 
 template <>
 int32_t CastKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Cast::FP16");
-    return ComputeCast(static_cast<feather::operators::CastParam*>(param_));
+    return ComputeCast(ParamAs<feather::operators::CastParam>());
 }
 
 template <>
 int32_t CastKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Cast::BF16");
-    return ComputeCast(static_cast<feather::operators::CastParam*>(param_));
+    return ComputeCast(ParamAs<feather::operators::CastParam>());
 }
 
 template <DataType dtype>
@@ -138,13 +138,13 @@ int32_t ComputeFp8Cast(feather::operators::CastParam* param) {
 template <>
 int32_t CastKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() {
     AutoTimer timer("Common::Cast::FP8E4M3");
-    return ComputeFp8Cast<DataType::FP8E4M3>(static_cast<feather::operators::CastParam*>(param_));
+    return ComputeFp8Cast<DataType::FP8E4M3>(ParamAs<feather::operators::CastParam>());
 }
 
 template <>
 int32_t CastKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() {
     AutoTimer timer("Common::Cast::FP8E5M2");
-    return ComputeFp8Cast<DataType::FP8E5M2>(static_cast<feather::operators::CastParam*>(param_));
+    return ComputeFp8Cast<DataType::FP8E5M2>(ParamAs<feather::operators::CastParam>());
 }
 
 void EnsureCommonCastKernelsRegistered() { (void)g_common_cast_kernels_registered; }

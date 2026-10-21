@@ -187,7 +187,7 @@ int32_t ComputeConcatRaw(feather::operators::ConcatParam* param, DataType dtype,
 template <>
 int32_t ConcatKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::Concat::FP32");
-    auto* param = static_cast<feather::operators::ConcatParam*>(param_);
+    auto* param = ParamAs<feather::operators::ConcatParam>();
     if (!AllInputsMatchType<float>(param, DataType::FP32)) {
         return ComputeConcatFallback<DataType::FP32>(param);
     }
@@ -197,7 +197,7 @@ int32_t ConcatKernel<DeviceType::X86, DataType::FP32>::compute() {
 template <>
 int32_t ConcatKernel<DeviceType::X86, DataType::FP16>::compute() {
     AutoTimer timer("X86::Concat::FP16");
-    auto* param = static_cast<feather::operators::ConcatParam*>(param_);
+    auto* param = ParamAs<feather::operators::ConcatParam>();
     if (!AllInputsMatchType<uint16_t>(param, DataType::FP16)) {
         return ComputeConcatFallback<DataType::FP16>(param);
     }
@@ -207,7 +207,7 @@ int32_t ConcatKernel<DeviceType::X86, DataType::FP16>::compute() {
 template <>
 int32_t ConcatKernel<DeviceType::X86, DataType::BF16>::compute() {
     AutoTimer timer("X86::Concat::BF16");
-    auto* param = static_cast<feather::operators::ConcatParam*>(param_);
+    auto* param = ParamAs<feather::operators::ConcatParam>();
     if (!AllInputsMatchType<BFloat16>(param, DataType::BF16)) {
         return ComputeConcatFallback<DataType::BF16>(param);
     }
@@ -220,7 +220,7 @@ int32_t ConcatKernel<DeviceType::X86, DataType::BF16>::compute() {
 template <>
 int32_t ConcatKernel<DeviceType::X86, DataType::INT8>::compute() {
     AutoTimer timer("X86::Concat::INT8");
-    auto* param = static_cast<feather::operators::ConcatParam*>(param_);
+    auto* param = ParamAs<feather::operators::ConcatParam>();
     if (!AllInputsMatchType<int8_t>(param, DataType::INT8) || param->out == nullptr ||
         param->out->data_type() != DataType::INT8 || param->inputs.size() < 2) return -1;
 
@@ -322,24 +322,7 @@ int32_t ConcatKernel<DeviceType::X86, DataType::INT8>::compute() {
     return 0;
 }
 
-void EnsureX86ConcatKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "Concat",
-            []() { return std::make_unique<ConcatKernel<DeviceType::X86, DataType::FP32>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP16, "Concat",
-            []() { return std::make_unique<ConcatKernel<DeviceType::X86, DataType::FP16>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::BF16, "Concat",
-            []() { return std::make_unique<ConcatKernel<DeviceType::X86, DataType::BF16>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::INT8, "Concat",
-            []() { return std::make_unique<ConcatKernel<DeviceType::X86, DataType::INT8>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

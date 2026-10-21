@@ -96,21 +96,21 @@ int32_t ComputeAddKernel(feather::operators::BinaryParam* param) {
 template <>
 int32_t AddKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Add::FP32");
-    auto* param = static_cast<feather::operators::BinaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::BinaryParam>();
     return ComputeAddKernel<DataType::FP32>(param);
 }
 
 template <>
 int32_t AddKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Add::FP16");
-    auto* param = static_cast<feather::operators::BinaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::BinaryParam>();
     return ComputeAddKernel<DataType::FP16>(param);
 }
 
 template <>
 int32_t AddKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Add::BF16");
-    auto* param = static_cast<feather::operators::BinaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::BinaryParam>();
     return ComputeAddKernel<DataType::BF16>(param);
 }
 
@@ -122,13 +122,13 @@ int32_t ComputeAddFp8(feather::operators::BinaryParam* param) {
 template <>
 int32_t AddKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() {
     AutoTimer timer("Common::Add::FP8E4M3");
-    return ComputeAddFp8<DataType::FP8E4M3>(static_cast<feather::operators::BinaryParam*>(param_));
+    return ComputeAddFp8<DataType::FP8E4M3>(ParamAs<feather::operators::BinaryParam>());
 }
 
 template <>
 int32_t AddKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() {
     AutoTimer timer("Common::Add::FP8E5M2");
-    return ComputeAddFp8<DataType::FP8E5M2>(static_cast<feather::operators::BinaryParam*>(param_));
+    return ComputeAddFp8<DataType::FP8E5M2>(ParamAs<feather::operators::BinaryParam>());
 }
 
 typedef feather::kernel::AddKernel<DeviceType::COMMON, DataType::FP32> AddCommonFP32Kernel;

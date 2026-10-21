@@ -92,19 +92,19 @@ int32_t ComputeReduceMean(feather::operators::ReduceMeanParam* param) {
 template <>
 int32_t ReduceMeanKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::ReduceMean::FP32");
-    return ComputeReduceMean<DataType::FP32>(static_cast<feather::operators::ReduceMeanParam*>(param_));
+    return ComputeReduceMean<DataType::FP32>(ParamAs<feather::operators::ReduceMeanParam>());
 }
 
 template <>
 int32_t ReduceMeanKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::ReduceMean::FP16");
-    return ComputeReduceMean<DataType::FP16>(static_cast<feather::operators::ReduceMeanParam*>(param_));
+    return ComputeReduceMean<DataType::FP16>(ParamAs<feather::operators::ReduceMeanParam>());
 }
 
 template <>
 int32_t ReduceMeanKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::ReduceMean::BF16");
-    return ComputeReduceMean<DataType::BF16>(static_cast<feather::operators::ReduceMeanParam*>(param_));
+    return ComputeReduceMean<DataType::BF16>(ParamAs<feather::operators::ReduceMeanParam>());
 }
 
 void EnsureCommonReduceMeanKernelsRegistered() { (void)g_common_reduce_mean_kernels_registered; }

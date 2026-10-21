@@ -73,7 +73,7 @@ int32_t PrepareFp8(operators::QwenGemmArgmaxParam* param, x86::PackedFp8Transpos
 }  // namespace
 
 int32_t QwenGemmArgmaxKernel<DeviceType::X86, DataType::BF16>::Prepare() {
-    auto* param = static_cast<operators::QwenGemmArgmaxParam*>(param_);
+    auto* param = ParamAs<operators::QwenGemmArgmaxParam>();
     int64_t k = 0;
     int64_t n = 0;
     if (!Validate<DataType::BF16>(param, &k, &n) || !param->b->is_immutable()) {
@@ -86,7 +86,7 @@ int32_t QwenGemmArgmaxKernel<DeviceType::X86, DataType::BF16>::Prepare() {
 
 int32_t QwenGemmArgmaxKernel<DeviceType::X86, DataType::BF16>::compute() {
     AutoTimer timer("X86::QwenGemmArgmax::BF16");
-    auto* param = static_cast<operators::QwenGemmArgmaxParam*>(param_);
+    auto* param = ParamAs<operators::QwenGemmArgmaxParam>();
     int64_t k = 0;
     int64_t n = 0;
     if (!Validate<DataType::BF16>(param, &k, &n)) {
@@ -124,39 +124,25 @@ int32_t QwenGemmArgmaxKernel<DeviceType::X86, DataType::BF16>::compute() {
     return 0;
 }
 
-void EnsureX86QwenGemmArgmaxKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(DeviceType::X86, DataType::BF16, "QwenGemmArgmax", []() {
-            return std::make_unique<QwenGemmArgmaxKernel<DeviceType::X86, DataType::BF16>>();
-        });
-        KernelDispatcher::instance().registerKernel(DeviceType::X86, DataType::FP8E4M3, "QwenGemmArgmax", []() {
-            return std::make_unique<QwenGemmArgmaxKernel<DeviceType::X86, DataType::FP8E4M3>>();
-        });
-        KernelDispatcher::instance().registerKernel(DeviceType::X86, DataType::FP8E5M2, "QwenGemmArgmax", []() {
-            return std::make_unique<QwenGemmArgmaxKernel<DeviceType::X86, DataType::FP8E5M2>>();
-        });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 int32_t QwenGemmArgmaxKernel<DeviceType::X86, DataType::FP8E4M3>::Prepare() {
-    return PrepareFp8<DataType::FP8E4M3>(static_cast<operators::QwenGemmArgmaxParam*>(param_), &packed_rhs_);
+    return PrepareFp8<DataType::FP8E4M3>(ParamAs<operators::QwenGemmArgmaxParam>(), &packed_rhs_);
 }
 
 int32_t QwenGemmArgmaxKernel<DeviceType::X86, DataType::FP8E4M3>::compute() {
     AutoTimer timer("X86::QwenGemmArgmax::FP8E4M3");
-    return ComputeFp8<DataType::FP8E4M3>(static_cast<operators::QwenGemmArgmaxParam*>(param_), &packed_rhs_,
+    return ComputeFp8<DataType::FP8E4M3>(ParamAs<operators::QwenGemmArgmaxParam>(), &packed_rhs_,
                                          &workspace_);
 }
 
 int32_t QwenGemmArgmaxKernel<DeviceType::X86, DataType::FP8E5M2>::Prepare() {
-    return PrepareFp8<DataType::FP8E5M2>(static_cast<operators::QwenGemmArgmaxParam*>(param_), &packed_rhs_);
+    return PrepareFp8<DataType::FP8E5M2>(ParamAs<operators::QwenGemmArgmaxParam>(), &packed_rhs_);
 }
 
 int32_t QwenGemmArgmaxKernel<DeviceType::X86, DataType::FP8E5M2>::compute() {
     AutoTimer timer("X86::QwenGemmArgmax::FP8E5M2");
-    return ComputeFp8<DataType::FP8E5M2>(static_cast<operators::QwenGemmArgmaxParam*>(param_), &packed_rhs_,
+    return ComputeFp8<DataType::FP8E5M2>(ParamAs<operators::QwenGemmArgmaxParam>(), &packed_rhs_,
                                          &workspace_);
 }
 

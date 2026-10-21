@@ -73,19 +73,19 @@ int32_t ComputeSplitKernel(feather::operators::SplitParam* param) {
 template <>
 int32_t SplitKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Split::FP32");
-    return ComputeSplitKernel<DataType::FP32>(static_cast<feather::operators::SplitParam*>(param_));
+    return ComputeSplitKernel<DataType::FP32>(ParamAs<feather::operators::SplitParam>());
 }
 
 template <>
 int32_t SplitKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Split::FP16");
-    return ComputeSplitKernel<DataType::FP16>(static_cast<feather::operators::SplitParam*>(param_));
+    return ComputeSplitKernel<DataType::FP16>(ParamAs<feather::operators::SplitParam>());
 }
 
 template <>
 int32_t SplitKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Split::BF16");
-    return ComputeSplitKernel<DataType::BF16>(static_cast<feather::operators::SplitParam*>(param_));
+    return ComputeSplitKernel<DataType::BF16>(ParamAs<feather::operators::SplitParam>());
 }
 
 typedef feather::kernel::SplitKernel<DeviceType::COMMON, DataType::FP32> SplitCommonFP32Kernel;

@@ -150,13 +150,13 @@ bool g_cuda_qwen_rms_norm_kernels_registered = []() {
 template <>
 int32_t QwenRmsNormKernel<DeviceType::CUDA, DataType::FP32>::compute() {
     AutoTimer timer("CUDA::QwenRmsNorm::FP32");
-    return RunQwenRmsNorm(static_cast<operators::QwenRmsNormParam*>(param_));
+    return RunQwenRmsNorm(ParamAs<operators::QwenRmsNormParam>());
 }
 
 template <>
 int32_t QwenRmsNormKernel<DeviceType::CUDA, DataType::BF16>::compute() {
     AutoTimer timer("CUDA::QwenRmsNorm::BF16");
-    return RunQwenRmsNorm(static_cast<operators::QwenRmsNormParam*>(param_));
+    return RunQwenRmsNorm(ParamAs<operators::QwenRmsNormParam>());
 }
 
 void EnsureCudaQwenRmsNormKernelsRegistered() { (void)g_cuda_qwen_rms_norm_kernels_registered; }

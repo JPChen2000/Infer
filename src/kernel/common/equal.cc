@@ -64,37 +64,37 @@ int32_t ComputeEqual(feather::operators::EqualParam* param) {
 template <>
 int32_t EqualKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Equal::FP32");
-    return ComputeEqual(static_cast<feather::operators::EqualParam*>(param_));
+    return ComputeEqual(ParamAs<feather::operators::EqualParam>());
 }
 
 template <>
 int32_t EqualKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Equal::FP16");
-    return ComputeEqual(static_cast<feather::operators::EqualParam*>(param_));
+    return ComputeEqual(ParamAs<feather::operators::EqualParam>());
 }
 
 template <>
 int32_t EqualKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Equal::BF16");
-    return ComputeEqual(static_cast<feather::operators::EqualParam*>(param_));
+    return ComputeEqual(ParamAs<feather::operators::EqualParam>());
 }
 
 template <>
 int32_t EqualKernel<DeviceType::COMMON, DataType::INT32>::compute() {
     AutoTimer timer("Common::Equal::INT32");
-    return ComputeEqual(static_cast<feather::operators::EqualParam*>(param_));
+    return ComputeEqual(ParamAs<feather::operators::EqualParam>());
 }
 
 template <>
 int32_t EqualKernel<DeviceType::COMMON, DataType::INT64>::compute() {
     AutoTimer timer("Common::Equal::INT64");
-    return ComputeEqual(static_cast<feather::operators::EqualParam*>(param_));
+    return ComputeEqual(ParamAs<feather::operators::EqualParam>());
 }
 
 template <>
 int32_t EqualKernel<DeviceType::COMMON, DataType::BOOL>::compute() {
     AutoTimer timer("Common::Equal::BOOL");
-    return ComputeEqual(static_cast<feather::operators::EqualParam*>(param_));
+    return ComputeEqual(ParamAs<feather::operators::EqualParam>());
 }
 
 void EnsureCommonEqualKernelsRegistered() { (void)g_common_equal_kernels_registered; }

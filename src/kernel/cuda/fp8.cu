@@ -1396,12 +1396,12 @@ int32_t RunFp8ReduceSum(operators::ReduceSumParam* param, const char* timer_name
 #define DEFINE_CUDA_FP8_UNARY(Class, Op, Label)                                                        \
     template <>                                                                                         \
     int32_t Class<DeviceType::CUDA, DataType::FP8E4M3>::compute() {                                    \
-        return RunFp8Unary<DataType::FP8E4M3, Op>(static_cast<operators::UnaryParam*>(param_),          \
+        return RunFp8Unary<DataType::FP8E4M3, Op>(ParamAs<operators::UnaryParam>(),          \
                                                    "CUDA::" Label "::FP8E4M3");                         \
     }                                                                                                    \
     template <>                                                                                         \
     int32_t Class<DeviceType::CUDA, DataType::FP8E5M2>::compute() {                                    \
-        return RunFp8Unary<DataType::FP8E5M2, Op>(static_cast<operators::UnaryParam*>(param_),          \
+        return RunFp8Unary<DataType::FP8E5M2, Op>(ParamAs<operators::UnaryParam>(),          \
                                                    "CUDA::" Label "::FP8E5M2");                         \
     }
 
@@ -1420,11 +1420,11 @@ DEFINE_CUDA_FP8_UNARY(NegKernel, 10, "Neg")
 #define DEFINE_CUDA_FP8_PARAM(Class, ParamType, Function, Label)                                      \
     template <>                                                                                         \
     int32_t Class<DeviceType::CUDA, DataType::FP8E4M3>::compute() {                                    \
-        return Function<DataType::FP8E4M3>(static_cast<ParamType*>(param_), "CUDA::" Label "::FP8E4M3"); \
+        return Function<DataType::FP8E4M3>(ParamAs<ParamType>(), "CUDA::" Label "::FP8E4M3"); \
     }                                                                                                    \
     template <>                                                                                         \
     int32_t Class<DeviceType::CUDA, DataType::FP8E5M2>::compute() {                                    \
-        return Function<DataType::FP8E5M2>(static_cast<ParamType*>(param_), "CUDA::" Label "::FP8E5M2"); \
+        return Function<DataType::FP8E5M2>(ParamAs<ParamType>(), "CUDA::" Label "::FP8E5M2"); \
     }
 
 DEFINE_CUDA_FP8_PARAM(BatchNormalizationKernel, operators::BatchNormParam, RunFp8BatchNorm, "BatchNormalization")
@@ -1445,88 +1445,88 @@ DEFINE_CUDA_FP8_PARAM(WhereKernel, operators::WhereParam, RunFp8Where, "Where")
 
 template <>
 int32_t IdentityKernel<DeviceType::CUDA, DataType::FP8E4M3>::compute() {
-    return RunFp8Copy<DataType::FP8E4M3, operators::UnaryParam>(static_cast<operators::UnaryParam*>(param_),
+    return RunFp8Copy<DataType::FP8E4M3, operators::UnaryParam>(ParamAs<operators::UnaryParam>(),
                                                                   "CUDA::Identity::FP8E4M3");
 }
 template <>
 int32_t IdentityKernel<DeviceType::CUDA, DataType::FP8E5M2>::compute() {
-    return RunFp8Copy<DataType::FP8E5M2, operators::UnaryParam>(static_cast<operators::UnaryParam*>(param_),
+    return RunFp8Copy<DataType::FP8E5M2, operators::UnaryParam>(ParamAs<operators::UnaryParam>(),
                                                                   "CUDA::Identity::FP8E5M2");
 }
 template <>
 int32_t ReshapeKernel<DeviceType::CUDA, DataType::FP8E4M3>::compute() {
-    return RunFp8Copy<DataType::FP8E4M3, operators::ReshapeParam>(static_cast<operators::ReshapeParam*>(param_),
+    return RunFp8Copy<DataType::FP8E4M3, operators::ReshapeParam>(ParamAs<operators::ReshapeParam>(),
                                                                     "CUDA::Reshape::FP8E4M3");
 }
 template <>
 int32_t ReshapeKernel<DeviceType::CUDA, DataType::FP8E5M2>::compute() {
-    return RunFp8Copy<DataType::FP8E5M2, operators::ReshapeParam>(static_cast<operators::ReshapeParam*>(param_),
+    return RunFp8Copy<DataType::FP8E5M2, operators::ReshapeParam>(ParamAs<operators::ReshapeParam>(),
                                                                     "CUDA::Reshape::FP8E5M2");
 }
 template <>
 int32_t FlattenKernel<DeviceType::CUDA, DataType::FP8E4M3>::compute() {
-    return RunFp8Copy<DataType::FP8E4M3, operators::FlattenParam>(static_cast<operators::FlattenParam*>(param_),
+    return RunFp8Copy<DataType::FP8E4M3, operators::FlattenParam>(ParamAs<operators::FlattenParam>(),
                                                                     "CUDA::Flatten::FP8E4M3");
 }
 template <>
 int32_t FlattenKernel<DeviceType::CUDA, DataType::FP8E5M2>::compute() {
-    return RunFp8Copy<DataType::FP8E5M2, operators::FlattenParam>(static_cast<operators::FlattenParam*>(param_),
+    return RunFp8Copy<DataType::FP8E5M2, operators::FlattenParam>(ParamAs<operators::FlattenParam>(),
                                                                     "CUDA::Flatten::FP8E5M2");
 }
 template <>
 int32_t UnsqueezeKernel<DeviceType::CUDA, DataType::FP8E4M3>::compute() {
-    return RunFp8Copy<DataType::FP8E4M3, operators::AxesParam>(static_cast<operators::AxesParam*>(param_),
+    return RunFp8Copy<DataType::FP8E4M3, operators::AxesParam>(ParamAs<operators::AxesParam>(),
                                                                  "CUDA::Unsqueeze::FP8E4M3");
 }
 template <>
 int32_t UnsqueezeKernel<DeviceType::CUDA, DataType::FP8E5M2>::compute() {
-    return RunFp8Copy<DataType::FP8E5M2, operators::AxesParam>(static_cast<operators::AxesParam*>(param_),
+    return RunFp8Copy<DataType::FP8E5M2, operators::AxesParam>(ParamAs<operators::AxesParam>(),
                                                                  "CUDA::Unsqueeze::FP8E5M2");
 }
 template <>
 int32_t SqueezeKernel<DeviceType::CUDA, DataType::FP8E4M3>::compute() {
-    return RunFp8Copy<DataType::FP8E4M3, operators::AxesParam>(static_cast<operators::AxesParam*>(param_),
+    return RunFp8Copy<DataType::FP8E4M3, operators::AxesParam>(ParamAs<operators::AxesParam>(),
                                                                  "CUDA::Squeeze::FP8E4M3");
 }
 template <>
 int32_t SqueezeKernel<DeviceType::CUDA, DataType::FP8E5M2>::compute() {
-    return RunFp8Copy<DataType::FP8E5M2, operators::AxesParam>(static_cast<operators::AxesParam*>(param_),
+    return RunFp8Copy<DataType::FP8E5M2, operators::AxesParam>(ParamAs<operators::AxesParam>(),
                                                                  "CUDA::Squeeze::FP8E5M2");
 }
 template <>
 int32_t PowKernel<DeviceType::CUDA, DataType::FP8E4M3>::compute() {
-    return RunFp8Pow<DataType::FP8E4M3>(static_cast<operators::PowParam*>(param_), "CUDA::Pow::FP8E4M3");
+    return RunFp8Pow<DataType::FP8E4M3>(ParamAs<operators::PowParam>(), "CUDA::Pow::FP8E4M3");
 }
 template <>
 int32_t PowKernel<DeviceType::CUDA, DataType::FP8E5M2>::compute() {
-    return RunFp8Pow<DataType::FP8E5M2>(static_cast<operators::PowParam*>(param_), "CUDA::Pow::FP8E5M2");
+    return RunFp8Pow<DataType::FP8E5M2>(ParamAs<operators::PowParam>(), "CUDA::Pow::FP8E5M2");
 }
 
 template <>
 int32_t AvgPoolKernel<DeviceType::CUDA, DataType::FP8E4M3>::compute() {
-    return RunFp8Pool<DataType::FP8E4M3, false>(static_cast<operators::PoolParam*>(param_), "CUDA::AvgPool::FP8E4M3");
+    return RunFp8Pool<DataType::FP8E4M3, false>(ParamAs<operators::PoolParam>(), "CUDA::AvgPool::FP8E4M3");
 }
 template <>
 int32_t AvgPoolKernel<DeviceType::CUDA, DataType::FP8E5M2>::compute() {
-    return RunFp8Pool<DataType::FP8E5M2, false>(static_cast<operators::PoolParam*>(param_), "CUDA::AvgPool::FP8E5M2");
+    return RunFp8Pool<DataType::FP8E5M2, false>(ParamAs<operators::PoolParam>(), "CUDA::AvgPool::FP8E5M2");
 }
 template <>
 int32_t MaxPoolKernel<DeviceType::CUDA, DataType::FP8E4M3>::compute() {
-    return RunFp8Pool<DataType::FP8E4M3, true>(static_cast<operators::PoolParam*>(param_), "CUDA::MaxPool::FP8E4M3");
+    return RunFp8Pool<DataType::FP8E4M3, true>(ParamAs<operators::PoolParam>(), "CUDA::MaxPool::FP8E4M3");
 }
 template <>
 int32_t MaxPoolKernel<DeviceType::CUDA, DataType::FP8E5M2>::compute() {
-    return RunFp8Pool<DataType::FP8E5M2, true>(static_cast<operators::PoolParam*>(param_), "CUDA::MaxPool::FP8E5M2");
+    return RunFp8Pool<DataType::FP8E5M2, true>(ParamAs<operators::PoolParam>(), "CUDA::MaxPool::FP8E5M2");
 }
 
 template <>
 int32_t GlobalAveragePoolKernel<DeviceType::CUDA, DataType::FP8E4M3>::compute() {
-    return RunFp8GlobalAveragePool<DataType::FP8E4M3>(static_cast<operators::GlobalAveragePoolParam*>(param_),
+    return RunFp8GlobalAveragePool<DataType::FP8E4M3>(ParamAs<operators::GlobalAveragePoolParam>(),
                                                        "CUDA::GlobalAveragePool::FP8E4M3");
 }
 template <>
 int32_t GlobalAveragePoolKernel<DeviceType::CUDA, DataType::FP8E5M2>::compute() {
-    return RunFp8GlobalAveragePool<DataType::FP8E5M2>(static_cast<operators::GlobalAveragePoolParam*>(param_),
+    return RunFp8GlobalAveragePool<DataType::FP8E5M2>(ParamAs<operators::GlobalAveragePoolParam>(),
                                                        "CUDA::GlobalAveragePool::FP8E5M2");
 }
 

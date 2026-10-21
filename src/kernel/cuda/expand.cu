@@ -93,17 +93,17 @@ int32_t RunExpand(feather::operators::ExpandParam* param, const char* timer_name
 
 template <>
 int32_t ExpandKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunExpand<DataType::FP32>(static_cast<feather::operators::ExpandParam*>(param_), "CUDA::Expand::FP32");
+    return RunExpand<DataType::FP32>(ParamAs<feather::operators::ExpandParam>(), "CUDA::Expand::FP32");
 }
 
 template <>
 int32_t ExpandKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunExpand<DataType::FP16>(static_cast<feather::operators::ExpandParam*>(param_), "CUDA::Expand::FP16");
+    return RunExpand<DataType::FP16>(ParamAs<feather::operators::ExpandParam>(), "CUDA::Expand::FP16");
 }
 
 template <>
 int32_t ExpandKernel<DeviceType::CUDA, DataType::BF16>::compute() {
-    return RunExpand<DataType::BF16>(static_cast<feather::operators::ExpandParam*>(param_), "CUDA::Expand::BF16");
+    return RunExpand<DataType::BF16>(ParamAs<feather::operators::ExpandParam>(), "CUDA::Expand::BF16");
 }
 
 void EnsureCudaExpandKernelsRegistered() { (void)g_cuda_expand_kernels_registered; }

@@ -16,21 +16,7 @@ namespace {
 
 constexpr int64_t kFp8PackedRhsMinimumMacs = 1 << 18;
 
-bool g_fc_x86_kernels_registered = []() {
-    KernelDispatcher::instance().registerKernel(
-        DeviceType::X86, DataType::FP32, "FC",
-        []() { return std::make_unique<FcKernel<DeviceType::X86, DataType::FP32>>(); });
-    KernelDispatcher::instance().registerKernel(
-        DeviceType::X86, DataType::FP16, "FC",
-        []() { return std::make_unique<FcKernel<DeviceType::X86, DataType::FP16>>(); });
-    KernelDispatcher::instance().registerKernel(
-        DeviceType::X86, DataType::FP8E4M3, "FC",
-        []() { return std::make_unique<FcKernel<DeviceType::X86, DataType::FP8E4M3>>(); });
-    KernelDispatcher::instance().registerKernel(
-        DeviceType::X86, DataType::FP8E5M2, "FC",
-        []() { return std::make_unique<FcKernel<DeviceType::X86, DataType::FP8E5M2>>(); });
-    return true;
-}();
+
 
 template <DataType dtype>
 bool ShouldUsePackedFp8Fc(const feather::operators::FcParam* param, int64_t m, int64_t k, int64_t n) {
@@ -85,7 +71,7 @@ int32_t PrepareFp8Fc(feather::operators::FcParam* param, x86::PackedFp8Rhs* pack
 template <>
 int32_t FcKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::FC::FP32");
-    auto* param = static_cast<feather::operators::FcParam*>(param_);
+    auto* param = ParamAs<feather::operators::FcParam>();
     if (param == nullptr || param->input == nullptr || param->w == nullptr || param->out == nullptr) {
         return -1;
     }
@@ -107,7 +93,7 @@ int32_t FcKernel<DeviceType::X86, DataType::FP32>::compute() {
 template <>
 int32_t FcKernel<DeviceType::X86, DataType::FP16>::compute() {
     AutoTimer timer("X86::FC::FP16");
-    auto* param = static_cast<feather::operators::FcParam*>(param_);
+    auto* param = ParamAs<feather::operators::FcParam>();
     if (param == nullptr || param->input == nullptr || param->w == nullptr || param->out == nullptr) {
         return -1;
     }
@@ -130,26 +116,23 @@ int32_t FcKernel<DeviceType::X86, DataType::FP16>::compute() {
 
 int32_t FcKernel<DeviceType::X86, DataType::FP8E4M3>::compute() {
     AutoTimer timer("X86::FC::FP8E4M3");
-    return ComputeFp8Fc<DataType::FP8E4M3>(static_cast<feather::operators::FcParam*>(param_), &packed_rhs_, &workspace_);
+    return ComputeFp8Fc<DataType::FP8E4M3>(ParamAs<feather::operators::FcParam>(), &packed_rhs_, &workspace_);
 }
 
 int32_t FcKernel<DeviceType::X86, DataType::FP8E5M2>::compute() {
     AutoTimer timer("X86::FC::FP8E5M2");
-    return ComputeFp8Fc<DataType::FP8E5M2>(static_cast<feather::operators::FcParam*>(param_), &packed_rhs_, &workspace_);
+    return ComputeFp8Fc<DataType::FP8E5M2>(ParamAs<feather::operators::FcParam>(), &packed_rhs_, &workspace_);
 }
 
 int32_t FcKernel<DeviceType::X86, DataType::FP8E4M3>::Prepare() {
-    return PrepareFp8Fc<DataType::FP8E4M3>(static_cast<feather::operators::FcParam*>(param_), &packed_rhs_);
+    return PrepareFp8Fc<DataType::FP8E4M3>(ParamAs<feather::operators::FcParam>(), &packed_rhs_);
 }
 
 int32_t FcKernel<DeviceType::X86, DataType::FP8E5M2>::Prepare() {
-    return PrepareFp8Fc<DataType::FP8E5M2>(static_cast<feather::operators::FcParam*>(param_), &packed_rhs_);
+    return PrepareFp8Fc<DataType::FP8E5M2>(ParamAs<feather::operators::FcParam>(), &packed_rhs_);
 }
 
-void EnsureX86FcKernelsRegistered() {
-    (void)g_fc_x86_kernels_registered;
-    EnsureX86Int8KernelsRegistered();
-}
+
 
 }  // namespace kernel
 }  // namespace feather

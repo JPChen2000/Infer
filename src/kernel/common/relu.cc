@@ -36,19 +36,19 @@ int32_t ComputeReluKernel(feather::operators::UnaryParam* param) {
 template <>
 int32_t ReluKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::ReLU::FP32");
-    return ComputeReluKernel<DataType::FP32>(static_cast<feather::operators::UnaryParam*>(param_));
+    return ComputeReluKernel<DataType::FP32>(ParamAs<feather::operators::UnaryParam>());
 }
 
 template <>
 int32_t ReluKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::ReLU::FP16");
-    return ComputeReluKernel<DataType::FP16>(static_cast<feather::operators::UnaryParam*>(param_));
+    return ComputeReluKernel<DataType::FP16>(ParamAs<feather::operators::UnaryParam>());
 }
 
 template <>
 int32_t ReluKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::ReLU::BF16");
-    return ComputeReluKernel<DataType::BF16>(static_cast<feather::operators::UnaryParam*>(param_));
+    return ComputeReluKernel<DataType::BF16>(ParamAs<feather::operators::UnaryParam>());
 }
 
 typedef feather::kernel::ReluKernel<DeviceType::COMMON, DataType::FP32> ReluCommonFP32Kernel;

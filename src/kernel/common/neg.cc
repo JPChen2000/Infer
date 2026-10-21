@@ -25,15 +25,15 @@ int32_t RunNeg(feather::operators::UnaryParam* param) {
 
 template <> int32_t NegKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Neg::FP32");
-    return RunNeg<DataType::FP32>(static_cast<feather::operators::UnaryParam*>(param_));
+    return RunNeg<DataType::FP32>(ParamAs<feather::operators::UnaryParam>());
 }
 template <> int32_t NegKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Neg::FP16");
-    return RunNeg<DataType::FP16>(static_cast<feather::operators::UnaryParam*>(param_));
+    return RunNeg<DataType::FP16>(ParamAs<feather::operators::UnaryParam>());
 }
 template <> int32_t NegKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Neg::BF16");
-    return RunNeg<DataType::BF16>(static_cast<feather::operators::UnaryParam*>(param_));
+    return RunNeg<DataType::BF16>(ParamAs<feather::operators::UnaryParam>());
 }
 
 void EnsureNegKernelsRegistered() { (void)g_neg_kernels_registered; }

@@ -13,12 +13,29 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <memory>
 
 #include "core/tensor.h"
 
 namespace feather {
 namespace kernel {
 namespace cuda_detail {
+
+// A graph/session owns its device resources. Scopes propagate the active
+// context through existing kernel APIs, including graph worker threads.
+class CudaExecutionContext;
+std::shared_ptr<CudaExecutionContext> CreateExecutionContext();
+
+class ExecutionContextScope {
+   public:
+    explicit ExecutionContextScope(std::shared_ptr<CudaExecutionContext> context);
+    ~ExecutionContextScope();
+    ExecutionContextScope(const ExecutionContextScope&) = delete;
+    ExecutionContextScope& operator=(const ExecutionContextScope&) = delete;
+   private:
+    std::shared_ptr<CudaExecutionContext> previous_;
+    int previous_device_{-1};
+};
 
 inline int64_t DivUp(int64_t value, int64_t divisor) {
     if (value <= 0 || divisor <= 0) {
@@ -52,7 +69,9 @@ void InvalidateTensorDevice(const Tensor* tensor);
 void MarkTensorDevicePersistent(const Tensor* tensor, bool persistent);
 bool IsTensorDevicePersistent(const Tensor* tensor);
 void ReleaseTensorDevice(const Tensor* tensor);
+std::shared_ptr<const Storage> GetTensorDeviceStorage(const Tensor* tensor);
 int AcquireTemporaryDeviceBuffer(size_t bytes, void** device_ptr);
+void SetWorkspaceLimit(size_t bytes);
 void ReleaseTemporaryDeviceBuffer(void* device_ptr, size_t bytes);
 TensorCacheStats GetTensorCacheStats();
 void ClearTensorCache();

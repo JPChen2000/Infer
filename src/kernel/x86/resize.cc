@@ -242,7 +242,7 @@ int32_t ComputeResizeInt8NchwNearest(feather::operators::ResizeParam* param) {
 template <>
 int32_t ResizeKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::Resize::FP32");
-    auto* param = static_cast<feather::operators::ResizeParam*>(param_);
+    auto* param = ParamAs<feather::operators::ResizeParam>();
     if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::FP32) {
         return ComputeResizeFallback<DataType::FP32>(param);
     }
@@ -252,7 +252,7 @@ int32_t ResizeKernel<DeviceType::X86, DataType::FP32>::compute() {
 template <>
 int32_t ResizeKernel<DeviceType::X86, DataType::FP16>::compute() {
     AutoTimer timer("X86::Resize::FP16");
-    auto* param = static_cast<feather::operators::ResizeParam*>(param_);
+    auto* param = ParamAs<feather::operators::ResizeParam>();
     if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::FP16) {
         return ComputeResizeFallback<DataType::FP16>(param);
     }
@@ -262,7 +262,7 @@ int32_t ResizeKernel<DeviceType::X86, DataType::FP16>::compute() {
 template <>
 int32_t ResizeKernel<DeviceType::X86, DataType::INT8>::compute() {
     AutoTimer timer("X86::Resize::INT8");
-    auto* param = static_cast<feather::operators::ResizeParam*>(param_);
+    auto* param = ParamAs<feather::operators::ResizeParam>();
     if (param == nullptr || param->input == nullptr || param->out == nullptr ||
         param->input->data_type() != DataType::INT8 || param->out->data_type() != DataType::INT8 ||
         param->input->dims().size() != param->out->dims().size() ||
@@ -305,21 +305,7 @@ int32_t ResizeKernel<DeviceType::X86, DataType::INT8>::compute() {
     return 0;
 }
 
-void EnsureX86ResizeKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "Resize",
-            []() { return std::make_unique<ResizeKernel<DeviceType::X86, DataType::FP32>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP16, "Resize",
-            []() { return std::make_unique<ResizeKernel<DeviceType::X86, DataType::FP16>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::INT8, "Resize",
-            []() { return std::make_unique<ResizeKernel<DeviceType::X86, DataType::INT8>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

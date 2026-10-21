@@ -46,54 +46,7 @@ namespace kernel {
 
 namespace {
 
-bool g_x86_fp8_kernels_registered = []() {
-    auto& dispatcher = KernelDispatcher::instance();
-#define REGISTER_X86_FP8(op, klass)                                                                       \
-    dispatcher.registerKernel(DeviceType::X86, DataType::FP8E4M3, op, []() {                           \
-        return std::make_unique<klass<DeviceType::X86, DataType::FP8E4M3>>();                           \
-    });                                                                                                   \
-    dispatcher.registerKernel(DeviceType::X86, DataType::FP8E5M2, op, []() {                           \
-        return std::make_unique<klass<DeviceType::X86, DataType::FP8E5M2>>();                           \
-    });
 
-    REGISTER_X86_FP8("BatchNormalization", BatchNormalizationKernel)
-    REGISTER_X86_FP8("Concat", ConcatKernel)
-    REGISTER_X86_FP8("Conv2D", Conv2DKernel)
-    REGISTER_X86_FP8("Cos", CosKernel)
-    REGISTER_X86_FP8("Erf", ErfKernel)
-    REGISTER_X86_FP8("Exp", ExpKernel)
-    REGISTER_X86_FP8("Expand", ExpandKernel)
-    REGISTER_X86_FP8("Flatten", FlattenKernel)
-    REGISTER_X86_FP8("GlobalAveragePool", GlobalAveragePoolKernel)
-    REGISTER_X86_FP8("Gather", GatherKernel)
-    REGISTER_X86_FP8("Identity", IdentityKernel)
-    REGISTER_X86_FP8("AvgPool", AvgPoolKernel)
-    REGISTER_X86_FP8("MaxPool", MaxPoolKernel)
-    REGISTER_X86_FP8("Neg", NegKernel)
-    REGISTER_X86_FP8("Pow", PowKernel)
-    REGISTER_X86_FP8("ReduceMean", ReduceMeanKernel)
-    REGISTER_X86_FP8("ReduceSum", ReduceSumKernel)
-    REGISTER_X86_FP8("ReLU", ReluKernel)
-    REGISTER_X86_FP8("Reshape", ReshapeKernel)
-    REGISTER_X86_FP8("Resize", ResizeKernel)
-    REGISTER_X86_FP8("ResizeConcat", ResizeConcatKernel)
-    REGISTER_X86_FP8("Sigmoid", SigmoidKernel)
-    REGISTER_X86_FP8("SiLU", SiluKernel)
-    REGISTER_X86_FP8("Sin", SinKernel)
-    REGISTER_X86_FP8("Slice", SliceKernel)
-    REGISTER_X86_FP8("Softmax", SoftmaxKernel)
-    REGISTER_X86_FP8("Softplus", SoftplusKernel)
-    REGISTER_X86_FP8("Split", SplitKernel)
-    REGISTER_X86_FP8("Sqrt", SqrtKernel)
-    REGISTER_X86_FP8("Tanh", TanhKernel)
-    REGISTER_X86_FP8("Transpose", TransposeKernel)
-    REGISTER_X86_FP8("Unsqueeze", UnsqueezeKernel)
-    REGISTER_X86_FP8("Squeeze", SqueezeKernel)
-    REGISTER_X86_FP8("Where", WhereKernel)
-    REGISTER_X86_FP8("Equal", EqualKernel)
-#undef REGISTER_X86_FP8
-    return true;
-}();
 
 template <DataType dtype>
 int32_t Unary(operators::UnaryParam* param, float (*fn)(float)) {
@@ -224,12 +177,12 @@ int32_t Identity(operators::UnaryParam* param) {
     template <>                                                                                            \
     int32_t Class<DeviceType::X86, DataType::FP8E4M3>::compute() {                                      \
         AutoTimer timer("X86::" Label "::FP8E4M3");                                                  \
-        return Function<DataType::FP8E4M3>(static_cast<operators::UnaryParam*>(param_));                 \
+        return Function<DataType::FP8E4M3>(ParamAs<operators::UnaryParam>());                 \
     }                                                                                                     \
     template <>                                                                                            \
     int32_t Class<DeviceType::X86, DataType::FP8E5M2>::compute() {                                      \
         AutoTimer timer("X86::" Label "::FP8E5M2");                                                  \
-        return Function<DataType::FP8E5M2>(static_cast<operators::UnaryParam*>(param_));                 \
+        return Function<DataType::FP8E5M2>(ParamAs<operators::UnaryParam>());                 \
     }
 
 template <DataType dtype>
@@ -268,56 +221,56 @@ DEFINE_X86_UNARY(SoftplusKernel, Softplus, "Softplus")
 DEFINE_X86_UNARY(NegKernel, Neg, "Neg")
 
 template <>
-int32_t PowKernel<DeviceType::X86, DataType::FP8E4M3>::compute() { return Pow<DataType::FP8E4M3>(static_cast<operators::PowParam*>(param_)); }
+int32_t PowKernel<DeviceType::X86, DataType::FP8E4M3>::compute() { return Pow<DataType::FP8E4M3>(ParamAs<operators::PowParam>()); }
 template <>
-int32_t PowKernel<DeviceType::X86, DataType::FP8E5M2>::compute() { return Pow<DataType::FP8E5M2>(static_cast<operators::PowParam*>(param_)); }
+int32_t PowKernel<DeviceType::X86, DataType::FP8E5M2>::compute() { return Pow<DataType::FP8E5M2>(ParamAs<operators::PowParam>()); }
 template <>
-int32_t IdentityKernel<DeviceType::X86, DataType::FP8E4M3>::compute() { return Identity<DataType::FP8E4M3>(static_cast<operators::UnaryParam*>(param_)); }
+int32_t IdentityKernel<DeviceType::X86, DataType::FP8E4M3>::compute() { return Identity<DataType::FP8E4M3>(ParamAs<operators::UnaryParam>()); }
 template <>
-int32_t IdentityKernel<DeviceType::X86, DataType::FP8E5M2>::compute() { return Identity<DataType::FP8E5M2>(static_cast<operators::UnaryParam*>(param_)); }
+int32_t IdentityKernel<DeviceType::X86, DataType::FP8E5M2>::compute() { return Identity<DataType::FP8E5M2>(ParamAs<operators::UnaryParam>()); }
 template <>
-int32_t ReshapeKernel<DeviceType::X86, DataType::FP8E4M3>::compute() { return Reshape<DataType::FP8E4M3>(static_cast<operators::ReshapeParam*>(param_)); }
+int32_t ReshapeKernel<DeviceType::X86, DataType::FP8E4M3>::compute() { return Reshape<DataType::FP8E4M3>(ParamAs<operators::ReshapeParam>()); }
 template <>
-int32_t ReshapeKernel<DeviceType::X86, DataType::FP8E5M2>::compute() { return Reshape<DataType::FP8E5M2>(static_cast<operators::ReshapeParam*>(param_)); }
+int32_t ReshapeKernel<DeviceType::X86, DataType::FP8E5M2>::compute() { return Reshape<DataType::FP8E5M2>(ParamAs<operators::ReshapeParam>()); }
 template <>
-int32_t FlattenKernel<DeviceType::X86, DataType::FP8E4M3>::compute() { return Flatten<DataType::FP8E4M3>(static_cast<operators::FlattenParam*>(param_)); }
+int32_t FlattenKernel<DeviceType::X86, DataType::FP8E4M3>::compute() { return Flatten<DataType::FP8E4M3>(ParamAs<operators::FlattenParam>()); }
 template <>
-int32_t FlattenKernel<DeviceType::X86, DataType::FP8E5M2>::compute() { return Flatten<DataType::FP8E5M2>(static_cast<operators::FlattenParam*>(param_)); }
+int32_t FlattenKernel<DeviceType::X86, DataType::FP8E5M2>::compute() { return Flatten<DataType::FP8E5M2>(ParamAs<operators::FlattenParam>()); }
 template <>
 int32_t GlobalAveragePoolKernel<DeviceType::X86, DataType::FP8E4M3>::compute() {
-    return fp8_host::GlobalAveragePool<DataType::FP8E4M3>(static_cast<operators::GlobalAveragePoolParam*>(param_));
+    return fp8_host::GlobalAveragePool<DataType::FP8E4M3>(ParamAs<operators::GlobalAveragePoolParam>());
 }
 template <>
 int32_t GlobalAveragePoolKernel<DeviceType::X86, DataType::FP8E5M2>::compute() {
-    return fp8_host::GlobalAveragePool<DataType::FP8E5M2>(static_cast<operators::GlobalAveragePoolParam*>(param_));
+    return fp8_host::GlobalAveragePool<DataType::FP8E5M2>(ParamAs<operators::GlobalAveragePoolParam>());
 }
 template <>
 int32_t UnsqueezeKernel<DeviceType::X86, DataType::FP8E4M3>::compute() {
-    return fp8_host::Copy<DataType::FP8E4M3>(static_cast<operators::AxesParam*>(param_));
+    return fp8_host::Copy<DataType::FP8E4M3>(ParamAs<operators::AxesParam>());
 }
 template <>
 int32_t UnsqueezeKernel<DeviceType::X86, DataType::FP8E5M2>::compute() {
-    return fp8_host::Copy<DataType::FP8E5M2>(static_cast<operators::AxesParam*>(param_));
+    return fp8_host::Copy<DataType::FP8E5M2>(ParamAs<operators::AxesParam>());
 }
 template <>
 int32_t SqueezeKernel<DeviceType::X86, DataType::FP8E4M3>::compute() {
-    return fp8_host::Copy<DataType::FP8E4M3>(static_cast<operators::AxesParam*>(param_));
+    return fp8_host::Copy<DataType::FP8E4M3>(ParamAs<operators::AxesParam>());
 }
 template <>
 int32_t SqueezeKernel<DeviceType::X86, DataType::FP8E5M2>::compute() {
-    return fp8_host::Copy<DataType::FP8E5M2>(static_cast<operators::AxesParam*>(param_));
+    return fp8_host::Copy<DataType::FP8E5M2>(ParamAs<operators::AxesParam>());
 }
 
 #define DEFINE_X86_PARAM(Class, ParamType, Function, Label)                                               \
     template <>                                                                                            \
     int32_t Class<DeviceType::X86, DataType::FP8E4M3>::compute() {                                      \
         AutoTimer timer("X86::" Label "::FP8E4M3");                                                  \
-        return Function<DataType::FP8E4M3>(static_cast<ParamType*>(param_));                             \
+        return Function<DataType::FP8E4M3>(ParamAs<ParamType>());                             \
     }                                                                                                     \
     template <>                                                                                            \
     int32_t Class<DeviceType::X86, DataType::FP8E5M2>::compute() {                                      \
         AutoTimer timer("X86::" Label "::FP8E5M2");                                                  \
-        return Function<DataType::FP8E5M2>(static_cast<ParamType*>(param_));                             \
+        return Function<DataType::FP8E5M2>(ParamAs<ParamType>());                             \
     }
 
 DEFINE_X86_PARAM(TransposeKernel, operators::TransposeParam, fp8_host::Transpose, "Transpose")
@@ -349,17 +302,17 @@ template <>
 int32_t Conv2DKernel<DeviceType::X86, DataType::FP8E4M3>::compute() {
     AutoTimer timer("X86::Conv2D::FP8E4M3");
     return ComputeQwenFp8DepthwiseConv2D<DataType::FP8E4M3>(
-        static_cast<operators::Conv2dParam*>(param_));
+        ParamAs<operators::Conv2dParam>());
 }
 
 template <>
 int32_t Conv2DKernel<DeviceType::X86, DataType::FP8E5M2>::compute() {
     AutoTimer timer("X86::Conv2D::FP8E5M2");
     return ComputeQwenFp8DepthwiseConv2D<DataType::FP8E5M2>(
-        static_cast<operators::Conv2dParam*>(param_));
+        ParamAs<operators::Conv2dParam>());
 }
 
-void EnsureX86Fp8KernelsRegistered() { (void)g_x86_fp8_kernels_registered; }
+
 
 }  // namespace kernel
 }  // namespace feather

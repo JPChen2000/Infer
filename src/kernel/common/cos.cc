@@ -27,15 +27,15 @@ int32_t RunCos(feather::operators::UnaryParam* param) {
 
 template <> int32_t CosKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Cos::FP32");
-    return RunCos<DataType::FP32>(static_cast<feather::operators::UnaryParam*>(param_));
+    return RunCos<DataType::FP32>(ParamAs<feather::operators::UnaryParam>());
 }
 template <> int32_t CosKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Cos::FP16");
-    return RunCos<DataType::FP16>(static_cast<feather::operators::UnaryParam*>(param_));
+    return RunCos<DataType::FP16>(ParamAs<feather::operators::UnaryParam>());
 }
 template <> int32_t CosKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Cos::BF16");
-    return RunCos<DataType::BF16>(static_cast<feather::operators::UnaryParam*>(param_));
+    return RunCos<DataType::BF16>(ParamAs<feather::operators::UnaryParam>());
 }
 
 void EnsureCosKernelsRegistered() { (void)g_cos_kernels_registered; }

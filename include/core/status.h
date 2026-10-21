@@ -26,6 +26,9 @@ class Status {
     static Status Ok() { return Status(); }
     static Status Error(StatusCode code, std::string message) { return Status(code, std::move(message)); }
 
+    Status WithContext(const std::string& context) const {
+        return ok() ? *this : Status(code_, context + ": " + message_);
+    }
     bool ok() const { return code_ == StatusCode::kOk; }
     explicit operator bool() const { return ok(); }
     StatusCode code() const { return code_; }

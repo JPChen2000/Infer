@@ -33,6 +33,8 @@ struct MemBlock {
 class Buffer {
    public:
     Buffer() = default;
+    Buffer(const Buffer&) = delete;
+    Buffer& operator=(const Buffer&) = delete;
 
     explicit Buffer(size_t size) : m_size(size) {
         m_data = new char[size];
@@ -46,7 +48,8 @@ class Buffer {
         m_malloc = false;
     }
 
-    explicit Buffer(void* data, size_t size, std::shared_ptr<void> owner) {
+    explicit Buffer(void* data, size_t size, std::shared_ptr<void> owner, bool read_only = false) {
+        m_read_only = read_only;
         m_data = data;
         m_size = size;
         m_owner = std::move(owner);
@@ -97,6 +100,7 @@ class Buffer {
     }
 
     void* data() { return m_data; }
+    bool read_only() const { return m_read_only; }
 
     void set_data(void* data, size_t size) {
         m_data = data;
@@ -110,6 +114,7 @@ class Buffer {
     size_t size() { return m_size; }
 
    private:
+    bool m_read_only{};
     bool m_malloc{};
     bool m_released{};
     void* m_data{};
@@ -137,7 +142,7 @@ class BufferPool : public std::enable_shared_from_this<BufferPool> {
     MemChunk* allocate_mem_chunk(size_t size);
 
    private:
-    static std::mutex m_mtx;
+    std::mutex m_mtx;
     static std::shared_ptr<BufferPool> m_buffer_pool;
     std::unordered_map<size_t, MemBlock*> m_mem_cache;
     std::unordered_map<size_t, MemBlock*> m_free_blocks;

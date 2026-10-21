@@ -130,27 +130,27 @@ int RunFp8Fc(feather::operators::FcParam* param, const char* timer_name) {
 
 template <>
 int32_t FcKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunFc<DataType::FP32>(static_cast<feather::operators::FcParam*>(param_), "CUDA::FC::FP32");
+    return RunFc<DataType::FP32>(ParamAs<feather::operators::FcParam>(), "CUDA::FC::FP32");
 }
 
 template <>
 int32_t FcKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunFc<DataType::FP16>(static_cast<feather::operators::FcParam*>(param_), "CUDA::FC::FP16");
+    return RunFc<DataType::FP16>(ParamAs<feather::operators::FcParam>(), "CUDA::FC::FP16");
 }
 
 template <>
 int32_t FcKernel<DeviceType::CUDA, DataType::BF16>::compute() {
-    return RunFc<DataType::BF16>(static_cast<feather::operators::FcParam*>(param_), "CUDA::FC::BF16");
+    return RunFc<DataType::BF16>(ParamAs<feather::operators::FcParam>(), "CUDA::FC::BF16");
 }
 
 template <>
 int32_t FcKernel<DeviceType::CUDA, DataType::FP8E4M3>::compute() {
-    return RunFp8Fc<DataType::FP8E4M3>(static_cast<feather::operators::FcParam*>(param_), "CUDA::FC::FP8E4M3");
+    return RunFp8Fc<DataType::FP8E4M3>(ParamAs<feather::operators::FcParam>(), "CUDA::FC::FP8E4M3");
 }
 
 template <>
 int32_t FcKernel<DeviceType::CUDA, DataType::FP8E5M2>::compute() {
-    return RunFp8Fc<DataType::FP8E5M2>(static_cast<feather::operators::FcParam*>(param_), "CUDA::FC::FP8E5M2");
+    return RunFp8Fc<DataType::FP8E5M2>(ParamAs<feather::operators::FcParam>(), "CUDA::FC::FP8E5M2");
 }
 
 void EnsureCudaFcKernelsRegistered() { (void)g_cuda_fc_kernels_registered; }

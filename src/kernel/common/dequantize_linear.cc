@@ -15,7 +15,7 @@ bool g_dequantize_linear_kernels_registered = []() {
 }  // namespace
 
 int32_t CommonDequantizeLinearKernel::compute() {
-    auto* param = static_cast<operators::DequantizeLinearParam*>(param_);
+    auto* param = ParamAs<operators::DequantizeLinearParam>();
     if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::INT8) return -1;
     return quantize_linear_detail::ComputeDequantizeLinear(param);
 }

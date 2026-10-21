@@ -1769,13 +1769,13 @@ TEST(static_graph_pass_test, QwenGatedDeltaFusionPassSkipsGraphOutputIntermediat
 TEST(static_graph_pass_test, DefaultPassManagerIncludesGeneralFusionPasses) {
     auto pass_manager = feather::CreateDefaultPassManager();
     ASSERT_NE(pass_manager, nullptr);
-    EXPECT_EQ(pass_manager->PassCount(), 12U);
+    EXPECT_EQ(pass_manager->PassCount(), 6U);
 }
 
 TEST(static_graph_pass_test, YoloPassManagerAddsDecodeFusionOnTopOfDefaultPasses) {
     auto pass_manager = feather::CreateYoloPassManager();
     ASSERT_NE(pass_manager, nullptr);
-    EXPECT_EQ(pass_manager->PassCount(), 15U);
+    EXPECT_EQ(pass_manager->PassCount(), 9U);
 }
 
 TEST(static_graph_pass_test, ReshapeChainEliminationPassRemovesInnerReshape) {

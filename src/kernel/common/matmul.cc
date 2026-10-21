@@ -106,19 +106,19 @@ int32_t ComputeMatMulCommon(feather::operators::MatMulParam* param) {
 template <>
 int32_t MatMulKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::MatMul::FP32");
-    return ComputeMatMulCommon<DataType::FP32>(static_cast<feather::operators::MatMulParam*>(param_));
+    return ComputeMatMulCommon<DataType::FP32>(ParamAs<feather::operators::MatMulParam>());
 }
 
 template <>
 int32_t MatMulKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::MatMul::FP16");
-    return ComputeMatMulCommon<DataType::FP16>(static_cast<feather::operators::MatMulParam*>(param_));
+    return ComputeMatMulCommon<DataType::FP16>(ParamAs<feather::operators::MatMulParam>());
 }
 
 template <>
 int32_t MatMulKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::MatMul::BF16");
-    return ComputeMatMulCommon<DataType::BF16>(static_cast<feather::operators::MatMulParam*>(param_));
+    return ComputeMatMulCommon<DataType::BF16>(ParamAs<feather::operators::MatMulParam>());
 }
 
 template <DataType dtype>
@@ -129,19 +129,19 @@ int32_t ComputeCommonFp8MatMul(feather::operators::MatMulParam* param) {
 template <>
 int32_t MatMulKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() {
     AutoTimer timer("Common::MatMul::FP8E4M3");
-    return ComputeCommonFp8MatMul<DataType::FP8E4M3>(static_cast<feather::operators::MatMulParam*>(param_));
+    return ComputeCommonFp8MatMul<DataType::FP8E4M3>(ParamAs<feather::operators::MatMulParam>());
 }
 
 template <>
 int32_t MatMulKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() {
     AutoTimer timer("Common::MatMul::FP8E5M2");
-    return ComputeCommonFp8MatMul<DataType::FP8E5M2>(static_cast<feather::operators::MatMulParam*>(param_));
+    return ComputeCommonFp8MatMul<DataType::FP8E5M2>(ParamAs<feather::operators::MatMulParam>());
 }
 
 template <>
 int32_t MatMulKernel<DeviceType::COMMON, DataType::INT8>::compute() {
     AutoTimer timer("Common::MatMul::INT8");
-    auto* param = static_cast<feather::operators::MatMulParam*>(param_);
+    auto* param = ParamAs<feather::operators::MatMulParam>();
     if (param == nullptr || param->a == nullptr || param->b == nullptr || param->out == nullptr) {
         return -1;
     }

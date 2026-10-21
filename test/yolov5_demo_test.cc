@@ -1,3 +1,4 @@
+#include "test/python_test_utils.h"
 #include <gtest/gtest.h>
 
 #include <cmath>
@@ -189,10 +190,10 @@ TEST(yolov5_demo_test, ParseYolov5LayoutOverrideRejectsUnsupportedNames) {
 
 TEST(yolov5_demo_test, LoadFthAndRunImageInference) {
     const auto repo_root = std::filesystem::path(__FILE__).parent_path().parent_path();
-    const auto model_path = repo_root / "models" / "yolov5n.fth";
+    const auto model_path = feather::test::OptionalModelPath("FEATHER_YOLOV5_MODEL", repo_root / "models" / "yolov5n.fth");
     const auto image_path = WriteTestPpmImage(std::filesystem::temp_directory_path() / "yolov5n_demo_test.ppm");
 
-    ASSERT_TRUE(std::filesystem::exists(model_path));
+    if (!std::filesystem::is_regular_file(model_path)) GTEST_SKIP() << "set FEATHER_YOLOV5_MODEL to a YOLOv5 FTH model";
 
     feather::demo::Yolov5Runner runner;
     ASSERT_EQ(runner.Load(model_path.string(), feather::demo::Yolov5Backend::kX86), 0);
@@ -213,9 +214,9 @@ TEST(yolov5_demo_test, LoadFthAndRunImageInference) {
 
 TEST(yolov5_demo_test, LoadFthCanReportExplicitNchwInputLayoutInSummary) {
     const auto repo_root = std::filesystem::path(__FILE__).parent_path().parent_path();
-    const auto model_path = repo_root / "models" / "yolov5n.fth";
+    const auto model_path = feather::test::OptionalModelPath("FEATHER_YOLOV5_MODEL", repo_root / "models" / "yolov5n.fth");
 
-    ASSERT_TRUE(std::filesystem::exists(model_path));
+    if (!std::filesystem::is_regular_file(model_path)) GTEST_SKIP() << "set FEATHER_YOLOV5_MODEL to a YOLOv5 FTH model";
 
     feather::demo::Yolov5Runner runner;
     ASSERT_EQ(runner.Load(model_path.string(), feather::demo::Yolov5Backend::kX86,
@@ -226,9 +227,9 @@ TEST(yolov5_demo_test, LoadFthCanReportExplicitNchwInputLayoutInSummary) {
 
 TEST(yolov5_demo_test, LoadFthRejectsIncompatibleNhwcOverride) {
     const auto repo_root = std::filesystem::path(__FILE__).parent_path().parent_path();
-    const auto model_path = repo_root / "models" / "yolov5n.fth";
+    const auto model_path = feather::test::OptionalModelPath("FEATHER_YOLOV5_MODEL", repo_root / "models" / "yolov5n.fth");
 
-    ASSERT_TRUE(std::filesystem::exists(model_path));
+    if (!std::filesystem::is_regular_file(model_path)) GTEST_SKIP() << "set FEATHER_YOLOV5_MODEL to a YOLOv5 FTH model";
 
     feather::demo::Yolov5Runner runner;
     EXPECT_EQ(runner.Load(model_path.string(), feather::demo::Yolov5Backend::kX86,
@@ -248,7 +249,7 @@ TEST(yolov5_demo_test, CudaRunSummaryReportsDeviceCacheStats) {
     const auto model_path = repo_root / "models" / "yolov5n_fp32.fth";
     const auto image_path = WriteTestPpmImage(std::filesystem::temp_directory_path() / "yolov5n_demo_cuda_stats.ppm");
 
-    ASSERT_TRUE(std::filesystem::exists(model_path));
+    if (!std::filesystem::is_regular_file(model_path)) GTEST_SKIP() << "set FEATHER_YOLOV5_MODEL to a YOLOv5 FTH model";
 
     feather::demo::Yolov5Runner runner;
     ASSERT_EQ(runner.Load(model_path.string(), feather::demo::Yolov5Backend::kCuda), 0);
@@ -272,7 +273,7 @@ TEST(yolov5_demo_test, CudaLoadPrimesPersistentTensorDevices) {
     const auto repo_root = std::filesystem::path(__FILE__).parent_path().parent_path();
     const auto model_path = repo_root / "models" / "yolov5n_fp32.fth";
 
-    ASSERT_TRUE(std::filesystem::exists(model_path));
+    if (!std::filesystem::is_regular_file(model_path)) GTEST_SKIP() << "set FEATHER_YOLOV5_MODEL to a YOLOv5 FTH model";
 
     feather::kernel::cuda_detail::ClearTensorCache();
 
@@ -300,7 +301,7 @@ TEST(yolov5_demo_test, CudaRunSummaryReportsMeasuredInputCopyTime) {
     const auto model_path = repo_root / "models" / "yolov5n_fp32.fth";
     const auto image_path = WriteTestPpmImage(std::filesystem::temp_directory_path() / "yolov5n_demo_cuda_input_copy.ppm");
 
-    ASSERT_TRUE(std::filesystem::exists(model_path));
+    if (!std::filesystem::is_regular_file(model_path)) GTEST_SKIP() << "set FEATHER_YOLOV5_MODEL to a YOLOv5 FTH model";
 
     feather::demo::Yolov5Runner runner;
     ASSERT_EQ(runner.Load(model_path.string(), feather::demo::Yolov5Backend::kCuda), 0);

@@ -114,7 +114,11 @@ TEST(runtime_threading_test, FinalizeSafelyPreparesUnboundKernel) {
     RuntimeNode node;
     node.name = "unbound_gemm";
     node.op_type = "Gemm";
+#ifdef FEATHER_WITH_X86
     node.kernel = std::make_unique<feather::kernel::GemmKernel<feather::DeviceType::X86, feather::DataType::BF16>>();
+#else
+    node.kernel = std::make_unique<feather::kernel::GemmKernel<feather::DeviceType::COMMON, feather::DataType::BF16>>();
+#endif
     graph.AddNode(std::move(node));
 
     EXPECT_EQ(graph.Finalize(), 0);

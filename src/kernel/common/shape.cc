@@ -43,7 +43,7 @@ int32_t ComputeShape(feather::operators::ShapeParam* param) {
 template <>
 int32_t ShapeKernel<DeviceType::COMMON, DataType::INT64>::compute() {
     AutoTimer timer("Common::Shape::INT64");
-    return ComputeShape(static_cast<feather::operators::ShapeParam*>(param_));
+    return ComputeShape(ParamAs<feather::operators::ShapeParam>());
 }
 
 void EnsureCommonShapeKernelsRegistered() { (void)g_common_shape_kernels_registered; }

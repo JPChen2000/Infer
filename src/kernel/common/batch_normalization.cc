@@ -109,13 +109,13 @@ int32_t ComputeBatchNormFp16(feather::operators::BatchNormParam* param) {
 template <>
 int32_t BatchNormalizationKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::BatchNormalization::FP32");
-    return ComputeBatchNormFp32(static_cast<feather::operators::BatchNormParam*>(param_));
+    return ComputeBatchNormFp32(ParamAs<feather::operators::BatchNormParam>());
 }
 
 template <>
 int32_t BatchNormalizationKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::BatchNormalization::FP16");
-    return ComputeBatchNormFp16(static_cast<feather::operators::BatchNormParam*>(param_));
+    return ComputeBatchNormFp16(ParamAs<feather::operators::BatchNormParam>());
 }
 
 typedef feather::kernel::BatchNormalizationKernel<DeviceType::COMMON, DataType::FP32> BatchNormalizationCommonFP32Kernel;

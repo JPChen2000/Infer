@@ -25,13 +25,13 @@ bool g_cuda_erf_kernels_registered = []() {
 template <>
 int32_t ErfKernel<DeviceType::CUDA, DataType::FP32>::compute() {
     return cuda_detail::RunUnaryElementwise<DataType::FP32, 6>(
-        static_cast<feather::operators::UnaryParam*>(param_), "CUDA::Erf::FP32");
+        ParamAs<feather::operators::UnaryParam>(), "CUDA::Erf::FP32");
 }
 
 template <>
 int32_t ErfKernel<DeviceType::CUDA, DataType::FP16>::compute() {
     return cuda_detail::RunUnaryElementwise<DataType::FP16, 6>(
-        static_cast<feather::operators::UnaryParam*>(param_), "CUDA::Erf::FP16");
+        ParamAs<feather::operators::UnaryParam>(), "CUDA::Erf::FP16");
 }
 
 void EnsureCudaErfKernelsRegistered() { (void)g_cuda_erf_kernels_registered; }

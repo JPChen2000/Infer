@@ -1,4 +1,6 @@
 #include "model/model_io.h"
+#include "core/shape_utils.h"
+#include <stdexcept>
 
 #include <algorithm>
 #include <cstdint>
@@ -27,44 +29,9 @@ uint64_t AlignUp(uint64_t value, uint64_t align) {
     return (value + align - 1) / align * align;
 }
 
-size_t DataTypeSize(DataType dtype) {
-    switch (dtype) {
-        case DataType::INT4:
-            return 0;
-        case DataType::INT8:
-        case DataType::UINT8:
-        case DataType::BOOL:
-            return 1;
-        case DataType::FP16:
-        case DataType::BF16:
-            return 2;
-        case DataType::FP8E4M3:
-        case DataType::FP8E5M2:
-            return 1;
-        case DataType::FP32:
-        case DataType::INT32:
-            return 4;
-        case DataType::INT64:
-            return 8;
-        default:
-            return 0;
-    }
-}
+constexpr uint64_t kMaxMetadataBytes = 256ULL * 1024 * 1024;
+constexpr uint64_t kMaxCollectionSize = 1024ULL * 1024;
 
-uint64_t TensorByteSize(const TensorDesc& desc) {
-    auto elem_size = DataTypeSize(desc.data_type);
-    if (elem_size == 0) {
-        return 0;
-    }
-    uint64_t numel = 1;
-    for (auto dim : desc.dims) {
-        if (dim < 0) {
-            return 0;
-        }
-        numel *= static_cast<uint64_t>(dim);
-    }
-    return numel * elem_size;
-}
 
 class BinaryWriter {
    public:
@@ -130,7 +97,7 @@ class BinaryReader {
     template <typename T>
     bool ReadVector(std::vector<T>* values) {
         uint64_t size = 0;
-        if (!ReadPod(&size) || size > std::numeric_limits<size_t>::max()) {
+        if (!ReadPod(&size) || size > Remaining() / sizeof(T)) {
             return false;
         }
         values->resize(static_cast<size_t>(size));
@@ -142,6 +109,10 @@ class BinaryReader {
         return true;
     }
 
+    size_t Remaining() const { return size_ - offset_; }
+    bool CanReadCollection(uint64_t count, size_t min_item_bytes) const {
+        return count <= kMaxCollectionSize && count <= Remaining() / min_item_bytes;
+    }
     bool Finished() const { return offset_ == size_; }
 
    private:
@@ -160,7 +131,7 @@ void WriteStringVector(BinaryWriter* writer, const std::vector<std::string>& val
 
 bool ReadStringVector(BinaryReader* reader, std::vector<std::string>* values) {
     uint64_t size = 0;
-    if (!reader->ReadPod(&size) || size > std::numeric_limits<size_t>::max()) {
+    if (!reader->ReadPod(&size) || !reader->CanReadCollection(size, sizeof(uint64_t))) {
         return false;
     }
     values->resize(static_cast<size_t>(size));
@@ -355,7 +326,7 @@ bool ReadNodeDesc(BinaryReader* reader, NodeDesc* node) {
         return false;
     }
     uint64_t attr_size = 0;
-    if (!reader->ReadPod(&attr_size) || attr_size > std::numeric_limits<size_t>::max()) {
+    if (!reader->ReadPod(&attr_size) || !reader->CanReadCollection(attr_size, sizeof(uint64_t) + sizeof(uint32_t))) {
         return false;
     }
     for (uint64_t i = 0; i < attr_size; ++i) {
@@ -393,7 +364,7 @@ bool ReadGraphDesc(BinaryReader* reader, GraphDesc* graph, bool include_quantiza
         return false;
     }
     uint64_t value_size = 0;
-    if (!reader->ReadPod(&value_size) || value_size > std::numeric_limits<size_t>::max()) {
+    if (!reader->ReadPod(&value_size) || !reader->CanReadCollection(value_size, 65)) {
         return false;
     }
     graph->values.resize(static_cast<size_t>(value_size));
@@ -403,7 +374,7 @@ bool ReadGraphDesc(BinaryReader* reader, GraphDesc* graph, bool include_quantiza
         }
     }
     uint64_t node_size = 0;
-    if (!reader->ReadPod(&node_size) || node_size > std::numeric_limits<size_t>::max()) {
+    if (!reader->ReadPod(&node_size) || !reader->CanReadCollection(node_size, 48)) {
         return false;
     }
     graph->nodes.resize(static_cast<size_t>(node_size));
@@ -449,9 +420,10 @@ bool ModelWriter::Save(const std::string& path, const ModelDesc& model,
             if (it == weights.end() || it->second == nullptr || !it->second->IsInitialized()) {
                 return false;
             }
-            auto expected_size = TensorByteSize(value.tensor);
+            size_t expected_size = 0;
+            if (!CheckedTensorBytes(value.tensor.dims, value.tensor.data_type, &expected_size)) return false;
             auto actual_size = static_cast<uint64_t>(it->second->memory_size());
-            if (expected_size != 0 && expected_size != actual_size) {
+            if (expected_size != actual_size) {
                 return false;
             }
             value.weight.tensor_name = value.tensor.name;
@@ -500,33 +472,41 @@ bool ModelWriter::Save(const std::string& path, const ModelDesc& model,
 }
 
 bool ModelLoader::Load(const std::string& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in.good()) {
-        return false;
-    }
+    try {
+        std::ifstream in(path, std::ios::binary | std::ios::ate);
+        if (!in.good()) return false;
+        const auto length = in.tellg();
+        if (length < static_cast<std::streamoff>(sizeof(FileHeader))) return false;
+        in.seekg(0);
+        FileHeader header {};
+        in.read(reinterpret_cast<char*>(&header), sizeof(header));
+        if (!in.good() || std::memcmp(header.magic, kMagic, sizeof(kMagic)) != 0 ||
+            header.version < 1 || header.version > kFormatVersion ||
+            header.metadata_size > kMaxMetadataBytes ||
+            header.metadata_size > static_cast<uint64_t>(length) - sizeof(header)) return false;
 
-    FileHeader header {};
-    in.read(reinterpret_cast<char*>(&header), sizeof(header));
-    if (!in.good() || std::memcmp(header.magic, kMagic, sizeof(kMagic)) != 0 ||
-        (header.version < 1 || header.version > kFormatVersion) ||
-        header.metadata_size > std::numeric_limits<size_t>::max()) {
-        return false;
-    }
-
-    std::vector<char> metadata(static_cast<size_t>(header.metadata_size));
-    in.read(metadata.data(), metadata.size());
-    if (!in.good() ||
-        !DeserializeModel(metadata.data(), metadata.size(), &model_, header.version >= 2, header.version >= 3)) {
-        return false;
-    }
-
-    path_ = path;
-    for (auto& value : model_.graph.values) {
-        if (value.constant) {
-            value.weight.shard_path = path_;
+        std::vector<char> metadata(static_cast<size_t>(header.metadata_size));
+        in.read(metadata.data(), metadata.size());
+        ModelDesc parsed;
+        if (!in.good() || !DeserializeModel(metadata.data(), metadata.size(), &parsed,
+                                            header.version >= 2, header.version >= 3)) return false;
+        WeightStore new_store;
+        if (!new_store.AddShard(path)) return false;
+        for (auto& value : parsed.graph.values) {
+            if (!value.constant) continue;
+            value.weight.shard_path = path;
+            if (value.weight.offset < sizeof(header) + header.metadata_size ||
+                new_store.CreateTensorView(value.tensor, value.weight) == nullptr) return false;
         }
+        path_ = path;
+        model_ = std::move(parsed);
+        weight_store_ = std::move(new_store);
+        return true;
+    } catch (const std::bad_alloc&) {
+        return false;
+    } catch (const std::length_error&) {
+        return false;
     }
-    return weight_store_.AddShard(path_);
 }
 
 std::shared_ptr<Tensor> ModelLoader::CreateWeightTensor(const std::string& tensor_name) {

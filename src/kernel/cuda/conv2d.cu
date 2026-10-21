@@ -584,17 +584,17 @@ int RunConv2D(const void* kernel_identity, feather::operators::Conv2dParam* para
 
 template <>
 int32_t Conv2DKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunConv2D<DataType::FP32>(this, static_cast<feather::operators::Conv2dParam*>(param_), "CUDA::Conv2D::FP32");
+    return RunConv2D<DataType::FP32>(this, ParamAs<feather::operators::Conv2dParam>(), "CUDA::Conv2D::FP32");
 }
 
 template <>
 int32_t Conv2DKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunConv2D<DataType::FP16>(this, static_cast<feather::operators::Conv2dParam*>(param_), "CUDA::Conv2D::FP16");
+    return RunConv2D<DataType::FP16>(this, ParamAs<feather::operators::Conv2dParam>(), "CUDA::Conv2D::FP16");
 }
 
 template <>
 int32_t Conv2DKernel<DeviceType::CUDA, DataType::BF16>::compute() {
-    return RunConv2D<DataType::BF16>(this, static_cast<feather::operators::Conv2dParam*>(param_), "CUDA::Conv2D::BF16");
+    return RunConv2D<DataType::BF16>(this, ParamAs<feather::operators::Conv2dParam>(), "CUDA::Conv2D::BF16");
 }
 
 void EnsureCudaConv2DKernelsRegistered() { (void)g_cuda_conv2d_kernels_registered; }

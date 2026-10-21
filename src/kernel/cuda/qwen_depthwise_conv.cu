@@ -68,7 +68,7 @@ __global__ void QwenDepthwiseConvStateKernelCuda(const BFloat16* state, const BF
 template <>
 int32_t QwenDepthwiseConvStateKernel<DeviceType::CUDA, DataType::BF16>::compute() {
     AutoTimer timer("CUDA::QwenDepthwiseConvState::BF16");
-    auto* param = static_cast<operators::QwenDepthwiseConvStateParam*>(param_);
+    auto* param = ParamAs<operators::QwenDepthwiseConvStateParam>();
     int64_t channels = 0;
     if (!Validate(param, &channels)) {
         return -1;

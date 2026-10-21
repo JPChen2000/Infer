@@ -79,31 +79,31 @@ int32_t ComputeConstantOfShape(feather::operators::ConstantOfShapeParam* param) 
 template <>
 int32_t ConstantOfShapeKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::ConstantOfShape::FP32");
-    return ComputeConstantOfShape<DataType::FP32>(static_cast<feather::operators::ConstantOfShapeParam*>(param_));
+    return ComputeConstantOfShape<DataType::FP32>(ParamAs<feather::operators::ConstantOfShapeParam>());
 }
 
 template <>
 int32_t ConstantOfShapeKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::ConstantOfShape::FP16");
-    return ComputeConstantOfShape<DataType::FP16>(static_cast<feather::operators::ConstantOfShapeParam*>(param_));
+    return ComputeConstantOfShape<DataType::FP16>(ParamAs<feather::operators::ConstantOfShapeParam>());
 }
 
 template <>
 int32_t ConstantOfShapeKernel<DeviceType::COMMON, DataType::INT32>::compute() {
     AutoTimer timer("Common::ConstantOfShape::INT32");
-    return ComputeConstantOfShape<DataType::INT32>(static_cast<feather::operators::ConstantOfShapeParam*>(param_));
+    return ComputeConstantOfShape<DataType::INT32>(ParamAs<feather::operators::ConstantOfShapeParam>());
 }
 
 template <>
 int32_t ConstantOfShapeKernel<DeviceType::COMMON, DataType::INT64>::compute() {
     AutoTimer timer("Common::ConstantOfShape::INT64");
-    return ComputeConstantOfShape<DataType::INT64>(static_cast<feather::operators::ConstantOfShapeParam*>(param_));
+    return ComputeConstantOfShape<DataType::INT64>(ParamAs<feather::operators::ConstantOfShapeParam>());
 }
 
 template <>
 int32_t ConstantOfShapeKernel<DeviceType::COMMON, DataType::BOOL>::compute() {
     AutoTimer timer("Common::ConstantOfShape::BOOL");
-    return ComputeConstantOfShape<DataType::BOOL>(static_cast<feather::operators::ConstantOfShapeParam*>(param_));
+    return ComputeConstantOfShape<DataType::BOOL>(ParamAs<feather::operators::ConstantOfShapeParam>());
 }
 
 void EnsureCommonConstantOfShapeKernelsRegistered() { (void)g_common_constant_of_shape_kernels_registered; }

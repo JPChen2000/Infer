@@ -147,28 +147,16 @@ int32_t Compute(operators::QwenRmsNormParam* param) {
 template <>
 int32_t QwenRmsNormKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::QwenRmsNorm::FP32");
-    return Compute<DataType::FP32>(static_cast<operators::QwenRmsNormParam*>(param_));
+    return Compute<DataType::FP32>(ParamAs<operators::QwenRmsNormParam>());
 }
 
 template <>
 int32_t QwenRmsNormKernel<DeviceType::X86, DataType::BF16>::compute() {
     AutoTimer timer("X86::QwenRmsNorm::BF16");
-    return Compute<DataType::BF16>(static_cast<operators::QwenRmsNormParam*>(param_));
+    return Compute<DataType::BF16>(ParamAs<operators::QwenRmsNormParam>());
 }
 
-void EnsureX86QwenRmsNormKernelsRegistered() {
-    static bool registered = []() {
-        auto& dispatcher = KernelDispatcher::instance();
-        dispatcher.registerKernel(DeviceType::X86, DataType::FP32, "QwenRmsNorm", []() {
-            return std::make_unique<QwenRmsNormKernel<DeviceType::X86, DataType::FP32>>();
-        });
-        dispatcher.registerKernel(DeviceType::X86, DataType::BF16, "QwenRmsNorm", []() {
-            return std::make_unique<QwenRmsNormKernel<DeviceType::X86, DataType::BF16>>();
-        });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

@@ -62,7 +62,7 @@ bool ValidateCombined(const operators::QwenGatedDeltaParam* p, int64_t* heads, i
 template <>
 int32_t QwenGatedDeltaStateKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::QwenGatedDeltaState::FP32");
-    auto* p = static_cast<operators::QwenGatedDeltaStateParam*>(param_);
+    auto* p = ParamAs<operators::QwenGatedDeltaStateParam>();
     int64_t heads = 0, key = 0, value = 0;
     if (!ValidateState(p, &heads, &key, &value)) return -1;
     const float* state = p->state->data<float>();
@@ -93,7 +93,7 @@ int32_t QwenGatedDeltaStateKernel<DeviceType::COMMON, DataType::FP32>::compute()
 template <>
 int32_t QwenGatedDeltaOutputKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::QwenGatedDeltaOutput::FP32");
-    auto* p = static_cast<operators::QwenGatedDeltaOutputParam*>(param_);
+    auto* p = ParamAs<operators::QwenGatedDeltaOutputParam>();
     if (p == nullptr || p->state == nullptr || p->q == nullptr || p->out == nullptr ||
         p->state->data_type() != DataType::FP32 || p->q->data_type() != DataType::FP32 ||
         p->out->data_type() != DataType::FP32 || p->state->dims().size() != 4 || p->q->numel() != p->state->dims()[1] * p->state->dims()[2]) return -1;
@@ -112,7 +112,7 @@ int32_t QwenGatedDeltaOutputKernel<DeviceType::COMMON, DataType::FP32>::compute(
 template <>
 int32_t QwenGatedDeltaKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::QwenGatedDelta::FP32");
-    auto* p = static_cast<operators::QwenGatedDeltaParam*>(param_);
+    auto* p = ParamAs<operators::QwenGatedDeltaParam>();
     int64_t heads = 0, key = 0, value = 0;
     if (!ValidateCombined(p, &heads, &key, &value)) return -1;
 

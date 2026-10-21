@@ -89,17 +89,17 @@ int RunConcat(feather::operators::ConcatParam* param, const char* timer_name) {
 
 template <>
 int32_t ConcatKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunConcat<DataType::FP32>(static_cast<feather::operators::ConcatParam*>(param_), "CUDA::Concat::FP32");
+    return RunConcat<DataType::FP32>(ParamAs<feather::operators::ConcatParam>(), "CUDA::Concat::FP32");
 }
 
 template <>
 int32_t ConcatKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunConcat<DataType::FP16>(static_cast<feather::operators::ConcatParam*>(param_), "CUDA::Concat::FP16");
+    return RunConcat<DataType::FP16>(ParamAs<feather::operators::ConcatParam>(), "CUDA::Concat::FP16");
 }
 
 template <>
 int32_t ConcatKernel<DeviceType::CUDA, DataType::BF16>::compute() {
-    return RunConcat<DataType::BF16>(static_cast<feather::operators::ConcatParam*>(param_), "CUDA::Concat::BF16");
+    return RunConcat<DataType::BF16>(ParamAs<feather::operators::ConcatParam>(), "CUDA::Concat::BF16");
 }
 
 void EnsureCudaConcatKernelsRegistered() { (void)g_cuda_concat_kernels_registered; }

@@ -1331,7 +1331,7 @@ int32_t ComputeConv2DFallback(feather::operators::Conv2dParam* param) {
 template <>
 int32_t Conv2DKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::Conv2D::FP32");
-    auto* param = static_cast<feather::operators::Conv2dParam*>(param_);
+    auto* param = ParamAs<feather::operators::Conv2dParam>();
     if (param == nullptr || param->input == nullptr || param->w == nullptr || param->out == nullptr) {
         return -1;
     }
@@ -1539,7 +1539,7 @@ int32_t Conv2DKernel<DeviceType::X86, DataType::FP32>::compute() {
 template <>
 int32_t Conv2DKernel<DeviceType::X86, DataType::FP16>::compute() {
     AutoTimer timer("X86::Conv2D::FP16");
-    auto* param = static_cast<feather::operators::Conv2dParam*>(param_);
+    auto* param = ParamAs<feather::operators::Conv2dParam>();
     if (param == nullptr) {
         return -1;
     }
@@ -1762,7 +1762,7 @@ int32_t Conv2DKernel<DeviceType::X86, DataType::FP16>::compute() {
 template <>
 int32_t Conv2DKernel<DeviceType::X86, DataType::BF16>::compute() {
     AutoTimer timer("X86::Conv2D::BF16");
-    auto* param = static_cast<feather::operators::Conv2dParam*>(param_);
+    auto* param = ParamAs<feather::operators::Conv2dParam>();
     if (param == nullptr || param->input == nullptr || param->w == nullptr || param->out == nullptr) {
         return -1;
     }
@@ -1774,21 +1774,7 @@ int32_t Conv2DKernel<DeviceType::X86, DataType::BF16>::compute() {
     return ComputeConv2DFallback<DataType::BF16>(param);
 }
 
-void EnsureX86Conv2DKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "Conv2D",
-            []() { return std::make_unique<Conv2DKernel<DeviceType::X86, DataType::FP32>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP16, "Conv2D",
-            []() { return std::make_unique<Conv2DKernel<DeviceType::X86, DataType::FP16>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::BF16, "Conv2D",
-            []() { return std::make_unique<Conv2DKernel<DeviceType::X86, DataType::BF16>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

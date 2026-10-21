@@ -10,10 +10,15 @@
 #include <vector>
 
 #include "core/status.h"
+#include "core/backend.h"
 #include "core/kernel.h"
 #include "util/thread_pool_nv.h"
 
 namespace feather {
+
+#ifdef FEATHER_WITH_CUDA
+namespace kernel { namespace cuda_detail { class CudaExecutionContext; } }
+#endif
 
 using ValueId = uint32_t;
 constexpr ValueId kInvalidValueId = static_cast<ValueId>(-1);
@@ -53,11 +58,21 @@ struct RuntimeNode {
 class RuntimeGraph {
    public:
     RuntimeGraph();
+    explicit RuntimeGraph(std::unique_ptr<BackendContext> backend);
+    ~RuntimeGraph();
+#ifdef FEATHER_WITH_CUDA
+    const std::shared_ptr<kernel::cuda_detail::CudaExecutionContext>& CudaContext() const { return backend_->CudaContext(); }
+#endif
 
+    bool UsesMemoryPlan() const { return uses_memory_plan_; }
+    BackendContext& Backend() const { return *backend_; }
+    const RuntimeNode* GetProducerNode(const std::string& value_name) const;
     int32_t Check() const;
     Status CheckStatus() const;
     int32_t Run();
     Status RunStatus();
+    // After Finalize, only compatible external inputs can be rebound. Their
+    // Tensor identity stays stable because compiled kernels retain that object.
     int32_t SetTensor(const std::string& name, std::shared_ptr<Tensor> tensor);
     std::shared_ptr<Tensor> GetTensor(const std::string& name) const;
     const RuntimeNode* GetNode(const std::string& name) const;
@@ -66,7 +81,7 @@ class RuntimeGraph {
     void SetProfilingEnabled(bool enabled);
     void RecordNodeProfile(const std::string& node_name, const std::string& op_type, double elapsed_ms);
     RuntimeThreadMode ThreadMode() const { return thread_mode_; }
-    void SetThreadMode(RuntimeThreadMode mode) { thread_mode_ = mode; }
+    void SetThreadMode(RuntimeThreadMode mode);
     size_t ThreadCount() const { return configured_thread_count_; }
     void SetThreadCount(size_t count);
     void SetOutputNames(std::vector<std::string> output_names);
@@ -81,6 +96,7 @@ class RuntimeGraph {
     size_t WorkerCount() const;
 
    private:
+    friend class CompiledGraph;
     int32_t BuildDependencies();
     void ResetPendingDependencies();
     int32_t RunSerial();
@@ -108,6 +124,24 @@ class RuntimeGraph {
     mutable std::mutex profile_mutex_;
     RuntimeThreadMode thread_mode_{RuntimeThreadMode::kParallelGraph};
     size_t configured_thread_count_{1};
+    bool finalized_{false};
+    bool uses_memory_plan_{false};
+    bool structure_locked_{false};
+    struct TensorContract {
+        std::string name;
+        std::shared_ptr<Tensor> tensor;
+        std::shared_ptr<const Tensor> descriptor;
+        size_t bytes;
+        bool fixed_quantization;
+    };
+    std::vector<TensorContract> contracts_;
+    std::unique_ptr<BackendContext> backend_;
+    Status execution_status_;
+    mutable std::mutex error_mutex_;
+    mutable std::mutex uses_mutex_;
+#ifdef FEATHER_WITH_CUDA
+
+#endif
 };
 
 }  // namespace feather

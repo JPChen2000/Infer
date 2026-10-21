@@ -42,19 +42,19 @@ int32_t ComputeIdentityKernel(feather::operators::UnaryParam* param) {
 template <>
 int32_t IdentityKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Identity::FP32");
-    return ComputeIdentityKernel<DataType::FP32>(static_cast<feather::operators::UnaryParam*>(param_));
+    return ComputeIdentityKernel<DataType::FP32>(ParamAs<feather::operators::UnaryParam>());
 }
 
 template <>
 int32_t IdentityKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Identity::FP16");
-    return ComputeIdentityKernel<DataType::FP16>(static_cast<feather::operators::UnaryParam*>(param_));
+    return ComputeIdentityKernel<DataType::FP16>(ParamAs<feather::operators::UnaryParam>());
 }
 
 template <>
 int32_t IdentityKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Identity::BF16");
-    return ComputeIdentityKernel<DataType::BF16>(static_cast<feather::operators::UnaryParam*>(param_));
+    return ComputeIdentityKernel<DataType::BF16>(ParamAs<feather::operators::UnaryParam>());
 }
 
 typedef feather::kernel::IdentityKernel<DeviceType::COMMON, DataType::FP32> IdentityCommonFP32Kernel;

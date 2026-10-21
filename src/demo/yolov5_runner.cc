@@ -221,6 +221,9 @@ DataLayout ResolveInputLayout(DataLayout model_layout, Yolov5LayoutOverride over
 
 int32_t Yolov5Runner::RunOnImage(const std::string& image_path, const ImageData& image, float conf_thresh,
                                  float iou_thresh, std::vector<Detection>* detections, bool record_summary) {
+#ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
+#endif
     if (detections == nullptr) {
         return -1;
     }
@@ -229,7 +232,7 @@ int32_t Yolov5Runner::RunOnImage(const std::string& image_path, const ImageData&
 
     LetterboxInfo letterbox;
     const auto preprocess_begin = std::chrono::steady_clock::now();
-    auto runtime_input = runtime_graph_.GetTensor(input_name_);
+    auto runtime_input = Runtime().GetTensor(input_name_);
     if (runtime_input == nullptr) {
         return -1;
     }
@@ -255,18 +258,18 @@ int32_t Yolov5Runner::RunOnImage(const std::string& image_path, const ImageData&
 #ifdef FEATHER_WITH_CUDA
     if (backend_device_ == DeviceType::CUDA) {
         kernel::cuda_detail::DeferredHostSyncScope deferred_host_sync;
-        run_status = runtime_graph_.Run();
+        run_status = Runtime().Run();
     } else
 #endif
     {
-        run_status = runtime_graph_.Run();
+        run_status = Runtime().Run();
     }
     if (run_status != 0) {
         return -1;
     }
     const auto rungraph_end = std::chrono::steady_clock::now();
 
-    auto output_tensor = runtime_graph_.GetTensor(output_name_);
+    auto output_tensor = Runtime().GetTensor(output_name_);
     if (output_tensor == nullptr) {
         return -1;
     }
@@ -312,7 +315,7 @@ int32_t Yolov5Runner::RunOnImage(const std::string& image_path, const ImageData&
         build_ss << "]"
                  << " input_dtype=" << static_cast<int>(input_dtype_)
                  << " static_nodes=" << static_graph_.NodeSize()
-                 << " runtime_nodes=" << runtime_graph_.NodeSize();
+                 << " runtime_nodes=" << Runtime().NodeSize();
         last_build_summary_ = build_ss.str();
 
         std::ostringstream run_ss;
@@ -345,6 +348,9 @@ int32_t Yolov5Runner::RunOnImage(const std::string& image_path, const ImageData&
 
 int32_t Yolov5Runner::RunPreparedImage(const ImageData& image, float conf_thresh, float iou_thresh,
                                        std::vector<Detection>* detections) {
+#ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
+#endif
     if (detections == nullptr || input_name_.empty() || output_name_.empty()) {
         return -1;
     }
@@ -352,21 +358,25 @@ int32_t Yolov5Runner::RunPreparedImage(const ImageData& image, float conf_thresh
 }
 
 int32_t Yolov5Runner::PrepareExecutableGraph() {
-    if (static_graph_.Build() != 0) {
-        return -1;
-    }
-    if (static_graph_.ApplyPasses() != 0) {
-        return -1;
-    }
-    runtime_graph_.Clear();
-    if (lowering_.Lower(static_graph_, &runtime_graph_) != 0) {
-        return -1;
-    }
+    if (static_graph_.Build() != 0 || static_graph_.ApplyPasses() != 0) return -1;
+    std::shared_ptr<const CompiledGraph> compiled;
+    auto status = CompiledGraph::Compile(static_graph_, &compiled);
+    if (!status.ok()) return -1;
+    std::unique_ptr<ExecutionSession> session;
+    SessionOptions options;
+    status = compiled->CreateSession(&session, options);
+    if (!status.ok()) return -1;
+    session->runtime().SetProfilingEnabled(Runtime().ProfilingEnabled());
+    compiled_graph_ = std::move(compiled);
+    session_ = std::move(session);
     return 0;
 }
 
 int32_t Yolov5Runner::Load(const std::string& model_path, Yolov5Backend backend,
                           Yolov5LayoutOverride layout_override) {
+#ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
+#endif
     backend_ = backend;
     layout_override_ = layout_override;
 #ifndef FEATHER_WITH_CUDA
@@ -411,7 +421,9 @@ int32_t Yolov5Runner::Load(const std::string& model_path, Yolov5Backend backend,
 
     static_graph_ = StaticGraph();
     static_graph_.SetKernelDevice(backend_device_);
-    runtime_graph_.Clear();
+    session_.reset();
+    compiled_graph_.reset();
+    Runtime().Clear();
     if (static_graph_.SetModel(model) != 0) {
         return -1;
     }
@@ -451,8 +463,9 @@ int32_t Yolov5Runner::Load(const std::string& model_path, Yolov5Backend backend,
     }
 #ifdef FEATHER_WITH_CUDA
     if (backend_device_ == DeviceType::CUDA) {
-        if (PrimeConstantTensorDevices(model, &runtime_graph_) != 0 ||
-            WarmupRuntimeGraph(&runtime_graph_, output_name_) != 0) {
+        kernel::cuda_detail::ExecutionContextScope session_scope(Runtime().CudaContext());
+        if (PrimeConstantTensorDevices(model, &Runtime()) != 0 ||
+            WarmupRuntimeGraph(&Runtime(), output_name_) != 0) {
             return -1;
         }
     }
@@ -475,7 +488,7 @@ int32_t Yolov5Runner::Load(const std::string& model_path, Yolov5Backend backend,
        << " input_layout=" << DataLayoutName(input_layout_)
        << " input_dtype=" << static_cast<int>(input_dtype_)
        << " static_nodes=" << static_graph_.NodeSize()
-       << " runtime_nodes=" << runtime_graph_.NodeSize()
+       << " runtime_nodes=" << Runtime().NodeSize()
        << " prepare_ms=" << ElapsedMilliseconds(prepare_begin, prepare_end);
     last_build_summary_ = ss.str();
     return 0;
@@ -483,6 +496,9 @@ int32_t Yolov5Runner::Load(const std::string& model_path, Yolov5Backend backend,
 
 int32_t Yolov5Runner::Run(const std::string& image_path, float conf_thresh, float iou_thresh,
                           std::vector<Detection>* detections) {
+#ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
+#endif
     if (detections == nullptr || input_name_.empty() || output_name_.empty()) {
         return -1;
     }

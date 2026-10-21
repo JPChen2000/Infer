@@ -39,19 +39,19 @@ int32_t RunUnsqueeze(feather::operators::AxesParam* param, const char* timer_nam
 
 template <>
 int32_t UnsqueezeKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunUnsqueeze<DataType::FP32>(static_cast<feather::operators::AxesParam*>(param_),
+    return RunUnsqueeze<DataType::FP32>(ParamAs<feather::operators::AxesParam>(),
                                         "CUDA::Unsqueeze::FP32");
 }
 
 template <>
 int32_t UnsqueezeKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunUnsqueeze<DataType::FP16>(static_cast<feather::operators::AxesParam*>(param_),
+    return RunUnsqueeze<DataType::FP16>(ParamAs<feather::operators::AxesParam>(),
                                         "CUDA::Unsqueeze::FP16");
 }
 
 template <>
 int32_t UnsqueezeKernel<DeviceType::CUDA, DataType::BF16>::compute() {
-    return RunUnsqueeze<DataType::BF16>(static_cast<feather::operators::AxesParam*>(param_),
+    return RunUnsqueeze<DataType::BF16>(ParamAs<feather::operators::AxesParam>(),
                                         "CUDA::Unsqueeze::BF16");
 }
 

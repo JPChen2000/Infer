@@ -1089,11 +1089,11 @@ inline int32_t RunConstantOfShape(operators::ConstantOfShapeParam* param) {
 
 #define CUDA_UNARY(KERNEL, OP) \
     template <> int32_t KERNEL<DeviceType::CUDA, DataType::INT8>::compute() { \
-        return RunUnary(static_cast<operators::UnaryParam*>(param_), OP, "CUDA::" #KERNEL "::INT8"); \
+        return RunUnary(ParamAs<operators::UnaryParam>(), OP, "CUDA::" #KERNEL "::INT8"); \
     }
 #define CUDA_BINARY(KERNEL, OP) \
     template <> int32_t KERNEL<DeviceType::CUDA, DataType::INT8>::compute() { \
-        return RunBinary(static_cast<operators::BinaryParam*>(param_), OP, "CUDA::" #KERNEL "::INT8"); \
+        return RunBinary(ParamAs<operators::BinaryParam>(), OP, "CUDA::" #KERNEL "::INT8"); \
     }
 
 CUDA_UNARY(ReluKernel, 0)
@@ -1112,30 +1112,30 @@ CUDA_BINARY(SubKernel, 1)
 CUDA_BINARY(MulKernel, 2)
 CUDA_BINARY(DivKernel, 3)
 
-template <> int32_t PowKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunPow(static_cast<operators::PowParam*>(param_)); }
-template <> int32_t BatchNormalizationKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunBatchNorm(static_cast<operators::BatchNormParam*>(param_)); }
-template <> int32_t AvgPoolKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunPool(static_cast<operators::PoolParam*>(param_), false, "CUDA::AvgPoolKernel::INT8"); }
-template <> int32_t MaxPoolKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunPool(static_cast<operators::PoolParam*>(param_), true, "CUDA::MaxPoolKernel::INT8"); }
-template <> int32_t GlobalAveragePoolKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunGlobalAveragePool(static_cast<operators::GlobalAveragePoolParam*>(param_)); }
-template <> int32_t ReduceSumKernel<DeviceType::CUDA, DataType::INT8>::compute() { auto* p = static_cast<operators::ReduceSumParam*>(param_); return p == nullptr ? -1 : RunReduce(p->input.get(), p->out.get(), p->axes, p->keepdims, false, "CUDA::ReduceSumKernel::INT8"); }
-template <> int32_t ReduceMeanKernel<DeviceType::CUDA, DataType::INT8>::compute() { auto* p = static_cast<operators::ReduceMeanParam*>(param_); return p == nullptr ? -1 : RunReduce(p->input.get(), p->out.get(), p->axes, p->keepdims, true, "CUDA::ReduceMeanKernel::INT8"); }
-template <> int32_t IdentityKernel<DeviceType::CUDA, DataType::INT8>::compute() { auto* p = static_cast<operators::UnaryParam*>(param_); return p == nullptr ? -1 : RunCopy(p->input.get(), p->out.get(), "CUDA::IdentityKernel::INT8"); }
-template <> int32_t ReshapeKernel<DeviceType::CUDA, DataType::INT8>::compute() { auto* p = static_cast<operators::ReshapeParam*>(param_); return p == nullptr ? -1 : RunCopy(p->input.get(), p->out.get(), "CUDA::ReshapeKernel::INT8"); }
-template <> int32_t FlattenKernel<DeviceType::CUDA, DataType::INT8>::compute() { auto* p = static_cast<operators::FlattenParam*>(param_); return p == nullptr ? -1 : RunCopy(p->input.get(), p->out.get(), "CUDA::FlattenKernel::INT8"); }
-template <> int32_t TransposeKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunTranspose(static_cast<operators::TransposeParam*>(param_)); }
-template <> int32_t SqueezeKernel<DeviceType::CUDA, DataType::INT8>::compute() { auto* p = static_cast<operators::AxesParam*>(param_); return p == nullptr ? -1 : RunCopy(p->input.get(), p->out.get(), "CUDA::SqueezeKernel::INT8"); }
-template <> int32_t UnsqueezeKernel<DeviceType::CUDA, DataType::INT8>::compute() { auto* p = static_cast<operators::AxesParam*>(param_); return p == nullptr ? -1 : RunCopy(p->input.get(), p->out.get(), "CUDA::UnsqueezeKernel::INT8"); }
-template <> int32_t SliceKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunSlice(static_cast<operators::SliceParam*>(param_)); }
-template <> int32_t SplitKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunSplit(static_cast<operators::SplitParam*>(param_)); }
-template <> int32_t ConcatKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunConcat(static_cast<operators::ConcatParam*>(param_)); }
-template <> int32_t ExpandKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunExpand(static_cast<operators::ExpandParam*>(param_)); }
-template <> int32_t GatherKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunGather(static_cast<operators::GatherParam*>(param_)); }
-template <> int32_t WhereKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunWhere(static_cast<operators::WhereParam*>(param_)); }
-template <> int32_t ResizeKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunResize(static_cast<operators::ResizeParam*>(param_)); }
-template <> int32_t SoftmaxKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunSoftmax(static_cast<operators::SoftmaxParam*>(param_)); }
-template <> int32_t EqualKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunEqual(static_cast<operators::EqualParam*>(param_)); }
-template <> int32_t CastKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunCast(static_cast<operators::CastParam*>(param_)); }
-template <> int32_t ConstantOfShapeKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunConstantOfShape(static_cast<operators::ConstantOfShapeParam*>(param_)); }
+template <> int32_t PowKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunPow(ParamAs<operators::PowParam>()); }
+template <> int32_t BatchNormalizationKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunBatchNorm(ParamAs<operators::BatchNormParam>()); }
+template <> int32_t AvgPoolKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunPool(ParamAs<operators::PoolParam>(), false, "CUDA::AvgPoolKernel::INT8"); }
+template <> int32_t MaxPoolKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunPool(ParamAs<operators::PoolParam>(), true, "CUDA::MaxPoolKernel::INT8"); }
+template <> int32_t GlobalAveragePoolKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunGlobalAveragePool(ParamAs<operators::GlobalAveragePoolParam>()); }
+template <> int32_t ReduceSumKernel<DeviceType::CUDA, DataType::INT8>::compute() { auto* p = ParamAs<operators::ReduceSumParam>(); return p == nullptr ? -1 : RunReduce(p->input.get(), p->out.get(), p->axes, p->keepdims, false, "CUDA::ReduceSumKernel::INT8"); }
+template <> int32_t ReduceMeanKernel<DeviceType::CUDA, DataType::INT8>::compute() { auto* p = ParamAs<operators::ReduceMeanParam>(); return p == nullptr ? -1 : RunReduce(p->input.get(), p->out.get(), p->axes, p->keepdims, true, "CUDA::ReduceMeanKernel::INT8"); }
+template <> int32_t IdentityKernel<DeviceType::CUDA, DataType::INT8>::compute() { auto* p = ParamAs<operators::UnaryParam>(); return p == nullptr ? -1 : RunCopy(p->input.get(), p->out.get(), "CUDA::IdentityKernel::INT8"); }
+template <> int32_t ReshapeKernel<DeviceType::CUDA, DataType::INT8>::compute() { auto* p = ParamAs<operators::ReshapeParam>(); return p == nullptr ? -1 : RunCopy(p->input.get(), p->out.get(), "CUDA::ReshapeKernel::INT8"); }
+template <> int32_t FlattenKernel<DeviceType::CUDA, DataType::INT8>::compute() { auto* p = ParamAs<operators::FlattenParam>(); return p == nullptr ? -1 : RunCopy(p->input.get(), p->out.get(), "CUDA::FlattenKernel::INT8"); }
+template <> int32_t TransposeKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunTranspose(ParamAs<operators::TransposeParam>()); }
+template <> int32_t SqueezeKernel<DeviceType::CUDA, DataType::INT8>::compute() { auto* p = ParamAs<operators::AxesParam>(); return p == nullptr ? -1 : RunCopy(p->input.get(), p->out.get(), "CUDA::SqueezeKernel::INT8"); }
+template <> int32_t UnsqueezeKernel<DeviceType::CUDA, DataType::INT8>::compute() { auto* p = ParamAs<operators::AxesParam>(); return p == nullptr ? -1 : RunCopy(p->input.get(), p->out.get(), "CUDA::UnsqueezeKernel::INT8"); }
+template <> int32_t SliceKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunSlice(ParamAs<operators::SliceParam>()); }
+template <> int32_t SplitKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunSplit(ParamAs<operators::SplitParam>()); }
+template <> int32_t ConcatKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunConcat(ParamAs<operators::ConcatParam>()); }
+template <> int32_t ExpandKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunExpand(ParamAs<operators::ExpandParam>()); }
+template <> int32_t GatherKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunGather(ParamAs<operators::GatherParam>()); }
+template <> int32_t WhereKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunWhere(ParamAs<operators::WhereParam>()); }
+template <> int32_t ResizeKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunResize(ParamAs<operators::ResizeParam>()); }
+template <> int32_t SoftmaxKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunSoftmax(ParamAs<operators::SoftmaxParam>()); }
+template <> int32_t EqualKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunEqual(ParamAs<operators::EqualParam>()); }
+template <> int32_t CastKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunCast(ParamAs<operators::CastParam>()); }
+template <> int32_t ConstantOfShapeKernel<DeviceType::CUDA, DataType::INT8>::compute() { return RunConstantOfShape(ParamAs<operators::ConstantOfShapeParam>()); }
 
 #undef CUDA_UNARY
 #undef CUDA_BINARY

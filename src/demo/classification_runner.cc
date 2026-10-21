@@ -267,6 +267,9 @@ std::vector<std::string> LoadClassificationLabels(const std::string& path) {
 }
 
 int32_t ClassificationRunner::Load(const std::string& model_path, ClassificationBackend backend) {
+#ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
+#endif
     last_error_.clear();
     backend_ = backend;
 #ifndef FEATHER_WITH_CUDA
@@ -320,8 +323,10 @@ int32_t ClassificationRunner::Load(const std::string& model_path, Classification
     static_graph_ = StaticGraph();
     static_graph_.SetKernelDevice(backend_device_);
     static_graph_.SetPassManager(CreateDefaultPassManager());
-    runtime_graph_.Clear();
-    runtime_graph_.SetThreadMode(RuntimeThreadMode::kSerialGraph);
+    session_.reset();
+    compiled_graph_.reset();
+    Runtime().Clear();
+    Runtime().SetThreadMode(RuntimeThreadMode::kSerialGraph);
     if (static_graph_.SetModel(model) != 0) {
         last_error_ = "failed to set classification model on static graph";
         return -1;
@@ -359,8 +364,9 @@ int32_t ClassificationRunner::Load(const std::string& model_path, Classification
     const auto prepare_end = std::chrono::steady_clock::now();
 #ifdef FEATHER_WITH_CUDA
     if (backend_device_ == DeviceType::CUDA) {
-        if (PrimeConstantTensorDevices(model, &runtime_graph_) != 0 ||
-            WarmupRuntimeGraph(&runtime_graph_, output_name_) != 0) {
+        kernel::cuda_detail::ExecutionContextScope session_scope(Runtime().CudaContext());
+        if (PrimeConstantTensorDevices(model, &Runtime()) != 0 ||
+            WarmupRuntimeGraph(&Runtime(), output_name_) != 0) {
             last_error_ = "CUDA graph warmup failed: " + kernel::cuda_detail::CudaLastErrorMessage();
             return -1;
         }
@@ -376,23 +382,32 @@ int32_t ClassificationRunner::Load(const std::string& model_path, Classification
             << " input_layout=" << (IsChannelLastLayout(input_layout_) ? "nhwc" : "nchw")
             << " input_dtype=" << static_cast<int>(input_dtype_)
             << " static_nodes=" << static_graph_.NodeSize()
-            << " runtime_nodes=" << runtime_graph_.NodeSize()
+            << " runtime_nodes=" << Runtime().NodeSize()
             << " prepare_ms=" << ElapsedMilliseconds(prepare_begin, prepare_end);
     last_build_summary_ = summary.str();
     return 0;
 }
 
 int32_t ClassificationRunner::PrepareExecutableGraph() {
-    if (static_graph_.Build() != 0 || static_graph_.ApplyPasses() != 0) {
-        return -1;
-    }
-    runtime_graph_.Clear();
-    runtime_graph_.SetThreadMode(RuntimeThreadMode::kSerialGraph);
-    return lowering_.Lower(static_graph_, &runtime_graph_);
+    if (static_graph_.Build() != 0 || static_graph_.ApplyPasses() != 0) return -1;
+    std::shared_ptr<const CompiledGraph> compiled;
+    auto status = CompiledGraph::Compile(static_graph_, &compiled);
+    if (!status.ok()) { last_error_ = status.message(); return -1; }
+    std::unique_ptr<ExecutionSession> session;
+    SessionOptions options;
+    status = compiled->CreateSession(&session, options);
+    if (!status.ok()) { last_error_ = status.message(); return -1; }
+    session->runtime().SetProfilingEnabled(Runtime().ProfilingEnabled());
+    compiled_graph_ = std::move(compiled);
+    session_ = std::move(session);
+    return 0;
 }
 
 int32_t ClassificationRunner::Run(const std::string& image_path, const ImageNetPreprocessConfig& config, int top_k,
                                    std::vector<ClassificationResult>* results) {
+#ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
+#endif
     last_error_.clear();
     if (results == nullptr || input_name_.empty() || output_name_.empty()) {
         last_error_ = "classification runner is not loaded or results is null";
@@ -415,6 +430,9 @@ int32_t ClassificationRunner::Run(const std::string& image_path, const ImageNetP
 
 int32_t ClassificationRunner::RunPreparedImage(const ImageData& image, const ImageNetPreprocessConfig& config, int top_k,
                                                 std::vector<ClassificationResult>* results) {
+#ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
+#endif
     last_error_.clear();
     if (results == nullptr || input_name_.empty() || output_name_.empty()) {
         last_error_ = "classification runner is not loaded or results is null";
@@ -426,12 +444,15 @@ int32_t ClassificationRunner::RunPreparedImage(const ImageData& image, const Ima
 int32_t ClassificationRunner::RunOnImage(const std::string& image_path, const ImageData& image,
                                           const ImageNetPreprocessConfig& config, int top_k,
                                           std::vector<ClassificationResult>* results, bool record_summary) {
+#ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
+#endif
     if (results == nullptr || top_k <= 0 || config.input_size != input_size_ ||
         config.resize_shorter_side < config.input_size) {
         last_error_ = "invalid classification input or preprocessing configuration";
         return -1;
     }
-    auto input_tensor = runtime_graph_.GetTensor(input_name_);
+    auto input_tensor = Runtime().GetTensor(input_name_);
     if (input_tensor == nullptr) {
         last_error_ = "classification input tensor is missing from runtime graph";
         return -1;
@@ -465,11 +486,11 @@ int32_t ClassificationRunner::RunOnImage(const std::string& image_path, const Im
 #ifdef FEATHER_WITH_CUDA
     if (backend_device_ == DeviceType::CUDA) {
         kernel::cuda_detail::DeferredHostSyncScope deferred_host_sync;
-        run_status = runtime_graph_.Run();
+        run_status = Runtime().Run();
     } else
 #endif
     {
-        run_status = runtime_graph_.Run();
+        run_status = Runtime().Run();
     }
     if (run_status != 0) {
         last_error_ = "classification graph execution failed";
@@ -481,7 +502,7 @@ int32_t ClassificationRunner::RunOnImage(const std::string& image_path, const Im
         return -1;
     }
     const auto run_end = std::chrono::steady_clock::now();
-    auto output = runtime_graph_.GetTensor(output_name_);
+    auto output = Runtime().GetTensor(output_name_);
     if (output == nullptr || (output->dims().size() != 1 && output->dims().size() != 2) ||
         (output->dims().size() == 2 && output->dims()[0] != 1) ||
         (output->data_type() != DataType::FP16 && output->data_type() != DataType::FP32)) {

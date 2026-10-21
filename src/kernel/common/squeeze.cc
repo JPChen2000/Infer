@@ -35,31 +35,31 @@ bool g_common_squeeze_kernels_registered = []() {
 template <>
 int32_t SqueezeKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Squeeze::FP32");
-    return common_tensor_detail::CopyTensor(static_cast<feather::operators::AxesParam*>(param_));
+    return common_tensor_detail::CopyTensor(ParamAs<feather::operators::AxesParam>());
 }
 
 template <>
 int32_t SqueezeKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Squeeze::FP16");
-    return common_tensor_detail::CopyTensor(static_cast<feather::operators::AxesParam*>(param_));
+    return common_tensor_detail::CopyTensor(ParamAs<feather::operators::AxesParam>());
 }
 
 template <>
 int32_t SqueezeKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Squeeze::BF16");
-    return common_tensor_detail::CopyTensor(static_cast<feather::operators::AxesParam*>(param_));
+    return common_tensor_detail::CopyTensor(ParamAs<feather::operators::AxesParam>());
 }
 
 template <>
 int32_t SqueezeKernel<DeviceType::COMMON, DataType::INT64>::compute() {
     AutoTimer timer("Common::Squeeze::INT64");
-    return common_tensor_detail::CopyTensor(static_cast<feather::operators::AxesParam*>(param_));
+    return common_tensor_detail::CopyTensor(ParamAs<feather::operators::AxesParam>());
 }
 
 template <>
 int32_t SqueezeKernel<DeviceType::COMMON, DataType::BOOL>::compute() {
     AutoTimer timer("Common::Squeeze::BOOL");
-    return common_tensor_detail::CopyTensor(static_cast<feather::operators::AxesParam*>(param_));
+    return common_tensor_detail::CopyTensor(ParamAs<feather::operators::AxesParam>());
 }
 
 void EnsureCommonSqueezeKernelsRegistered() { (void)g_common_squeeze_kernels_registered; }

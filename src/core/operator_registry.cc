@@ -4,6 +4,8 @@ namespace feather {
 
 OperatorRegistry& OperatorRegistry::instance() {
     static OperatorRegistry registry;
+    static std::recursive_mutex initialization_mutex;
+    std::lock_guard<std::recursive_mutex> lock(initialization_mutex);
     static bool initializing = false;
     static bool initialized = false;
     if (!initialized && !initializing) {
@@ -27,6 +29,8 @@ std::shared_ptr<OpBase> OperatorRegistry::Create(const model::NodeDesc& node, Te
     if (it == registry_.end()) {
         return nullptr;
     }
+    KernelDeviceScope device_scope(context.device);
+    KernelSelectionScope selection_scope(context.fallback, &node, context.defer_kernels, context.workspace_limit);
     auto op = it->second(node, tensors, context);
     if (op != nullptr) {
         op->SetExecutionDevice(context.device);

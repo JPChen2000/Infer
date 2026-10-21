@@ -514,7 +514,7 @@ void EnsureCudaInt8KernelsRegistered() {
 
 template <>
 int32_t FcKernel<DeviceType::CUDA, DataType::INT8>::compute() {
-    auto* param = static_cast<feather::operators::FcParam*>(param_);
+    auto* param = ParamAs<feather::operators::FcParam>();
     if (param == nullptr || param->input == nullptr || param->w == nullptr || param->out == nullptr) return -1;
     return RunCudaInt8Linear(param->input.get(), param->w.get(), param->bias, param->out.get(),
                              param->out->dims().data(), false, 1.0f, 1.0f, "CUDA::FC::INT8");
@@ -522,7 +522,7 @@ int32_t FcKernel<DeviceType::CUDA, DataType::INT8>::compute() {
 
 template <>
 int32_t GemmKernel<DeviceType::CUDA, DataType::INT8>::compute() {
-    auto* param = static_cast<feather::operators::GemmParam*>(param_);
+    auto* param = ParamAs<feather::operators::GemmParam>();
     if (param == nullptr || param->a == nullptr || param->b == nullptr || param->out == nullptr) return -1;
     return RunCudaInt8Linear(param->a.get(), param->b.get(), param->bias, param->out.get(), param->out->dims().data(),
                              param->trans_b, param->alpha, param->beta, "CUDA::Gemm::INT8");
@@ -530,12 +530,12 @@ int32_t GemmKernel<DeviceType::CUDA, DataType::INT8>::compute() {
 
 template <>
 int32_t MatMulKernel<DeviceType::CUDA, DataType::INT8>::compute() {
-    return RunCudaInt8MatMul(static_cast<feather::operators::MatMulParam*>(param_));
+    return RunCudaInt8MatMul(ParamAs<feather::operators::MatMulParam>());
 }
 
 template <>
 int32_t Conv2DKernel<DeviceType::CUDA, DataType::INT8>::compute() {
-    return RunCudaInt8Conv2D(static_cast<feather::operators::Conv2dParam*>(param_));
+    return RunCudaInt8Conv2D(ParamAs<feather::operators::Conv2dParam>());
 }
 
 }  // namespace kernel

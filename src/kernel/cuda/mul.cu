@@ -29,19 +29,19 @@ bool g_cuda_mul_kernels_registered = []() {
 
 template <>
 int32_t MulKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return cuda_detail::RunBinary<DataType::FP32, 1>(static_cast<feather::operators::BinaryParam*>(param_),
+    return cuda_detail::RunBinary<DataType::FP32, 1>(ParamAs<feather::operators::BinaryParam>(),
                                                     "CUDA::Mul::FP32");
 }
 
 template <>
 int32_t MulKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return cuda_detail::RunBinary<DataType::FP16, 1>(static_cast<feather::operators::BinaryParam*>(param_),
+    return cuda_detail::RunBinary<DataType::FP16, 1>(ParamAs<feather::operators::BinaryParam>(),
                                                     "CUDA::Mul::FP16");
 }
 
 template <>
 int32_t MulKernel<DeviceType::CUDA, DataType::BF16>::compute() {
-    return cuda_detail::RunBinary<DataType::BF16, 1>(static_cast<feather::operators::BinaryParam*>(param_),
+    return cuda_detail::RunBinary<DataType::BF16, 1>(ParamAs<feather::operators::BinaryParam>(),
                                                      "CUDA::Mul::BF16");
 }
 
@@ -52,12 +52,12 @@ int32_t ComputeCudaFp8Mul(feather::operators::BinaryParam* param) {
 
 template <>
 int32_t MulKernel<DeviceType::CUDA, DataType::FP8E4M3>::compute() {
-    return ComputeCudaFp8Mul<DataType::FP8E4M3>(static_cast<feather::operators::BinaryParam*>(param_));
+    return ComputeCudaFp8Mul<DataType::FP8E4M3>(ParamAs<feather::operators::BinaryParam>());
 }
 
 template <>
 int32_t MulKernel<DeviceType::CUDA, DataType::FP8E5M2>::compute() {
-    return ComputeCudaFp8Mul<DataType::FP8E5M2>(static_cast<feather::operators::BinaryParam*>(param_));
+    return ComputeCudaFp8Mul<DataType::FP8E5M2>(ParamAs<feather::operators::BinaryParam>());
 }
 
 void EnsureCudaMulKernelsRegistered() { (void)g_cuda_mul_kernels_registered; }

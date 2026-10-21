@@ -1,3 +1,4 @@
+#include "test/python_test_utils.h"
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -115,7 +116,7 @@ void RunTinyBertAgainstOnnxRuntime(const std::filesystem::path& onnx_path) {
     const auto token_type_ids_raw_path = std::filesystem::temp_directory_path() / "tiny_random_bert_static_token_type_ids.raw";
     const auto output_ref_path = std::filesystem::temp_directory_path() / "tiny_random_bert_static_ort.raw";
 
-    const std::string convert_command = "/home/jarvis/miniconda3/bin/python3 \"" + convert_script.string() +
+    const std::string convert_command = feather::test::PythonCommand() + " \"" + convert_script.string() +
                                         "\" --input \"" + onnx_path.string() + "\" --output \"" +
                                         fth_path.string() + "\"";
     ASSERT_EQ(std::system(convert_command.c_str()), 0);
@@ -147,7 +148,7 @@ void RunTinyBertAgainstOnnxRuntime(const std::filesystem::path& onnx_path) {
     ASSERT_TRUE(write_raw(attention_mask_raw_path, *attention_mask));
     ASSERT_TRUE(write_raw(token_type_ids_raw_path, *token_type_ids));
 
-    const std::string ref_command = "/home/jarvis/miniconda3/bin/python3 \"" + ref_script.string() +
+    const std::string ref_command = feather::test::PythonCommand() + " \"" + ref_script.string() +
                                     "\" --model \"" + onnx_path.string() + "\" --input-raw \"" +
                                     input_ids_raw_path.string() + "\" --input-raw \"" +
                                     attention_mask_raw_path.string() + "\" --input-raw \"" +
@@ -225,7 +226,7 @@ void RunBertTinySpamAgainstOnnxRuntime(const std::filesystem::path& onnx_path) {
     const auto token_type_ids_raw_path = std::filesystem::temp_directory_path() / "bert_tiny_spam_token_type_ids.raw";
     const auto output_ref_path = std::filesystem::temp_directory_path() / "bert_tiny_spam_ort.raw";
 
-    const std::string convert_command = "/home/jarvis/miniconda3/bin/python3 \"" + convert_script.string() +
+    const std::string convert_command = feather::test::PythonCommand() + " \"" + convert_script.string() +
                                         "\" --input \"" + onnx_path.string() + "\" --output \"" +
                                         fth_path.string() + "\"";
     ASSERT_EQ(std::system(convert_command.c_str()), 0);
@@ -253,7 +254,7 @@ void RunBertTinySpamAgainstOnnxRuntime(const std::filesystem::path& onnx_path) {
     ASSERT_TRUE(write_raw(attention_mask_raw_path, *attention_mask));
     ASSERT_TRUE(write_raw(token_type_ids_raw_path, *token_type_ids));
 
-    const std::string ref_command = "/home/jarvis/miniconda3/bin/python3 \"" + ref_script.string() +
+    const std::string ref_command = feather::test::PythonCommand() + " \"" + ref_script.string() +
                                     "\" --model \"" + onnx_path.string() + "\" --input-raw \"" +
                                     input_ids_raw_path.string() + "\" --input-raw \"" +
                                     attention_mask_raw_path.string() + "\" --input-raw \"" +
@@ -329,7 +330,7 @@ void RunDistilBertSst2AgainstOnnxRuntime(const std::filesystem::path& onnx_path)
     const auto attention_mask_raw_path = std::filesystem::temp_directory_path() / "distilbert_sst2_attention_mask.raw";
     const auto output_ref_path = std::filesystem::temp_directory_path() / "distilbert_sst2_ort.raw";
 
-    const std::string convert_command = "/home/jarvis/miniconda3/bin/python3 \"" + convert_script.string() +
+    const std::string convert_command = feather::test::PythonCommand() + " \"" + convert_script.string() +
                                         "\" --input \"" + onnx_path.string() + "\" --output \"" +
                                         fth_path.string() + "\"";
     ASSERT_EQ(std::system(convert_command.c_str()), 0);
@@ -375,7 +376,7 @@ void RunDistilBertSst2AgainstOnnxRuntime(const std::filesystem::path& onnx_path)
     ASSERT_TRUE(write_raw(input_ids_raw_path, *input_ids));
     ASSERT_TRUE(write_raw(attention_mask_raw_path, *attention_mask));
 
-    const std::string ref_command = "/home/jarvis/miniconda3/bin/python3 \"" + ref_script.string() +
+    const std::string ref_command = feather::test::PythonCommand() + " \"" + ref_script.string() +
                                     "\" --model \"" + onnx_path.string() + "\" --input-raw \"" +
                                     input_ids_raw_path.string() + "\" --input-raw \"" +
                                     attention_mask_raw_path.string() + "\" --output-raw \"" +

@@ -94,7 +94,7 @@ bool TryComputeLastAxisMeanFp32(feather::operators::ReduceMeanParam* param) {
 template <>
 int32_t ReduceMeanKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::ReduceMean::FP32");
-    auto* param = static_cast<feather::operators::ReduceMeanParam*>(param_);
+    auto* param = ParamAs<feather::operators::ReduceMeanParam>();
     if (TryComputeLastAxisMeanFp32(param)) {
         return 0;
     }
@@ -104,15 +104,7 @@ int32_t ReduceMeanKernel<DeviceType::X86, DataType::FP32>::compute() {
     return fallback.compute();
 }
 
-void EnsureX86ReduceMeanKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "ReduceMean",
-            []() { return std::make_unique<ReduceMeanKernel<DeviceType::X86, DataType::FP32>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

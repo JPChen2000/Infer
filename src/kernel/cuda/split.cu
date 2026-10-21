@@ -92,17 +92,17 @@ int RunSplit(feather::operators::SplitParam* param, const char* timer_name) {
 
 template <>
 int32_t SplitKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunSplit<DataType::FP32>(static_cast<feather::operators::SplitParam*>(param_), "CUDA::Split::FP32");
+    return RunSplit<DataType::FP32>(ParamAs<feather::operators::SplitParam>(), "CUDA::Split::FP32");
 }
 
 template <>
 int32_t SplitKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunSplit<DataType::FP16>(static_cast<feather::operators::SplitParam*>(param_), "CUDA::Split::FP16");
+    return RunSplit<DataType::FP16>(ParamAs<feather::operators::SplitParam>(), "CUDA::Split::FP16");
 }
 
 template <>
 int32_t SplitKernel<DeviceType::CUDA, DataType::BF16>::compute() {
-    return RunSplit<DataType::BF16>(static_cast<feather::operators::SplitParam*>(param_), "CUDA::Split::BF16");
+    return RunSplit<DataType::BF16>(ParamAs<feather::operators::SplitParam>(), "CUDA::Split::BF16");
 }
 
 void EnsureCudaSplitKernelsRegistered() { (void)g_cuda_split_kernels_registered; }

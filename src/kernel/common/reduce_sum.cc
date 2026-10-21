@@ -77,15 +77,15 @@ int32_t ComputeReduceSum(feather::operators::ReduceSumParam* param) {
 
 template <> int32_t ReduceSumKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::ReduceSum::FP32");
-    return ComputeReduceSum<DataType::FP32>(static_cast<feather::operators::ReduceSumParam*>(param_));
+    return ComputeReduceSum<DataType::FP32>(ParamAs<feather::operators::ReduceSumParam>());
 }
 template <> int32_t ReduceSumKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::ReduceSum::FP16");
-    return ComputeReduceSum<DataType::FP16>(static_cast<feather::operators::ReduceSumParam*>(param_));
+    return ComputeReduceSum<DataType::FP16>(ParamAs<feather::operators::ReduceSumParam>());
 }
 template <> int32_t ReduceSumKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::ReduceSum::BF16");
-    return ComputeReduceSum<DataType::BF16>(static_cast<feather::operators::ReduceSumParam*>(param_));
+    return ComputeReduceSum<DataType::BF16>(ParamAs<feather::operators::ReduceSumParam>());
 }
 
 void EnsureCommonReduceSumKernelsRegistered() { (void)g_reduce_sum_kernels_registered; }

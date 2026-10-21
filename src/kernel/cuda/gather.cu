@@ -124,19 +124,19 @@ int32_t RunGather(feather::operators::GatherParam* param, const char* timer_name
 
 template <>
 int32_t GatherKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunGather<DataType::FP32>(static_cast<feather::operators::GatherParam*>(param_),
+    return RunGather<DataType::FP32>(ParamAs<feather::operators::GatherParam>(),
                                      "CUDA::Gather::FP32");
 }
 
 template <>
 int32_t GatherKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunGather<DataType::FP16>(static_cast<feather::operators::GatherParam*>(param_),
+    return RunGather<DataType::FP16>(ParamAs<feather::operators::GatherParam>(),
                                      "CUDA::Gather::FP16");
 }
 
 template <>
 int32_t GatherKernel<DeviceType::CUDA, DataType::BF16>::compute() {
-    return RunGather<DataType::BF16>(static_cast<feather::operators::GatherParam*>(param_),
+    return RunGather<DataType::BF16>(ParamAs<feather::operators::GatherParam>(),
                                      "CUDA::Gather::BF16");
 }
 

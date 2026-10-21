@@ -240,7 +240,7 @@ int32_t ComputeYoloDecodeRaw(feather::operators::YoloDecodeParam* param, DataTyp
 template <>
 int32_t YoloDecodeKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::YoloDecode::FP32");
-    auto* param = static_cast<feather::operators::YoloDecodeParam*>(param_);
+    auto* param = ParamAs<feather::operators::YoloDecodeParam>();
     if (param == nullptr || param->input == nullptr || param->xy_scale == nullptr || param->grid == nullptr ||
         param->stride == nullptr || param->wh_scale == nullptr || param->anchor_grid == nullptr ||
         param->out == nullptr || param->input->data_type() != DataType::FP32 ||
@@ -255,7 +255,7 @@ int32_t YoloDecodeKernel<DeviceType::X86, DataType::FP32>::compute() {
 template <>
 int32_t YoloDecodeKernel<DeviceType::X86, DataType::FP16>::compute() {
     AutoTimer timer("X86::YoloDecode::FP16");
-    auto* param = static_cast<feather::operators::YoloDecodeParam*>(param_);
+    auto* param = ParamAs<feather::operators::YoloDecodeParam>();
     if (param == nullptr || param->input == nullptr || param->xy_scale == nullptr || param->grid == nullptr ||
         param->stride == nullptr || param->wh_scale == nullptr || param->anchor_grid == nullptr ||
         param->out == nullptr || param->input->data_type() != DataType::FP16 ||
@@ -267,18 +267,7 @@ int32_t YoloDecodeKernel<DeviceType::X86, DataType::FP16>::compute() {
     return ComputeYoloDecodeRaw<uint16_t>(param, DataType::FP16);
 }
 
-void EnsureX86YoloDecodeKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "YoloDecode",
-            []() { return std::make_unique<YoloDecodeKernel<DeviceType::X86, DataType::FP32>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP16, "YoloDecode",
-            []() { return std::make_unique<YoloDecodeKernel<DeviceType::X86, DataType::FP16>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

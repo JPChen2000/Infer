@@ -97,13 +97,13 @@ int32_t ComputeYoloDecodeKernel(feather::operators::YoloDecodeParam* param) {
 template <>
 int32_t YoloDecodeKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::YoloDecode::FP32");
-    return ComputeYoloDecodeKernel<DataType::FP32>(static_cast<feather::operators::YoloDecodeParam*>(param_));
+    return ComputeYoloDecodeKernel<DataType::FP32>(ParamAs<feather::operators::YoloDecodeParam>());
 }
 
 template <>
 int32_t YoloDecodeKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::YoloDecode::FP16");
-    return ComputeYoloDecodeKernel<DataType::FP16>(static_cast<feather::operators::YoloDecodeParam*>(param_));
+    return ComputeYoloDecodeKernel<DataType::FP16>(ParamAs<feather::operators::YoloDecodeParam>());
 }
 
 typedef feather::kernel::YoloDecodeKernel<DeviceType::COMMON, DataType::FP32> YoloDecodeCommonFP32Kernel;

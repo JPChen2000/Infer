@@ -220,27 +220,16 @@ int32_t ComputeBatchNormFp16X86(operators::BatchNormParam* param) {
 template <>
 int32_t BatchNormalizationKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::BatchNormalization::FP32");
-    return ComputeBatchNormFp32X86(static_cast<operators::BatchNormParam*>(param_));
+    return ComputeBatchNormFp32X86(ParamAs<operators::BatchNormParam>());
 }
 
 template <>
 int32_t BatchNormalizationKernel<DeviceType::X86, DataType::FP16>::compute() {
     AutoTimer timer("X86::BatchNormalization::FP16");
-    return ComputeBatchNormFp16X86(static_cast<operators::BatchNormParam*>(param_));
+    return ComputeBatchNormFp16X86(ParamAs<operators::BatchNormParam>());
 }
 
-void EnsureX86BatchNormalizationKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "BatchNormalization",
-            []() { return std::make_unique<BatchNormalizationKernel<DeviceType::X86, DataType::FP32>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP16, "BatchNormalization",
-            []() { return std::make_unique<BatchNormalizationKernel<DeviceType::X86, DataType::FP16>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

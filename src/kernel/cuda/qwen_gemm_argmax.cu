@@ -279,7 +279,7 @@ bool g_cuda_qwen_gemm_argmax_kernels_registered = []() {
 template <>
 int32_t QwenGemmArgmaxKernel<DeviceType::CUDA, DataType::BF16>::compute() {
     AutoTimer timer("CUDA::QwenGemmArgmax::BF16");
-    return Run(static_cast<operators::QwenGemmArgmaxParam*>(param_));
+    return Run(ParamAs<operators::QwenGemmArgmaxParam>());
 }
 
 void EnsureCudaQwenGemmArgmaxKernelsRegistered() { (void)g_cuda_qwen_gemm_argmax_kernels_registered; }

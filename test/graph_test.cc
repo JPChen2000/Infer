@@ -244,6 +244,8 @@ TEST(runtime_graph_test, CudaGraphSynchronizesAroundCommonFallbackNode) {
         GTEST_SKIP() << "CUDA device is not available";
     }
 
+    RuntimeGraph graph;
+    feather::kernel::cuda_detail::ExecutionContextScope context_scope(graph.CudaContext());
     feather::kernel::cuda_detail::ClearTensorCache();
 
     auto lhs = std::make_shared<Tensor>();
@@ -302,7 +304,6 @@ TEST(runtime_graph_test, CudaGraphSynchronizesAroundCommonFallbackNode) {
     add1_op->AttachKernel(std::move(add1_kernel));
     auto add1_detached = add1_op->DetachKernel();
 
-    RuntimeGraph graph;
     graph.SetThreadMode(RuntimeThreadMode::kSerialGraph);
     ASSERT_EQ(graph.SetTensor("lhs", lhs), 0);
     ASSERT_EQ(graph.SetTensor("rhs", rhs), 0);
@@ -531,8 +532,11 @@ TEST(runtime_graph_test, CudaOutputAliasKeepsSourceDeviceStorageAlive) {
     auto state_raw = std::make_shared<Tensor>();
     state_raw->Assign<float>({0.0f}, {1});
 
+    RuntimeGraph runtime;
+    feather::kernel::cuda_detail::ExecutionContextScope context_scope(runtime.CudaContext());
     feather::kernel::cuda_detail::ClearTensorCache();
     StaticGraph static_graph;
+    static_graph.SetPassManager(feather::CreateQwenPassManager());
     static_graph.SetKernelDevice(DeviceType::CUDA);
     ASSERT_EQ(static_graph.SetModel(model), 0);
     ASSERT_EQ(static_graph.SetTensor("cache_state", cache_state), 0);
@@ -543,7 +547,6 @@ TEST(runtime_graph_test, CudaOutputAliasKeepsSourceDeviceStorageAlive) {
     ASSERT_EQ(static_graph.NodeSize(), 2U);
     EXPECT_EQ(static_graph.GetTensor("next_cache_state"), static_graph.GetTensor("state_raw"));
 
-    RuntimeGraph runtime;
     GraphLowering lowering;
     ASSERT_EQ(lowering.Lower(static_graph, &runtime), 0);
     {
@@ -611,6 +614,8 @@ TEST(runtime_graph_test, CudaGraphReleasesDeadTensorCachesIntoPool) {
         GTEST_SKIP() << "CUDA device is not available";
     }
 
+    RuntimeGraph graph;
+    feather::kernel::cuda_detail::ExecutionContextScope context_scope(graph.CudaContext());
     feather::kernel::cuda_detail::ClearTensorCache();
 
     auto input = std::make_shared<Tensor>();
@@ -659,7 +664,6 @@ TEST(runtime_graph_test, CudaGraphReleasesDeadTensorCachesIntoPool) {
     add2_op->AttachKernel(std::move(add2_kernel));
     auto add2_detached = add2_op->DetachKernel();
 
-    RuntimeGraph graph;
     graph.SetThreadMode(RuntimeThreadMode::kSerialGraph);
     graph.SetOutputNames({"output"});
     ASSERT_EQ(graph.SetTensor("input", input), 0);

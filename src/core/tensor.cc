@@ -6,15 +6,6 @@
 
 
 namespace feather {
-namespace {
-
-uint64_t NextMutationVersion() {
-  static std::atomic<uint64_t> next_version{1};
-  return next_version.fetch_add(1, std::memory_order_relaxed);
-}
-
-}  // namespace
-
 void Tensor::set_quantization(const QuantizationParams& quantization) {
   m_quantization = quantization;
   if (!m_quantization.scales.empty()) {
@@ -38,20 +29,10 @@ void Tensor::set_quantization(const QuantizationParams& quantization) {
   }
 }
 
-void Tensor::MarkStorageMutated() {
-  if (m_mutation_state == nullptr) {
-    m_mutation_state = std::make_shared<MutationState>();
-  }
-  m_mutation_state->version.store(NextMutationVersion(), std::memory_order_relaxed);
-}
-
-void Tensor::ResetStorageMutationState() {
-  m_mutation_state = std::make_shared<MutationState>();
-  MarkStorageMutated();
-}
+void Tensor::MarkStorageMutated() { if (m_storage) m_storage->MarkMutated(); }
 
 void Tensor::ShareDataWith(const Tensor &other) {
-  m_buffer = other.m_buffer;
+  m_storage = other.m_storage;
   m_dims = other.m_dims;
   m_data_type = other.m_data_type;
   m_layout = other.m_layout;
@@ -59,49 +40,53 @@ void Tensor::ShareDataWith(const Tensor &other) {
   m_memory_size = other.m_memory_size;
   m_immutable = other.m_immutable;
   m_offset = other.m_offset;
-  m_mutation_state = other.m_mutation_state;
-  if (m_mutation_state == nullptr) {
-    ResetStorageMutationState();
-  }
+
 }
 
 void Tensor::SwapStorage(Tensor& other) {
-  std::swap(m_buffer, other.m_buffer);
+  std::swap(m_storage, other.m_storage);
   std::swap(m_memory_size, other.m_memory_size);
   std::swap(m_offset, other.m_offset);
-  std::swap(m_mutation_state, other.m_mutation_state);
   MarkStorageMutated();
   other.MarkStorageMutated();
 }
 
 
+void Tensor::EnsureWritable() {
+  if (m_storage != nullptr && m_storage->read_only()) {
+    CHECK(HasCapacity(m_memory_size));
+    // Copy the allocation once for every view in this alias group. Session
+    // groups have distinct Storage identities while sharing read-only Buffers.
+    m_storage->MakeWritable();
+    m_immutable = false;
+  }
+}
+
 void *Tensor::mutable_data(size_t memory_size) {
+  CHECK(HasCapacity(memory_size));
+  EnsureWritable();
   m_memory_size = memory_size;
-  CHECK(memory_size <= m_buffer->size());
   MarkStorageMutated();
-  return static_cast<char *>(m_buffer->data()) + m_offset;
+  return static_cast<char *>(m_storage->data()) + m_offset;
 }
 
-void Tensor::ResetBuffer(std::shared_ptr<Buffer> buffer,
-                             size_t memory_size) {
-  if (m_buffer != nullptr) {
-    m_buffer->deallocate();
-  }
-  m_buffer = buffer;
-  m_memory_size = memory_size;
-  m_offset = 0;
-  ResetStorageMutationState();
+void Tensor::ResetBuffer(std::shared_ptr<Buffer> buffer, size_t memory_size) {
+  ResetBuffer(std::move(buffer), memory_size, 0);
 }
 
-void Tensor::ResetBuffer(std::shared_ptr<Buffer> buffer,
-                             size_t memory_size, size_t offset) {
-  if (m_buffer != nullptr) {
-    m_buffer->deallocate();
-  }
-  m_buffer = buffer;
+void Tensor::ResetBuffer(std::shared_ptr<Buffer> buffer, size_t memory_size, size_t offset) {
+  CHECK(buffer != nullptr);
+  CHECK(offset <= buffer->size());
+  CHECK(memory_size <= buffer->size() - offset);
+  ResetStorage(std::make_shared<Storage>(std::move(buffer)), memory_size, offset);
+}
+
+void Tensor::ResetStorage(std::shared_ptr<Storage> storage, size_t memory_size, size_t offset) {
+  CHECK(storage != nullptr);
+  CHECK(offset <= storage->size() && memory_size <= storage->size() - offset);
+  m_storage = std::move(storage);
   m_memory_size = memory_size;
   m_offset = offset;
-  ResetStorageMutationState();
 }
 
 } // namespace feather

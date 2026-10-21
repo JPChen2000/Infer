@@ -278,24 +278,24 @@ int32_t ComputeBf16MatMulX86(feather::operators::MatMulParam* param, x86::Bf16Li
 template <>
 int32_t MatMulKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::MatMul::FP32");
-    return ComputeMatMulX86<DataType::FP32>(static_cast<feather::operators::MatMulParam*>(param_));
+    return ComputeMatMulX86<DataType::FP32>(ParamAs<feather::operators::MatMulParam>());
 }
 
 template <>
 int32_t MatMulKernel<DeviceType::X86, DataType::FP16>::compute() {
     AutoTimer timer("X86::MatMul::FP16");
-    return ComputeMatMulX86<DataType::FP16>(static_cast<feather::operators::MatMulParam*>(param_));
+    return ComputeMatMulX86<DataType::FP16>(ParamAs<feather::operators::MatMulParam>());
 }
 
 int32_t MatMulKernel<DeviceType::X86, DataType::FP8E4M3>::compute() {
     AutoTimer timer("X86::MatMul::FP8E4M3");
-    auto* param = static_cast<feather::operators::MatMulParam*>(param_);
+    auto* param = ParamAs<feather::operators::MatMulParam>();
     return ComputeFp8MatMulX86<DataType::FP8E4M3>(param, &packed_rhs_, &workspace_);
 }
 
 int32_t MatMulKernel<DeviceType::X86, DataType::FP8E5M2>::compute() {
     AutoTimer timer("X86::MatMul::FP8E5M2");
-    auto* param = static_cast<feather::operators::MatMulParam*>(param_);
+    auto* param = ParamAs<feather::operators::MatMulParam>();
     return ComputeFp8MatMulX86<DataType::FP8E5M2>(param, &packed_rhs_, &workspace_);
 }
 
@@ -315,15 +315,15 @@ int32_t PrepareFp8MatMulX86(feather::operators::MatMulParam* param, x86::PackedF
 }
 
 int32_t MatMulKernel<DeviceType::X86, DataType::FP8E4M3>::Prepare() {
-    return PrepareFp8MatMulX86<DataType::FP8E4M3>(static_cast<feather::operators::MatMulParam*>(param_), &packed_rhs_);
+    return PrepareFp8MatMulX86<DataType::FP8E4M3>(ParamAs<feather::operators::MatMulParam>(), &packed_rhs_);
 }
 
 int32_t MatMulKernel<DeviceType::X86, DataType::FP8E5M2>::Prepare() {
-    return PrepareFp8MatMulX86<DataType::FP8E5M2>(static_cast<feather::operators::MatMulParam*>(param_), &packed_rhs_);
+    return PrepareFp8MatMulX86<DataType::FP8E5M2>(ParamAs<feather::operators::MatMulParam>(), &packed_rhs_);
 }
 
 int32_t MatMulKernel<DeviceType::X86, DataType::BF16>::Prepare() {
-    auto* param = static_cast<feather::operators::MatMulParam*>(param_);
+    auto* param = ParamAs<feather::operators::MatMulParam>();
     MatMulShape shape;
     if (param == nullptr || param->a == nullptr || param->b == nullptr || param->out == nullptr ||
         param->a->data_type() != DataType::BF16 || param->b->data_type() != DataType::BF16 ||
@@ -340,32 +340,12 @@ int32_t MatMulKernel<DeviceType::X86, DataType::BF16>::Prepare() {
 
 int32_t MatMulKernel<DeviceType::X86, DataType::BF16>::compute() {
     AutoTimer timer("X86::MatMul::BF16");
-    auto* param = static_cast<feather::operators::MatMulParam*>(param_);
+    auto* param = ParamAs<feather::operators::MatMulParam>();
     MatMulShape shape;
     return ComputeBf16MatMulX86(param, &workspace_, &packed_rhs_);
 }
 
-void EnsureX86MatMulKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "MatMul",
-            []() { return std::make_unique<MatMulKernel<DeviceType::X86, DataType::FP32>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP16, "MatMul",
-            []() { return std::make_unique<MatMulKernel<DeviceType::X86, DataType::FP16>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::BF16, "MatMul",
-            []() { return std::make_unique<MatMulKernel<DeviceType::X86, DataType::BF16>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP8E4M3, "MatMul",
-            []() { return std::make_unique<MatMulKernel<DeviceType::X86, DataType::FP8E4M3>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP8E5M2, "MatMul",
-            []() { return std::make_unique<MatMulKernel<DeviceType::X86, DataType::FP8E5M2>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

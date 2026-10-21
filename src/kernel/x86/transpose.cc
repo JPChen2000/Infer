@@ -391,7 +391,7 @@ int32_t ComputeTransposeRaw(feather::operators::TransposeParam* param, DataType 
 template <>
 int32_t TransposeKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::Transpose::FP32");
-    auto* param = static_cast<feather::operators::TransposeParam*>(param_);
+    auto* param = ParamAs<feather::operators::TransposeParam>();
     if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::FP32) {
         return ComputeTransposeFallback<DataType::FP32>(param);
     }
@@ -401,7 +401,7 @@ int32_t TransposeKernel<DeviceType::X86, DataType::FP32>::compute() {
 template <>
 int32_t TransposeKernel<DeviceType::X86, DataType::FP16>::compute() {
     AutoTimer timer("X86::Transpose::FP16");
-    auto* param = static_cast<feather::operators::TransposeParam*>(param_);
+    auto* param = ParamAs<feather::operators::TransposeParam>();
     if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::FP16) {
         return ComputeTransposeFallback<DataType::FP16>(param);
     }
@@ -414,28 +414,14 @@ int32_t TransposeKernel<DeviceType::X86, DataType::FP16>::compute() {
 template <>
 int32_t TransposeKernel<DeviceType::X86, DataType::BF16>::compute() {
     AutoTimer timer("X86::Transpose::BF16");
-    auto* param = static_cast<feather::operators::TransposeParam*>(param_);
+    auto* param = ParamAs<feather::operators::TransposeParam>();
     if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::BF16) {
         return ComputeTransposeFallback<DataType::BF16>(param);
     }
     return ComputeTransposeRaw<BFloat16>(param, DataType::BF16);
 }
 
-void EnsureX86TransposeKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "Transpose",
-            []() { return std::make_unique<TransposeKernel<DeviceType::X86, DataType::FP32>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP16, "Transpose",
-            []() { return std::make_unique<TransposeKernel<DeviceType::X86, DataType::FP16>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::BF16, "Transpose",
-            []() { return std::make_unique<TransposeKernel<DeviceType::X86, DataType::BF16>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

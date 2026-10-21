@@ -246,19 +246,19 @@ bool g_common_int8_fused_kernels_registered = []() {
 template <>
 int32_t ShapeKernel<DeviceType::COMMON, DataType::INT8>::compute() {
     AutoTimer timer("Common::Shape::INT8");
-    return common::ComputeShapeInt8(static_cast<feather::operators::ShapeParam*>(param_));
+    return common::ComputeShapeInt8(ParamAs<feather::operators::ShapeParam>());
 }
 
 template <>
 int32_t ResizeConcatKernel<DeviceType::COMMON, DataType::INT8>::compute() {
     AutoTimer timer("Common::ResizeConcat::INT8");
-    return common::ComputeResizeConcatInt8(static_cast<feather::operators::ResizeConcatParam*>(param_));
+    return common::ComputeResizeConcatInt8(ParamAs<feather::operators::ResizeConcatParam>());
 }
 
 template <>
 int32_t YoloDecodeKernel<DeviceType::COMMON, DataType::INT8>::compute() {
     AutoTimer timer("Common::YoloDecode::INT8");
-    return common::ComputeYoloDecodeInt8(static_cast<feather::operators::YoloDecodeParam*>(param_));
+    return common::ComputeYoloDecodeInt8(ParamAs<feather::operators::YoloDecodeParam>());
 }
 
 void EnsureCommonInt8FusedKernelsRegistered() {

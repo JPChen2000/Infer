@@ -78,7 +78,7 @@ int32_t ComputeReshapeRaw(feather::operators::ReshapeParam* param, DataType dtyp
 template <>
 int32_t ReshapeKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::Reshape::FP32");
-    auto* param = static_cast<feather::operators::ReshapeParam*>(param_);
+    auto* param = ParamAs<feather::operators::ReshapeParam>();
     if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::FP32) {
         return ComputeReshapeFallback<DataType::FP32>(param);
     }
@@ -88,25 +88,14 @@ int32_t ReshapeKernel<DeviceType::X86, DataType::FP32>::compute() {
 template <>
 int32_t ReshapeKernel<DeviceType::X86, DataType::FP16>::compute() {
     AutoTimer timer("X86::Reshape::FP16");
-    auto* param = static_cast<feather::operators::ReshapeParam*>(param_);
+    auto* param = ParamAs<feather::operators::ReshapeParam>();
     if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::FP16) {
         return ComputeReshapeFallback<DataType::FP16>(param);
     }
     return ComputeReshapeRaw<uint16_t>(param, DataType::FP16);
 }
 
-void EnsureX86ReshapeKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "Reshape",
-            []() { return std::make_unique<ReshapeKernel<DeviceType::X86, DataType::FP32>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP16, "Reshape",
-            []() { return std::make_unique<ReshapeKernel<DeviceType::X86, DataType::FP16>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

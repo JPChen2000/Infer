@@ -425,6 +425,7 @@ TEST(qwen_gemm_argmax_test, QwenPassReplacesOnlyFinalLogitsGemm) {
     model.graph.nodes = {logits};
 
     feather::StaticGraph graph;
+    graph.SetPassManager(feather::CreateQwenPassManager());
     ASSERT_EQ(graph.SetModel(model), 0);
     graph.SetKernelDevice(feather::DeviceType::X86);
     ASSERT_EQ(graph.SetTensor("hidden", MakeBf16({1.0f, 2.0f}, {1, 2})), 0);
@@ -457,6 +458,7 @@ TEST(qwen_gemm_argmax_test, QwenPassLeavesBiasedLogitsGemmUnchanged) {
     model.graph.nodes = {logits};
 
     feather::StaticGraph graph;
+    graph.SetPassManager(feather::CreateQwenPassManager());
     ASSERT_EQ(graph.SetModel(model), 0);
     graph.SetKernelDevice(feather::DeviceType::X86);
     ASSERT_EQ(graph.SetTensor("hidden", MakeBf16({1.0f, 2.0f}, {1, 2})), 0);
@@ -505,6 +507,7 @@ TEST(qwen_gemm_argmax_test, QwenPassFusesFp8GemmCastIntoArgmax) {
     model.graph.nodes = {gemm, cast};
 
     feather::StaticGraph graph;
+    graph.SetPassManager(feather::CreateQwenPassManager());
     ASSERT_EQ(graph.SetModel(model), 0);
     graph.SetKernelDevice(feather::DeviceType::X86);
     ASSERT_EQ(graph.SetTensor("hidden_fp8", MakeFp8<feather::DataType::FP8E4M3>({1.0f, 2.0f}, {1, 2}, 0.25f)), 0);
@@ -585,6 +588,7 @@ TEST(qwen_gemm_argmax_test, QwenPassKeepsCudaFp8LinearAsGenericOps) {
     model.graph.nodes = {input_cast, projection, output_cast};
 
     feather::StaticGraph graph;
+    graph.SetPassManager(feather::CreateQwenPassManager());
     graph.SetKernelDevice(feather::DeviceType::CUDA);
     ASSERT_EQ(graph.SetModel(model), 0);
     ASSERT_EQ(graph.SetTensor("input_bf16", MakeBf16({1.0f, -2.0f}, {1, 2})), 0);
@@ -658,6 +662,7 @@ TEST(qwen_gemm_argmax_test, QwenPassKeepsFp8LogitsGemmUnfusedOnCuda) {
     model.graph.nodes = {gemm, cast};
 
     feather::StaticGraph graph;
+    graph.SetPassManager(feather::CreateQwenPassManager());
     graph.SetKernelDevice(feather::DeviceType::CUDA);
     ASSERT_EQ(graph.SetModel(model), 0);
     ASSERT_EQ(graph.SetTensor("hidden_fp8", MakeFp8<feather::DataType::FP8E4M3>({1.0f, 2.0f}, {1, 2}, 0.25f)), 0);
@@ -711,6 +716,7 @@ TEST(qwen_gemm_argmax_test, QwenPassLowersFinalLogitsGemmToCuda) {
     model.graph.nodes = {logits};
 
     feather::StaticGraph graph;
+    graph.SetPassManager(feather::CreateQwenPassManager());
     graph.SetKernelDevice(feather::DeviceType::CUDA);
     ASSERT_EQ(graph.SetModel(model), 0);
     ASSERT_EQ(graph.SetTensor("hidden", MakeBf16({1.0f, 2.0f}, {1, 2})), 0);

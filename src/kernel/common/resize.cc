@@ -69,13 +69,13 @@ int32_t ComputeResizeKernel(feather::operators::ResizeParam* param) {
 template <>
 int32_t ResizeKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Resize::FP32");
-    return ComputeResizeKernel<DataType::FP32>(static_cast<feather::operators::ResizeParam*>(param_));
+    return ComputeResizeKernel<DataType::FP32>(ParamAs<feather::operators::ResizeParam>());
 }
 
 template <>
 int32_t ResizeKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Resize::FP16");
-    return ComputeResizeKernel<DataType::FP16>(static_cast<feather::operators::ResizeParam*>(param_));
+    return ComputeResizeKernel<DataType::FP16>(ParamAs<feather::operators::ResizeParam>());
 }
 
 typedef feather::kernel::ResizeKernel<DeviceType::COMMON, DataType::FP32> ResizeCommonFP32Kernel;

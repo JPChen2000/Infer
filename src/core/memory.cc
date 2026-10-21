@@ -1,11 +1,11 @@
 #include "core/memory.h"
+#include <limits>
 #include "util/logger.h"
 #include "util/types.h"
 
 namespace feather {
 
 std::shared_ptr<BufferPool> BufferPool::m_buffer_pool = std::make_shared<BufferPool>();
-std::mutex BufferPool::m_mtx;
 
 constexpr size_t MAX_CHUNK_SIZE = 8 * 1024;
 constexpr size_t MIN_CLASS_SIZE = 64;
@@ -27,10 +27,13 @@ size_t BufferPool::NormalizeSize(size_t size) {
         }
         return klass;
     }
+    CHECK(size <= std::numeric_limits<size_t>::max() - (LARGE_ALIGN_SIZE - 1));
     return ALIGN_UP<LARGE_ALIGN_SIZE>(size);
 }
 
 std::shared_ptr<Buffer> BufferPool::allocate(size_t size) {
+    auto pool_owner = weak_from_this().lock();
+    if (pool_owner == nullptr) return std::make_shared<Buffer>(size);
     std::lock_guard<std::mutex> guard(m_mtx);
     const auto class_size = NormalizeSize(size);
 
@@ -47,11 +50,8 @@ std::shared_ptr<Buffer> BufferPool::allocate(size_t size) {
     }
 
     block->occupied = true;
-    std::weak_ptr<BufferPool> weak_pool = m_buffer_pool;
-    return std::make_shared<Buffer>(block, [weak_pool](MemBlock* released_block) {
-        if (auto pool = weak_pool.lock()) {
-            pool->release_block(released_block);
-        }
+    return std::make_shared<Buffer>(block, [pool_owner](MemBlock* released_block) {
+        pool_owner->release_block(released_block);
     });
 }
 
@@ -122,7 +122,7 @@ MemBlock *BufferPool::allocate_mem_block(size_t size) {
     }
 }
 
-void BufferPool::deallocate(std::shared_ptr<Buffer> &buffer) { buffer->deallocate(); }
+void BufferPool::deallocate(std::shared_ptr<Buffer> &buffer) { buffer.reset(); }
 
 void BufferPool::release_block(MemBlock* block) {
     if (block == nullptr) {
@@ -138,6 +138,12 @@ void BufferPool::release_block(MemBlock* block) {
 }
 
 void BufferPool::deallocate_all() {
+    std::lock_guard<std::mutex> guard(m_mtx);
+    for (const auto& entry : m_mem_cache) {
+        for (auto* block = entry.second; block != nullptr; block = block->next) {
+            CHECK(!block->occupied);
+        }
+    }
     m_free_blocks.clear();
     for (auto it = m_mem_cache.begin(); it != m_mem_cache.end(); ++it) {
         auto block = it->second;

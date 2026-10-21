@@ -69,7 +69,7 @@ int32_t ComputeFlattenRaw(feather::operators::FlattenParam* param, DataType dtyp
 template <>
 int32_t FlattenKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::Flatten::FP32");
-    auto* param = static_cast<feather::operators::FlattenParam*>(param_);
+    auto* param = ParamAs<feather::operators::FlattenParam>();
     if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::FP32) {
         return ComputeFlattenFallback<DataType::FP32>(param);
     }
@@ -79,25 +79,14 @@ int32_t FlattenKernel<DeviceType::X86, DataType::FP32>::compute() {
 template <>
 int32_t FlattenKernel<DeviceType::X86, DataType::FP16>::compute() {
     AutoTimer timer("X86::Flatten::FP16");
-    auto* param = static_cast<feather::operators::FlattenParam*>(param_);
+    auto* param = ParamAs<feather::operators::FlattenParam>();
     if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::FP16) {
         return ComputeFlattenFallback<DataType::FP16>(param);
     }
     return ComputeFlattenRaw<uint16_t>(param, DataType::FP16);
 }
 
-void EnsureX86FlattenKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "Flatten",
-            []() { return std::make_unique<FlattenKernel<DeviceType::X86, DataType::FP32>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP16, "Flatten",
-            []() { return std::make_unique<FlattenKernel<DeviceType::X86, DataType::FP16>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

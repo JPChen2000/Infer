@@ -28,19 +28,19 @@ bool g_cuda_neg_kernels_registered = []() {
 template <>
 int32_t NegKernel<DeviceType::CUDA, DataType::FP32>::compute() {
     return cuda_detail::RunUnaryElementwise<DataType::FP32, 10>(
-        static_cast<feather::operators::UnaryParam*>(param_), "CUDA::Neg::FP32");
+        ParamAs<feather::operators::UnaryParam>(), "CUDA::Neg::FP32");
 }
 
 template <>
 int32_t NegKernel<DeviceType::CUDA, DataType::FP16>::compute() {
     return cuda_detail::RunUnaryElementwise<DataType::FP16, 10>(
-        static_cast<feather::operators::UnaryParam*>(param_), "CUDA::Neg::FP16");
+        ParamAs<feather::operators::UnaryParam>(), "CUDA::Neg::FP16");
 }
 
 template <>
 int32_t NegKernel<DeviceType::CUDA, DataType::BF16>::compute() {
     return cuda_detail::RunUnaryElementwise<DataType::BF16, 10>(
-        static_cast<feather::operators::UnaryParam*>(param_), "CUDA::Neg::BF16");
+        ParamAs<feather::operators::UnaryParam>(), "CUDA::Neg::BF16");
 }
 
 void EnsureCudaNegKernelsRegistered() { (void)g_cuda_neg_kernels_registered; }

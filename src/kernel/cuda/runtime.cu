@@ -4,10 +4,12 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "util/bf16.h"
@@ -19,6 +21,7 @@ namespace cuda_detail {
 namespace {
 
 struct CachedDeviceAllocation {
+    std::shared_ptr<Storage> storage;
     void* ptr{nullptr};
     size_t capacity{0};
 };
@@ -35,105 +38,84 @@ struct CachedTensorDeviceState {
     bool persistent{false};
 };
 
-std::mutex& CacheMutex() {
-    static std::mutex mutex;
-    return mutex;
-}
+}  // namespace
 
-std::unordered_map<const Tensor*, CachedTensorDeviceState>& TensorCache() {
-    static std::unordered_map<const Tensor*, CachedTensorDeviceState> cache;
-    return cache;
-}
-
-std::unordered_map<size_t, std::vector<void*>>& FreeDeviceBlocks() {
-    static std::unordered_map<size_t, std::vector<void*>> blocks;
-    return blocks;
-}
-
-bool& DeferredSyncFlag() {
-    static bool enabled = false;
-    return enabled;
-}
-
-cudaStream_t& StreamStorage() {
-    static cudaStream_t stream = nullptr;
-    return stream;
-}
-
-std::once_flag& StreamCreateOnceFlag() {
-    static std::once_flag once;
-    return once;
-}
-
-int& StreamCreateStatus() {
-    static int status = -1;
-    return status;
-}
-
-cublasHandle_t& CublasHandleStorage() {
-    static cublasHandle_t handle = nullptr;
-    return handle;
-}
-
-std::once_flag& CublasCreateOnceFlag() {
-    static std::once_flag once;
-    return once;
-}
-
-int& CublasCreateStatus() {
-    static int status = -1;
-    return status;
-}
-
+class CudaExecutionContext {
+   public:
+    ~CudaExecutionContext();
+    std::mutex mutex;
+    std::unordered_map<const Tensor*, CachedTensorDeviceState> tensors;
+    std::unordered_map<size_t, std::vector<void*>> free_blocks;
+    std::unordered_map<void*, std::shared_ptr<Storage>> allocations;
+    size_t workspace_limit{static_cast<size_t>(-1)};
+    size_t workspace_active_bytes{0};
+    std::unordered_map<void*, size_t> workspaces;
+    bool deferred_sync{false};
+    int device{-1};
+    cudaStream_t stream{nullptr};
+    std::once_flag stream_once, cublas_once;
+    int stream_status{-1}, cublas_status{-1};
+    cublasHandle_t cublas{nullptr};
 #ifdef FEATHER_WITH_CUBLASLT
-cublasLtHandle_t& CublasLtHandleStorage() {
-    static cublasLtHandle_t handle = nullptr;
-    return handle;
-}
-
-std::once_flag& CublasLtCreateOnceFlag() {
-    static std::once_flag once;
-    return once;
-}
-
-int& CublasLtCreateStatus() {
-    static int status = -1;
-    return status;
-}
+    cublasLtHandle_t cublaslt{nullptr};
+    std::once_flag cublaslt_once;
+    int cublaslt_status{-1};
 #endif
+#ifdef FEATHER_WITH_CUDNN
+    cudnnHandle_t cudnn{nullptr};
+    std::once_flag cudnn_once;
+    int cudnn_status{-1};
+#endif
+};
 
+namespace {
+std::shared_ptr<CudaExecutionContext>& ActiveContext() {
+    static thread_local std::shared_ptr<CudaExecutionContext> context = std::make_shared<CudaExecutionContext>();
+    return context;
+}
+std::mutex& CacheMutex() { return ActiveContext()->mutex; }
+auto& TensorCache() { return ActiveContext()->tensors; }
+auto& FreeDeviceBlocks() { return ActiveContext()->free_blocks; }
+bool& DeferredSyncFlag() { return ActiveContext()->deferred_sync; }
+cudaStream_t& StreamStorage() { return ActiveContext()->stream; }
+std::once_flag& StreamCreateOnceFlag() { return ActiveContext()->stream_once; }
+int& StreamCreateStatus() { return ActiveContext()->stream_status; }
+cublasHandle_t& CublasHandleStorage() { return ActiveContext()->cublas; }
+std::once_flag& CublasCreateOnceFlag() { return ActiveContext()->cublas_once; }
+int& CublasCreateStatus() { return ActiveContext()->cublas_status; }
+#ifdef FEATHER_WITH_CUBLASLT
+cublasLtHandle_t& CublasLtHandleStorage() { return ActiveContext()->cublaslt; }
+std::once_flag& CublasLtCreateOnceFlag() { return ActiveContext()->cublaslt_once; }
+int& CublasLtCreateStatus() { return ActiveContext()->cublaslt_status; }
+#endif
 std::atomic<int>& LastFp8MatmulBackendStorage() {
-    static std::atomic<int> backend{static_cast<int>(CudaFp8MatmulBackend::kUnknown)};
+    static thread_local std::atomic<int> backend{static_cast<int>(CudaFp8MatmulBackend::kUnknown)};
     return backend;
 }
-
 #ifdef FEATHER_WITH_CUDNN
-cudnnHandle_t& CudnnHandleStorage() {
-    static cudnnHandle_t handle = nullptr;
-    return handle;
-}
-
-std::once_flag& CudnnCreateOnceFlag() {
-    static std::once_flag once;
-    return once;
-}
-
-int& CudnnCreateStatus() {
-    static int status = -1;
-    return status;
-}
+cudnnHandle_t& CudnnHandleStorage() { return ActiveContext()->cudnn; }
+std::once_flag& CudnnCreateOnceFlag() { return ActiveContext()->cudnn_once; }
+int& CudnnCreateStatus() { return ActiveContext()->cudnn_status; }
 #endif
 
+std::string& LastRuntimeError() {
+    static thread_local std::string error;
+    return error;
+}
+
 int CudaStatus(cudaError_t status) {
+    if (status != cudaSuccess) LastRuntimeError() = cudaGetErrorString(status);
     return status == cudaSuccess ? 0 : -1;
 }
 
 int CublasStatus(cublasStatus_t status) {
+    if (status != CUBLAS_STATUS_SUCCESS) LastRuntimeError() = "cuBLAS status=" + std::to_string(static_cast<int>(status));
     return status == CUBLAS_STATUS_SUCCESS ? 0 : -1;
 }
 
 #ifdef FEATHER_WITH_CUDNN
 int CudnnStatus(cudnnStatus_t status) {
+    if (status != CUDNN_STATUS_SUCCESS) LastRuntimeError() = cudnnGetErrorString(status);
     return status == CUDNN_STATUS_SUCCESS ? 0 : -1;
 }
 #endif
@@ -158,7 +140,23 @@ size_t NormalizeAllocationSize(size_t bytes) {
         }
         return klass;
     }
+    if (bytes > std::numeric_limits<size_t>::max() - (kLargeAlignSize - 1)) return 0;
     return ((bytes + kLargeAlignSize - 1) / kLargeAlignSize) * kLargeAlignSize;
+}
+
+void OwnDeviceAllocation(void* ptr, size_t capacity) {
+    int device = -1;
+    CHECK(cudaGetDevice(&device) == cudaSuccess);
+    if (ActiveContext()->device < 0) ActiveContext()->device = device;
+    auto owner = std::shared_ptr<void>(ptr, [device](void* memory) {
+        int previous = -1;
+        (void)cudaGetDevice(&previous);
+        if (previous != device) (void)cudaSetDevice(device);
+        (void)cudaFree(memory);
+        if (previous >= 0 && previous != device) (void)cudaSetDevice(previous);
+    });
+    auto buffer = std::make_shared<Buffer>(ptr, capacity, std::move(owner));
+    ActiveContext()->allocations[ptr] = std::make_shared<Storage>(std::move(buffer), DeviceType::CUDA, device);
 }
 
 void ReleaseBlockToPool(CachedTensorDeviceState* state) {
@@ -178,6 +176,7 @@ void ReleaseBlockToPool(CachedTensorDeviceState* state) {
 }
 
 void CreateInferenceStreamOnce() {
+    if (CudaStatus(cudaGetDevice(&ActiveContext()->device)) != 0) return;
     StreamCreateStatus() = CudaStatus(cudaStreamCreateWithFlags(&StreamStorage(), cudaStreamNonBlocking));
 }
 
@@ -250,6 +249,7 @@ int EnsureDeviceAllocation(CachedTensorDeviceState* state, size_t bytes) {
         return -1;
     }
     const size_t capacity = NormalizeAllocationSize(bytes);
+    if (bytes && !capacity) return -1;
     if (state->ptr != nullptr && state->allocation != nullptr && state->capacity >= capacity) {
         state->bytes = bytes;
         return 0;
@@ -268,10 +268,12 @@ int EnsureDeviceAllocation(CachedTensorDeviceState* state, size_t bytes) {
     if (free_it != free_blocks.end() && !free_it->second.empty()) {
         device_ptr = free_it->second.back();
         free_it->second.pop_back();
-    } else if (CudaStatus(cudaMalloc(&device_ptr, capacity)) != 0) {
-        return -1;
+    } else {
+        if (CudaStatus(cudaMalloc(&device_ptr, capacity)) != 0) return -1;
+        OwnDeviceAllocation(device_ptr, capacity);
     }
     state->allocation = std::make_shared<CachedDeviceAllocation>();
+    state->allocation->storage = ActiveContext()->allocations.at(device_ptr);
     state->allocation->ptr = device_ptr;
     state->allocation->capacity = capacity;
     state->ptr = device_ptr;
@@ -281,6 +283,50 @@ int EnsureDeviceAllocation(CachedTensorDeviceState* state, size_t bytes) {
 }
 
 }  // namespace
+
+CudaExecutionContext::~CudaExecutionContext() {
+    // External Storage handles may extend an allocation lifetime. Drop this
+    // session's references only after its stream has finished using them.
+    int previous = -1;
+    if (device >= 0) {
+        (void)cudaGetDevice(&previous);
+        (void)cudaSetDevice(device);
+    }
+    if (stream != nullptr) (void)cudaStreamSynchronize(stream);
+    tensors.clear();
+    free_blocks.clear();
+    allocations.clear();
+#ifdef FEATHER_WITH_CUDNN
+    if (cudnn != nullptr) cudnnDestroy(cudnn);
+#endif
+#ifdef FEATHER_WITH_CUBLASLT
+    if (cublaslt != nullptr) cublasLtDestroy(cublaslt);
+#endif
+    if (cublas != nullptr) cublasDestroy(cublas);
+    if (stream != nullptr) cudaStreamDestroy(stream);
+    if (previous >= 0 && previous != device) (void)cudaSetDevice(previous);
+}
+
+std::shared_ptr<CudaExecutionContext> CreateExecutionContext() {
+    return std::make_shared<CudaExecutionContext>();
+}
+ExecutionContextScope::ExecutionContextScope(std::shared_ptr<CudaExecutionContext> context)
+    : previous_(ActiveContext()) {
+    CHECK(context != nullptr);
+    if (context != previous_ && context->device >= 0) {
+        int current_device = -1;
+        CHECK(cudaGetDevice(&current_device) == cudaSuccess);
+        if (current_device != context->device) {
+            CHECK(cudaSetDevice(context->device) == cudaSuccess);
+            previous_device_ = current_device;
+        }
+    }
+    ActiveContext() = std::move(context);
+}
+ExecutionContextScope::~ExecutionContextScope() {
+    ActiveContext() = std::move(previous_);
+    if (previous_device_ >= 0) (void)cudaSetDevice(previous_device_);
+}
 
 void SetDeferredHostSync(bool enabled) {
     std::lock_guard<std::mutex> lock(CacheMutex());
@@ -300,7 +346,9 @@ int WarmupCudaRuntime() {
 }
 
 std::string CudaLastErrorMessage() {
+    const auto recorded = std::exchange(LastRuntimeError(), std::string{});
     const auto status = cudaGetLastError();
+    if (!recorded.empty()) return recorded;
     if (status == cudaSuccess) {
         return "no CUDA error";
     }
@@ -363,6 +411,18 @@ void ReleaseTensorDevice(const Tensor* tensor) {
     ReleaseBlockToPool(&it->second);
 }
 
+std::shared_ptr<const Storage> GetTensorDeviceStorage(const Tensor* tensor) {
+    std::lock_guard<std::mutex> lock(CacheMutex());
+    const auto found = TensorCache().find(tensor);
+    if (found == TensorCache().end() || !found->second.allocation) return nullptr;
+    return std::shared_ptr<const Storage>(found->second.allocation, found->second.allocation->storage.get());
+}
+
+void SetWorkspaceLimit(size_t bytes) {
+    std::lock_guard<std::mutex> lock(CacheMutex());
+    ActiveContext()->workspace_limit = bytes;
+}
+
 int AcquireTemporaryDeviceBuffer(size_t bytes, void** device_ptr) {
     if (device_ptr == nullptr) {
         return -1;
@@ -373,14 +433,29 @@ int AcquireTemporaryDeviceBuffer(size_t bytes, void** device_ptr) {
     }
     std::lock_guard<std::mutex> lock(CacheMutex());
     const size_t capacity = NormalizeAllocationSize(bytes);
+    auto& context = *ActiveContext();
+    if (!capacity) return -1;
+    if (context.workspace_active_bytes > context.workspace_limit ||
+        capacity > context.workspace_limit - context.workspace_active_bytes) {
+        LastRuntimeError() = "CUDA workspace budget exceeded";
+        return -1;
+    }
     auto& free_blocks = FreeDeviceBlocks();
     auto free_it = free_blocks.find(capacity);
     if (free_it != free_blocks.end() && !free_it->second.empty()) {
         *device_ptr = free_it->second.back();
         free_it->second.pop_back();
+        context.workspaces[*device_ptr] = capacity;
+        context.workspace_active_bytes += capacity;
         return 0;
     }
-    return CudaStatus(cudaMalloc(device_ptr, capacity));
+    const auto status = CudaStatus(cudaMalloc(device_ptr, capacity));
+    if (status == 0) {
+        OwnDeviceAllocation(*device_ptr, capacity);
+        context.workspaces[*device_ptr] = capacity;
+        context.workspace_active_bytes += capacity;
+    }
+    return status;
 }
 
 void ReleaseTemporaryDeviceBuffer(void* device_ptr, size_t bytes) {
@@ -388,7 +463,12 @@ void ReleaseTemporaryDeviceBuffer(void* device_ptr, size_t bytes) {
         return;
     }
     std::lock_guard<std::mutex> lock(CacheMutex());
-    FreeDeviceBlocks()[NormalizeAllocationSize(bytes)].push_back(device_ptr);
+    const auto found = ActiveContext()->workspaces.find(device_ptr);
+    if (found == ActiveContext()->workspaces.end()) return;
+    const auto capacity = found->second;
+    ActiveContext()->workspace_active_bytes -= capacity;
+    ActiveContext()->workspaces.erase(found);
+    FreeDeviceBlocks()[capacity].push_back(device_ptr);
 }
 
 TensorCacheStats GetTensorCacheStats() {
@@ -414,23 +494,13 @@ TensorCacheStats GetTensorCacheStats() {
 }
 
 void ClearTensorCache() {
-    (void)SynchronizeInferenceStream();
+    if (StreamStorage() != nullptr) (void)SynchronizeInferenceStream();
     std::lock_guard<std::mutex> lock(CacheMutex());
-    std::unordered_set<void*> released_ptrs;
-    for (auto& item : TensorCache()) {
-        if (item.second.ptr != nullptr && released_ptrs.insert(item.second.ptr).second) {
-            cudaFree(item.second.ptr);
-        }
-    }
-    for (auto& blocks : FreeDeviceBlocks()) {
-        for (void* ptr : blocks.second) {
-            if (ptr != nullptr && released_ptrs.insert(ptr).second) {
-                cudaFree(ptr);
-            }
-        }
-    }
-    FreeDeviceBlocks().clear();
     TensorCache().clear();
+    FreeDeviceBlocks().clear();
+    ActiveContext()->allocations.clear();
+    ActiveContext()->workspaces.clear();
+    ActiveContext()->workspace_active_bytes = 0;
 }
 
 int AcquireTensorDevice(const Tensor* tensor, size_t bytes, const void* host_data, void** device_ptr) {
@@ -452,7 +522,9 @@ int AcquireTensorDevice(const Tensor* tensor, size_t bytes, const void* host_dat
     state.host_ptr = host_data;
     state.host_mutation_version = tensor->mutation_version();
     state.device_valid = true;
-    state.host_valid = true;
+    // A device-side read does not refresh a stale host copy. Only an actual
+    // upload establishes host/device agreement here.
+    if (must_copy_host) state.host_valid = true;
     *device_ptr = state.ptr;
     return 0;
 }

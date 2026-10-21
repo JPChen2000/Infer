@@ -99,12 +99,12 @@ int32_t RunEqual(feather::operators::EqualParam* param, const char* timer_name) 
 
 template <>
 int32_t EqualKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunEqual<DataType::FP32>(static_cast<feather::operators::EqualParam*>(param_), "CUDA::Equal::FP32");
+    return RunEqual<DataType::FP32>(ParamAs<feather::operators::EqualParam>(), "CUDA::Equal::FP32");
 }
 
 template <>
 int32_t EqualKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunEqual<DataType::FP16>(static_cast<feather::operators::EqualParam*>(param_), "CUDA::Equal::FP16");
+    return RunEqual<DataType::FP16>(ParamAs<feather::operators::EqualParam>(), "CUDA::Equal::FP16");
 }
 
 void EnsureCudaEqualKernelsRegistered() { (void)g_cuda_equal_kernels_registered; }

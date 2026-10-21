@@ -692,11 +692,11 @@ template <DeviceType Device> int32_t RegisterStandardInt8Kernels() {
 #define DEFINE_UNARY(KERNEL, KIND) \
 template <> int32_t KERNEL<DeviceType::COMMON, DataType::INT8>::compute() { \
     AutoTimer timer("Common::" #KERNEL "::INT8"); \
-    return RunUnary(static_cast<operators::UnaryParam*>(param_), UnaryKind::KIND); \
+    return RunUnary(ParamAs<operators::UnaryParam>(), UnaryKind::KIND); \
 } \
 template <> int32_t KERNEL<DeviceType::X86, DataType::INT8>::compute() { \
     AutoTimer timer("X86::" #KERNEL "::INT8"); \
-    return RunUnary(static_cast<operators::UnaryParam*>(param_), UnaryKind::KIND); \
+    return RunUnary(ParamAs<operators::UnaryParam>(), UnaryKind::KIND); \
 }
 
 DEFINE_UNARY(ReluKernel, kRelu)
@@ -715,11 +715,11 @@ DEFINE_UNARY(SoftplusKernel, kSoftplus)
 #define DEFINE_BINARY(KERNEL, OP) \
 template <> int32_t KERNEL<DeviceType::COMMON, DataType::INT8>::compute() { \
     AutoTimer timer("Common::" #KERNEL "::INT8"); \
-    return RunBinary(static_cast<operators::BinaryParam*>(param_), OP); \
+    return RunBinary(ParamAs<operators::BinaryParam>(), OP); \
 } \
 template <> int32_t KERNEL<DeviceType::X86, DataType::INT8>::compute() { \
     AutoTimer timer("X86::" #KERNEL "::INT8"); \
-    return RunBinary(static_cast<operators::BinaryParam*>(param_), OP); \
+    return RunBinary(ParamAs<operators::BinaryParam>(), OP); \
 }
 
 DEFINE_BINARY(AddKernel, '+')
@@ -731,12 +731,12 @@ DEFINE_BINARY(DivKernel, '/')
 #define DEFINE_COPY(KERNEL, PARAM) \
 template <> int32_t KERNEL<DeviceType::COMMON, DataType::INT8>::compute() { \
     AutoTimer timer("Common::" #KERNEL "::INT8"); \
-    auto* p = static_cast<operators::PARAM*>(param_); \
+    auto* p = ParamAs<operators::PARAM>(); \
     return p == nullptr ? -1 : Copy(p->input.get(), p->out.get()); \
 } \
 template <> int32_t KERNEL<DeviceType::X86, DataType::INT8>::compute() { \
     AutoTimer timer("X86::" #KERNEL "::INT8"); \
-    auto* p = static_cast<operators::PARAM*>(param_); \
+    auto* p = ParamAs<operators::PARAM>(); \
     return p == nullptr ? -1 : Copy(p->input.get(), p->out.get()); \
 }
 
@@ -750,11 +750,11 @@ DEFINE_COPY(UnsqueezeKernel, AxesParam)
 #define DEFINE_SIMPLE(KERNEL, PARAM, FUNCTION) \
 template <> int32_t KERNEL<DeviceType::COMMON, DataType::INT8>::compute() { \
     AutoTimer timer("Common::" #KERNEL "::INT8"); \
-    return FUNCTION(static_cast<operators::PARAM*>(param_)); \
+    return FUNCTION(ParamAs<operators::PARAM>()); \
 } \
 template <> int32_t KERNEL<DeviceType::X86, DataType::INT8>::compute() { \
     AutoTimer timer("X86::" #KERNEL "::INT8"); \
-    return FUNCTION(static_cast<operators::PARAM*>(param_)); \
+    return FUNCTION(ParamAs<operators::PARAM>()); \
 }
 
 DEFINE_SIMPLE(BatchNormalizationKernel, BatchNormParam, RunBatchNorm)
@@ -770,7 +770,7 @@ DEFINE_SIMPLE(GatherKernel, GatherParam, RunGather)
 DEFINE_SIMPLE(WhereKernel, WhereParam, RunWhere)
 template <> int32_t ResizeKernel<DeviceType::COMMON, DataType::INT8>::compute() {
     AutoTimer timer("Common::ResizeKernel::INT8");
-    return RunResize(static_cast<operators::ResizeParam*>(param_));
+    return RunResize(ParamAs<operators::ResizeParam>());
 }
 DEFINE_SIMPLE(EqualKernel, EqualParam, RunEqual)
 DEFINE_SIMPLE(CastKernel, CastParam, RunCast)
@@ -778,7 +778,7 @@ DEFINE_SIMPLE(ConstantOfShapeKernel, ConstantOfShapeParam, RunConstantOfShape)
 DEFINE_SIMPLE(SoftmaxKernel, SoftmaxParam, Softmax)
 template <> int32_t ConcatKernel<DeviceType::COMMON, DataType::INT8>::compute() {
     AutoTimer timer("Common::ConcatKernel::INT8");
-    return RunConcat(static_cast<operators::ConcatParam*>(param_));
+    return RunConcat(ParamAs<operators::ConcatParam>());
 }
 DEFINE_SIMPLE(SplitKernel, SplitParam, RunSplit)
 #undef DEFINE_SIMPLE
@@ -798,16 +798,22 @@ int32_t RunPow(operators::PowParam* param) {
 
 template <> int32_t PowKernel<DeviceType::COMMON, DataType::INT8>::compute() {
     AutoTimer timer("Common::Pow::INT8");
-    return RunPow(static_cast<operators::PowParam*>(param_));
+    return RunPow(ParamAs<operators::PowParam>());
 }
 
 template <> int32_t PowKernel<DeviceType::X86, DataType::INT8>::compute() {
     AutoTimer timer("X86::Pow::INT8");
-    return RunPow(static_cast<operators::PowParam*>(param_));
+    return RunPow(ParamAs<operators::PowParam>());
 }
 
 void EnsureStandardCommonInt8KernelsRegistered() { static const int registered = RegisterStandardInt8Kernels<DeviceType::COMMON>(); (void)registered; }
-void EnsureStandardX86Int8KernelsRegistered() { static const int registered = RegisterStandardInt8Kernels<DeviceType::X86>(); (void)registered; }
+void EnsureStandardX86Int8KernelsRegistered() {
+#ifdef FEATHER_WITH_X86
+    if (!HostSupportsX86Kernels()) return;
+    static const int registered = RegisterStandardInt8Kernels<DeviceType::X86>();
+    (void)registered;
+#endif
+}
 
 namespace {
 const bool g_standard_int8_registered = []() {

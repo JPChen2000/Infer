@@ -129,7 +129,7 @@ bool RunSiluWithCudnn(feather::operators::UnaryParam* param) {
 
 template <>
 int32_t SiluKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    auto* param = static_cast<feather::operators::UnaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::UnaryParam>();
     if (RunSiluDirect<DataType::FP32>(param)) {
         return 0;
     }
@@ -144,7 +144,7 @@ int32_t SiluKernel<DeviceType::CUDA, DataType::FP32>::compute() {
 
 template <>
 int32_t SiluKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    auto* param = static_cast<feather::operators::UnaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::UnaryParam>();
     if (RunSiluDirect<DataType::FP16>(param)) {
         return 0;
     }
@@ -159,7 +159,7 @@ int32_t SiluKernel<DeviceType::CUDA, DataType::FP16>::compute() {
 
 template <>
 int32_t SiluKernel<DeviceType::CUDA, DataType::BF16>::compute() {
-    auto* param = static_cast<feather::operators::UnaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::UnaryParam>();
     if (RunSiluDirect<DataType::BF16>(param)) {
         return 0;
     }

@@ -147,7 +147,7 @@ int32_t ComputeSliceRaw(feather::operators::SliceParam* param, DataType dtype) {
 template <>
 int32_t SliceKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::Slice::FP32");
-    auto* param = static_cast<feather::operators::SliceParam*>(param_);
+    auto* param = ParamAs<feather::operators::SliceParam>();
     if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::FP32) {
         return ComputeSliceFallback<DataType::FP32>(param);
     }
@@ -157,25 +157,14 @@ int32_t SliceKernel<DeviceType::X86, DataType::FP32>::compute() {
 template <>
 int32_t SliceKernel<DeviceType::X86, DataType::FP16>::compute() {
     AutoTimer timer("X86::Slice::FP16");
-    auto* param = static_cast<feather::operators::SliceParam*>(param_);
+    auto* param = ParamAs<feather::operators::SliceParam>();
     if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::FP16) {
         return ComputeSliceFallback<DataType::FP16>(param);
     }
     return ComputeSliceRaw<uint16_t>(param, DataType::FP16);
 }
 
-void EnsureX86SliceKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "Slice",
-            []() { return std::make_unique<SliceKernel<DeviceType::X86, DataType::FP32>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP16, "Slice",
-            []() { return std::make_unique<SliceKernel<DeviceType::X86, DataType::FP16>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

@@ -28,19 +28,19 @@ bool g_cuda_cos_kernels_registered = []() {
 template <>
 int32_t CosKernel<DeviceType::CUDA, DataType::FP32>::compute() {
     return cuda_detail::RunUnaryElementwise<DataType::FP32, 9>(
-        static_cast<feather::operators::UnaryParam*>(param_), "CUDA::Cos::FP32");
+        ParamAs<feather::operators::UnaryParam>(), "CUDA::Cos::FP32");
 }
 
 template <>
 int32_t CosKernel<DeviceType::CUDA, DataType::FP16>::compute() {
     return cuda_detail::RunUnaryElementwise<DataType::FP16, 9>(
-        static_cast<feather::operators::UnaryParam*>(param_), "CUDA::Cos::FP16");
+        ParamAs<feather::operators::UnaryParam>(), "CUDA::Cos::FP16");
 }
 
 template <>
 int32_t CosKernel<DeviceType::CUDA, DataType::BF16>::compute() {
     return cuda_detail::RunUnaryElementwise<DataType::BF16, 9>(
-        static_cast<feather::operators::UnaryParam*>(param_), "CUDA::Cos::BF16");
+        ParamAs<feather::operators::UnaryParam>(), "CUDA::Cos::BF16");
 }
 
 void EnsureCudaCosKernelsRegistered() { (void)g_cuda_cos_kernels_registered; }

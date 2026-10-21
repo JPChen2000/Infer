@@ -104,21 +104,21 @@ int32_t ComputeMulKernel(feather::operators::BinaryParam* param) {
 template <>
 int32_t MulKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Mul::FP32");
-    auto* param = static_cast<feather::operators::BinaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::BinaryParam>();
     return ComputeMulKernel<DataType::FP32>(param);
 }
 
 template <>
 int32_t MulKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Mul::FP16");
-    auto* param = static_cast<feather::operators::BinaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::BinaryParam>();
     return ComputeMulKernel<DataType::FP16>(param);
 }
 
 template <>
 int32_t MulKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Mul::BF16");
-    auto* param = static_cast<feather::operators::BinaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::BinaryParam>();
     return ComputeMulKernel<DataType::BF16>(param);
 }
 
@@ -130,19 +130,19 @@ int32_t ComputeMulFp8(feather::operators::BinaryParam* param) {
 template <>
 int32_t MulKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() {
     AutoTimer timer("Common::Mul::FP8E4M3");
-    return ComputeMulFp8<DataType::FP8E4M3>(static_cast<feather::operators::BinaryParam*>(param_));
+    return ComputeMulFp8<DataType::FP8E4M3>(ParamAs<feather::operators::BinaryParam>());
 }
 
 template <>
 int32_t MulKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() {
     AutoTimer timer("Common::Mul::FP8E5M2");
-    return ComputeMulFp8<DataType::FP8E5M2>(static_cast<feather::operators::BinaryParam*>(param_));
+    return ComputeMulFp8<DataType::FP8E5M2>(ParamAs<feather::operators::BinaryParam>());
 }
 
 template <>
 int32_t MulKernel<DeviceType::COMMON, DataType::INT64>::compute() {
     AutoTimer timer("Common::Mul::INT64");
-    auto* param = static_cast<feather::operators::BinaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::BinaryParam>();
     return ComputeMulKernel<DataType::INT64>(param);
 }
 

@@ -186,7 +186,7 @@ int32_t PrepareFp8Gemm(feather::operators::GemmParam* param, x86::PackedFp8Rhs* 
 }  // namespace
 
 int32_t GemmKernel<DeviceType::X86, DataType::BF16>::Prepare() {
-    auto* param = static_cast<feather::operators::GemmParam*>(param_);
+    auto* param = ParamAs<feather::operators::GemmParam>();
     if (param == nullptr || param->a == nullptr || param->b == nullptr || param->out == nullptr ||
         !param->a->IsInitialized() || !param->b->IsInitialized() || param->a->data_type() != DataType::BF16 ||
         param->b->data_type() != DataType::BF16 || param->trans_a || param->a->dims().size() < 2 ||
@@ -216,7 +216,7 @@ int32_t GemmKernel<DeviceType::X86, DataType::BF16>::Prepare() {
 template <>
 int32_t GemmKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::Gemm::FP32");
-    auto* param = static_cast<feather::operators::GemmParam*>(param_);
+    auto* param = ParamAs<feather::operators::GemmParam>();
     if (param == nullptr || param->a == nullptr || param->b == nullptr || param->out == nullptr ||
         !param->a->IsInitialized() || !param->b->IsInitialized() || !param->out->IsInitialized()) {
         return -1;
@@ -247,7 +247,7 @@ int32_t GemmKernel<DeviceType::X86, DataType::FP32>::compute() {
 template <>
 int32_t GemmKernel<DeviceType::X86, DataType::FP16>::compute() {
     AutoTimer timer("X86::Gemm::FP16");
-    auto* param = static_cast<feather::operators::GemmParam*>(param_);
+    auto* param = ParamAs<feather::operators::GemmParam>();
     if (param == nullptr || param->a == nullptr || param->b == nullptr || param->out == nullptr) {
         return -1;
     }
@@ -277,7 +277,7 @@ int32_t GemmKernel<DeviceType::X86, DataType::FP16>::compute() {
 
 int32_t GemmKernel<DeviceType::X86, DataType::BF16>::compute() {
     AutoTimer timer("X86::Gemm::BF16");
-    auto* param = static_cast<feather::operators::GemmParam*>(param_);
+    auto* param = ParamAs<feather::operators::GemmParam>();
     if (param == nullptr || param->a == nullptr || param->b == nullptr || param->out == nullptr) {
         return -1;
     }
@@ -333,47 +333,27 @@ int32_t GemmKernel<DeviceType::X86, DataType::BF16>::compute() {
 
 int32_t GemmKernel<DeviceType::X86, DataType::FP8E4M3>::compute() {
     AutoTimer timer("X86::Gemm::FP8E4M3");
-    return ComputeFp8Gemm<DataType::FP8E4M3>(static_cast<feather::operators::GemmParam*>(param_), &packed_rhs_,
+    return ComputeFp8Gemm<DataType::FP8E4M3>(ParamAs<feather::operators::GemmParam>(), &packed_rhs_,
                                              &packed_transposed_rhs_, &workspace_);
 }
 
 int32_t GemmKernel<DeviceType::X86, DataType::FP8E5M2>::compute() {
     AutoTimer timer("X86::Gemm::FP8E5M2");
-    return ComputeFp8Gemm<DataType::FP8E5M2>(static_cast<feather::operators::GemmParam*>(param_), &packed_rhs_,
+    return ComputeFp8Gemm<DataType::FP8E5M2>(ParamAs<feather::operators::GemmParam>(), &packed_rhs_,
                                              &packed_transposed_rhs_, &workspace_);
 }
 
 int32_t GemmKernel<DeviceType::X86, DataType::FP8E4M3>::Prepare() {
-    return PrepareFp8Gemm<DataType::FP8E4M3>(static_cast<feather::operators::GemmParam*>(param_), &packed_rhs_,
+    return PrepareFp8Gemm<DataType::FP8E4M3>(ParamAs<feather::operators::GemmParam>(), &packed_rhs_,
                                              &packed_transposed_rhs_);
 }
 
 int32_t GemmKernel<DeviceType::X86, DataType::FP8E5M2>::Prepare() {
-    return PrepareFp8Gemm<DataType::FP8E5M2>(static_cast<feather::operators::GemmParam*>(param_), &packed_rhs_,
+    return PrepareFp8Gemm<DataType::FP8E5M2>(ParamAs<feather::operators::GemmParam>(), &packed_rhs_,
                                              &packed_transposed_rhs_);
 }
 
-void EnsureX86GemmKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "Gemm",
-            []() { return std::make_unique<GemmKernel<DeviceType::X86, DataType::FP32>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP16, "Gemm",
-            []() { return std::make_unique<GemmKernel<DeviceType::X86, DataType::FP16>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::BF16, "Gemm",
-            []() { return std::make_unique<GemmKernel<DeviceType::X86, DataType::BF16>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP8E4M3, "Gemm",
-            []() { return std::make_unique<GemmKernel<DeviceType::X86, DataType::FP8E4M3>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP8E5M2, "Gemm",
-            []() { return std::make_unique<GemmKernel<DeviceType::X86, DataType::FP8E5M2>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

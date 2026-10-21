@@ -30,6 +30,7 @@ class OpBase {
     virtual void AttachKernel(std::unique_ptr<KernelBase> kernel) = 0;
     virtual std::unique_ptr<KernelBase> DetachKernel() = 0;
     virtual bool HasKernel() const = 0;
+    virtual const KernelBase* kernel() const { return nullptr; }
 
     virtual int32_t CheckShape() const { return 0; }
     virtual int32_t InferOutputShapes() { return 0; }

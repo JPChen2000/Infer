@@ -211,7 +211,7 @@ void ComputeFp8Range(const uint16_t* state, const uint16_t* mixed, const uint8_t
 template <>
 int32_t QwenDepthwiseConvStateKernel<DeviceType::X86, DataType::BF16>::compute() {
     AutoTimer timer("X86::QwenDepthwiseConvState::BF16");
-    auto* param = static_cast<operators::QwenDepthwiseConvStateParam*>(param_);
+    auto* param = ParamAs<operators::QwenDepthwiseConvStateParam>();
     int64_t channels = 0;
     if (!Validate(param, &channels)) {
         return -1;
@@ -285,43 +285,18 @@ int32_t ComputeFp8State(operators::QwenDepthwiseConvStateParam* param) {
 template <>
 int32_t QwenDepthwiseConvStateKernel<DeviceType::X86, DataType::FP8E4M3>::compute() {
     AutoTimer timer("X86::QwenDepthwiseConvState::FP8E4M3");
-    return ComputeFp8State<DataType::FP8E4M3>(static_cast<operators::QwenDepthwiseConvStateParam*>(param_));
+    return ComputeFp8State<DataType::FP8E4M3>(ParamAs<operators::QwenDepthwiseConvStateParam>());
 }
 
 template <>
 int32_t QwenDepthwiseConvStateKernel<DeviceType::X86, DataType::FP8E5M2>::compute() {
     AutoTimer timer("X86::QwenDepthwiseConvState::FP8E5M2");
-    return ComputeFp8State<DataType::FP8E5M2>(static_cast<operators::QwenDepthwiseConvStateParam*>(param_));
+    return ComputeFp8State<DataType::FP8E5M2>(ParamAs<operators::QwenDepthwiseConvStateParam>());
 }
 
-void EnsureX86QwenDepthwiseConvStateKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(DeviceType::X86, DataType::BF16, "QwenDepthwiseConvState", []() {
-            return std::make_unique<QwenDepthwiseConvStateKernel<DeviceType::X86, DataType::BF16>>();
-        });
-        KernelDispatcher::instance().registerKernel(DeviceType::X86, DataType::FP8E4M3,
-                                                    "QwenDepthwiseConvState", []() {
-                                                        return std::make_unique<
-                                                            QwenDepthwiseConvStateKernel<DeviceType::X86,
-                                                                                         DataType::FP8E4M3>>();
-                                                    });
-        KernelDispatcher::instance().registerKernel(DeviceType::X86, DataType::FP8E5M2,
-                                                    "QwenDepthwiseConvState", []() {
-                                                        return std::make_unique<
-                                                            QwenDepthwiseConvStateKernel<DeviceType::X86,
-                                                                                         DataType::FP8E5M2>>();
-                                                    });
-        return true;
-    }();
-    (void)registered;
-}
 
-void EnsureQwenDepthwiseConvStateKernelsRegistered() {
-    EnsureX86QwenDepthwiseConvStateKernelsRegistered();
-#ifdef FEATHER_WITH_CUDA
-    EnsureCudaQwenDepthwiseConvStateKernelsRegistered();
-#endif
-}
+
+
 
 }  // namespace kernel
 }  // namespace feather

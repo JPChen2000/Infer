@@ -28,19 +28,19 @@ bool g_cuda_sin_kernels_registered = []() {
 template <>
 int32_t SinKernel<DeviceType::CUDA, DataType::FP32>::compute() {
     return cuda_detail::RunUnaryElementwise<DataType::FP32, 8>(
-        static_cast<feather::operators::UnaryParam*>(param_), "CUDA::Sin::FP32");
+        ParamAs<feather::operators::UnaryParam>(), "CUDA::Sin::FP32");
 }
 
 template <>
 int32_t SinKernel<DeviceType::CUDA, DataType::FP16>::compute() {
     return cuda_detail::RunUnaryElementwise<DataType::FP16, 8>(
-        static_cast<feather::operators::UnaryParam*>(param_), "CUDA::Sin::FP16");
+        ParamAs<feather::operators::UnaryParam>(), "CUDA::Sin::FP16");
 }
 
 template <>
 int32_t SinKernel<DeviceType::CUDA, DataType::BF16>::compute() {
     return cuda_detail::RunUnaryElementwise<DataType::BF16, 8>(
-        static_cast<feather::operators::UnaryParam*>(param_), "CUDA::Sin::BF16");
+        ParamAs<feather::operators::UnaryParam>(), "CUDA::Sin::BF16");
 }
 
 void EnsureCudaSinKernelsRegistered() { (void)g_cuda_sin_kernels_registered; }

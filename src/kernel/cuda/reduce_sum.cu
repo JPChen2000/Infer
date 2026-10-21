@@ -158,19 +158,19 @@ int32_t RunReduceSum(feather::operators::ReduceSumParam* param, const char* time
 
 template <>
 int32_t ReduceSumKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunReduceSum<DataType::FP32>(static_cast<feather::operators::ReduceSumParam*>(param_),
+    return RunReduceSum<DataType::FP32>(ParamAs<feather::operators::ReduceSumParam>(),
                                         "CUDA::ReduceSum::FP32");
 }
 
 template <>
 int32_t ReduceSumKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunReduceSum<DataType::FP16>(static_cast<feather::operators::ReduceSumParam*>(param_),
+    return RunReduceSum<DataType::FP16>(ParamAs<feather::operators::ReduceSumParam>(),
                                         "CUDA::ReduceSum::FP16");
 }
 
 template <>
 int32_t ReduceSumKernel<DeviceType::CUDA, DataType::BF16>::compute() {
-    return RunReduceSum<DataType::BF16>(static_cast<feather::operators::ReduceSumParam*>(param_),
+    return RunReduceSum<DataType::BF16>(ParamAs<feather::operators::ReduceSumParam>(),
                                         "CUDA::ReduceSum::BF16");
 }
 

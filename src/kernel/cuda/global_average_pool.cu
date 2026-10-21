@@ -95,13 +95,13 @@ int RunGlobalAveragePool(feather::operators::GlobalAveragePoolParam* param, cons
 
 template <>
 int32_t GlobalAveragePoolKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunGlobalAveragePool<DataType::FP32>(static_cast<feather::operators::GlobalAveragePoolParam*>(param_),
+    return RunGlobalAveragePool<DataType::FP32>(ParamAs<feather::operators::GlobalAveragePoolParam>(),
                                                 "CUDA::GlobalAveragePool::FP32");
 }
 
 template <>
 int32_t GlobalAveragePoolKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunGlobalAveragePool<DataType::FP16>(static_cast<feather::operators::GlobalAveragePoolParam*>(param_),
+    return RunGlobalAveragePool<DataType::FP16>(ParamAs<feather::operators::GlobalAveragePoolParam>(),
                                                 "CUDA::GlobalAveragePool::FP16");
 }
 

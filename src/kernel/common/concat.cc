@@ -72,24 +72,24 @@ int32_t ComputeConcatKernel(feather::operators::ConcatParam* param) {
 template <>
 int32_t ConcatKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Concat::FP32");
-    return ComputeConcatKernel<DataType::FP32>(static_cast<feather::operators::ConcatParam*>(param_));
+    return ComputeConcatKernel<DataType::FP32>(ParamAs<feather::operators::ConcatParam>());
 }
 
 template <>
 int32_t ConcatKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Concat::FP16");
-    return ComputeConcatKernel<DataType::FP16>(static_cast<feather::operators::ConcatParam*>(param_));
+    return ComputeConcatKernel<DataType::FP16>(ParamAs<feather::operators::ConcatParam>());
 }
 
 template <>
 int32_t ConcatKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Concat::BF16");
-    return ComputeConcatKernel<DataType::BF16>(static_cast<feather::operators::ConcatParam*>(param_));
+    return ComputeConcatKernel<DataType::BF16>(ParamAs<feather::operators::ConcatParam>());
 }
 
 int32_t ConcatKernel<DeviceType::COMMON, DataType::INT64>::compute() {
     AutoTimer timer("Common::Concat::INT64");
-    auto* param = static_cast<feather::operators::ConcatParam*>(param_);
+    auto* param = ParamAs<feather::operators::ConcatParam>();
     if (param == nullptr || param->out == nullptr || param->inputs.size() < 2) {
         return -1;
     }

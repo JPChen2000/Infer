@@ -33,7 +33,7 @@ bool g_div_kernels_registered = []() {
 template <>
 int32_t DivKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Div::FP32");
-    auto* param = static_cast<feather::operators::BinaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::BinaryParam>();
     if (param == nullptr) {
         return -1;
     }
@@ -44,7 +44,7 @@ int32_t DivKernel<DeviceType::COMMON, DataType::FP32>::compute() {
 template <>
 int32_t DivKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Div::FP16");
-    auto* param = static_cast<feather::operators::BinaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::BinaryParam>();
     if (param == nullptr) {
         return -1;
     }
@@ -55,7 +55,7 @@ int32_t DivKernel<DeviceType::COMMON, DataType::FP16>::compute() {
 template <>
 int32_t DivKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Div::BF16");
-    auto* param = static_cast<feather::operators::BinaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::BinaryParam>();
     if (param == nullptr) {
         return -1;
     }
@@ -73,13 +73,13 @@ int32_t ComputeDivFp8(feather::operators::BinaryParam* param) {
 template <>
 int32_t DivKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() {
     AutoTimer timer("Common::Div::FP8E4M3");
-    return ComputeDivFp8<DataType::FP8E4M3>(static_cast<feather::operators::BinaryParam*>(param_));
+    return ComputeDivFp8<DataType::FP8E4M3>(ParamAs<feather::operators::BinaryParam>());
 }
 
 template <>
 int32_t DivKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() {
     AutoTimer timer("Common::Div::FP8E5M2");
-    return ComputeDivFp8<DataType::FP8E5M2>(static_cast<feather::operators::BinaryParam*>(param_));
+    return ComputeDivFp8<DataType::FP8E5M2>(ParamAs<feather::operators::BinaryParam>());
 }
 
 void EnsureDivKernelsRegistered() {

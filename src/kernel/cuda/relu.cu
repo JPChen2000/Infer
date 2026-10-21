@@ -23,13 +23,13 @@ bool g_cuda_relu_kernels_registered = []() {
 
 template <>
 int32_t ReluKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return cuda_detail::RunUnary<DataType::FP32, 0>(static_cast<feather::operators::UnaryParam*>(param_),
+    return cuda_detail::RunUnary<DataType::FP32, 0>(ParamAs<feather::operators::UnaryParam>(),
                                                    "CUDA::ReLU::FP32");
 }
 
 template <>
 int32_t ReluKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return cuda_detail::RunUnary<DataType::FP16, 0>(static_cast<feather::operators::UnaryParam*>(param_),
+    return cuda_detail::RunUnary<DataType::FP16, 0>(ParamAs<feather::operators::UnaryParam>(),
                                                    "CUDA::ReLU::FP16");
 }
 

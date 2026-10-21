@@ -65,7 +65,7 @@ bool g_registered = []() {
 template <>
 int32_t QwenGemmArgmaxKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::QwenGemmArgmax::BF16");
-    return Compute<DeviceType::COMMON>(static_cast<operators::QwenGemmArgmaxParam*>(param_));
+    return Compute<DeviceType::COMMON>(ParamAs<operators::QwenGemmArgmaxParam>());
 }
 
 void EnsureCommonQwenGemmArgmaxKernelsRegistered() { (void)g_registered; }

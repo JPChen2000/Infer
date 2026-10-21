@@ -27,15 +27,15 @@ int32_t RunExp(feather::operators::UnaryParam* param) {
 
 template <> int32_t ExpKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Exp::FP32");
-    return RunExp<DataType::FP32>(static_cast<feather::operators::UnaryParam*>(param_));
+    return RunExp<DataType::FP32>(ParamAs<feather::operators::UnaryParam>());
 }
 template <> int32_t ExpKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Exp::FP16");
-    return RunExp<DataType::FP16>(static_cast<feather::operators::UnaryParam*>(param_));
+    return RunExp<DataType::FP16>(ParamAs<feather::operators::UnaryParam>());
 }
 template <> int32_t ExpKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Exp::BF16");
-    return RunExp<DataType::BF16>(static_cast<feather::operators::UnaryParam*>(param_));
+    return RunExp<DataType::BF16>(ParamAs<feather::operators::UnaryParam>());
 }
 
 void EnsureExpKernelsRegistered() {

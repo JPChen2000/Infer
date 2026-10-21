@@ -173,10 +173,7 @@ inline int SelectPreferredCudaConv2DPerfIndex(const CudnnConvSelectionShape& sha
 template <DeviceType dev, DataType dtype>
 class Conv2DKernel : public KernelBase {
    public:
-    virtual int32_t compute() {
-        LOG_INFO("use of unimplement kernel %s \n", typeid(*this).name());
-        return 0;
-    }
+    int32_t compute() override;
 
    protected:
     const Tensor* cached_weight_tensor_{nullptr};

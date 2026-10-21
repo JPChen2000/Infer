@@ -130,13 +130,13 @@ int RunYoloDecode(feather::operators::YoloDecodeParam* param, const char* timer_
 
 template <>
 int32_t YoloDecodeKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunYoloDecode<DataType::FP32>(static_cast<feather::operators::YoloDecodeParam*>(param_),
+    return RunYoloDecode<DataType::FP32>(ParamAs<feather::operators::YoloDecodeParam>(),
                                         "CUDA::YoloDecode::FP32");
 }
 
 template <>
 int32_t YoloDecodeKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunYoloDecode<DataType::FP16>(static_cast<feather::operators::YoloDecodeParam*>(param_),
+    return RunYoloDecode<DataType::FP16>(ParamAs<feather::operators::YoloDecodeParam>(),
                                         "CUDA::YoloDecode::FP16");
 }
 

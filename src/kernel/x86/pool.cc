@@ -169,7 +169,7 @@ int32_t ComputePoolRaw(feather::operators::PoolParam* param, DataType dtype) {
 template <>
 int32_t AvgPoolKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::AvgPool::FP32");
-    auto* param = static_cast<feather::operators::PoolParam*>(param_);
+    auto* param = ParamAs<feather::operators::PoolParam>();
     if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::FP32) {
         return ComputePoolFallback<DataType::FP32, false>(param);
     }
@@ -179,7 +179,7 @@ int32_t AvgPoolKernel<DeviceType::X86, DataType::FP32>::compute() {
 template <>
 int32_t AvgPoolKernel<DeviceType::X86, DataType::FP16>::compute() {
     AutoTimer timer("X86::AvgPool::FP16");
-    auto* param = static_cast<feather::operators::PoolParam*>(param_);
+    auto* param = ParamAs<feather::operators::PoolParam>();
     if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::FP16) {
         return ComputePoolFallback<DataType::FP16, false>(param);
     }
@@ -189,7 +189,7 @@ int32_t AvgPoolKernel<DeviceType::X86, DataType::FP16>::compute() {
 template <>
 int32_t MaxPoolKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::MaxPool::FP32");
-    auto* param = static_cast<feather::operators::PoolParam*>(param_);
+    auto* param = ParamAs<feather::operators::PoolParam>();
     if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::FP32) {
         return ComputePoolFallback<DataType::FP32, true>(param);
     }
@@ -199,31 +199,14 @@ int32_t MaxPoolKernel<DeviceType::X86, DataType::FP32>::compute() {
 template <>
 int32_t MaxPoolKernel<DeviceType::X86, DataType::FP16>::compute() {
     AutoTimer timer("X86::MaxPool::FP16");
-    auto* param = static_cast<feather::operators::PoolParam*>(param_);
+    auto* param = ParamAs<feather::operators::PoolParam>();
     if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::FP16) {
         return ComputePoolFallback<DataType::FP16, true>(param);
     }
     return ComputePoolRaw<uint16_t, true>(param, DataType::FP16);
 }
 
-void EnsureX86PoolKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "AvgPool",
-            []() { return std::make_unique<AvgPoolKernel<DeviceType::X86, DataType::FP32>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP16, "AvgPool",
-            []() { return std::make_unique<AvgPoolKernel<DeviceType::X86, DataType::FP16>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "MaxPool",
-            []() { return std::make_unique<MaxPoolKernel<DeviceType::X86, DataType::FP32>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP16, "MaxPool",
-            []() { return std::make_unique<MaxPoolKernel<DeviceType::X86, DataType::FP16>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

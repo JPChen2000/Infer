@@ -139,13 +139,13 @@ int RunResizeConcat(feather::operators::ResizeConcatParam* param, const char* ti
 
 template <>
 int32_t ResizeConcatKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunResizeConcat<DataType::FP32>(static_cast<feather::operators::ResizeConcatParam*>(param_),
+    return RunResizeConcat<DataType::FP32>(ParamAs<feather::operators::ResizeConcatParam>(),
                                            "CUDA::ResizeConcat::FP32");
 }
 
 template <>
 int32_t ResizeConcatKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunResizeConcat<DataType::FP16>(static_cast<feather::operators::ResizeConcatParam*>(param_),
+    return RunResizeConcat<DataType::FP16>(ParamAs<feather::operators::ResizeConcatParam>(),
                                            "CUDA::ResizeConcat::FP16");
 }
 

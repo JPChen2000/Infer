@@ -161,18 +161,10 @@ int32_t ComputeReduceSumFp32(feather::operators::ReduceSumParam* param) {
 template <>
 int32_t ReduceSumKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::ReduceSum::FP32");
-    return ComputeReduceSumFp32(static_cast<feather::operators::ReduceSumParam*>(param_));
+    return ComputeReduceSumFp32(ParamAs<feather::operators::ReduceSumParam>());
 }
 
-void EnsureX86ReduceSumKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "ReduceSum",
-            []() { return std::make_unique<ReduceSumKernel<DeviceType::X86, DataType::FP32>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

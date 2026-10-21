@@ -78,7 +78,7 @@ int32_t ComputeIdentityRaw(feather::operators::UnaryParam* param, DataType dtype
 template <>
 int32_t IdentityKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::Identity::FP32");
-    auto* param = static_cast<feather::operators::UnaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::UnaryParam>();
     if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::FP32) {
         return ComputeIdentityFallback<DataType::FP32>(param);
     }
@@ -88,7 +88,7 @@ int32_t IdentityKernel<DeviceType::X86, DataType::FP32>::compute() {
 template <>
 int32_t IdentityKernel<DeviceType::X86, DataType::FP16>::compute() {
     AutoTimer timer("X86::Identity::FP16");
-    auto* param = static_cast<feather::operators::UnaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::UnaryParam>();
     if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::FP16) {
         return ComputeIdentityFallback<DataType::FP16>(param);
     }
@@ -98,28 +98,14 @@ int32_t IdentityKernel<DeviceType::X86, DataType::FP16>::compute() {
 template <>
 int32_t IdentityKernel<DeviceType::X86, DataType::BF16>::compute() {
     AutoTimer timer("X86::Identity::BF16");
-    auto* param = static_cast<feather::operators::UnaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::UnaryParam>();
     if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::BF16) {
         return ComputeIdentityFallback<DataType::BF16>(param);
     }
     return ComputeIdentityRaw<BFloat16>(param, DataType::BF16);
 }
 
-void EnsureX86IdentityKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "Identity",
-            []() { return std::make_unique<IdentityKernel<DeviceType::X86, DataType::FP32>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP16, "Identity",
-            []() { return std::make_unique<IdentityKernel<DeviceType::X86, DataType::FP16>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::BF16, "Identity",
-            []() { return std::make_unique<IdentityKernel<DeviceType::X86, DataType::BF16>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

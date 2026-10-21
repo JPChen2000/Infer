@@ -27,15 +27,15 @@ int32_t RunSin(feather::operators::UnaryParam* param) {
 
 template <> int32_t SinKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Sin::FP32");
-    return RunSin<DataType::FP32>(static_cast<feather::operators::UnaryParam*>(param_));
+    return RunSin<DataType::FP32>(ParamAs<feather::operators::UnaryParam>());
 }
 template <> int32_t SinKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Sin::FP16");
-    return RunSin<DataType::FP16>(static_cast<feather::operators::UnaryParam*>(param_));
+    return RunSin<DataType::FP16>(ParamAs<feather::operators::UnaryParam>());
 }
 template <> int32_t SinKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Sin::BF16");
-    return RunSin<DataType::BF16>(static_cast<feather::operators::UnaryParam*>(param_));
+    return RunSin<DataType::BF16>(ParamAs<feather::operators::UnaryParam>());
 }
 
 void EnsureSinKernelsRegistered() { (void)g_sin_kernels_registered; }

@@ -61,13 +61,13 @@ int32_t ComputeFcCommon(feather::operators::FcParam* param) {
 template<>
 int32_t FcKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::FC::FP32");
-    return ComputeFcCommon<DataType::FP32>(static_cast<FcParam*>(param_));
+    return ComputeFcCommon<DataType::FP32>(ParamAs<FcParam>());
 }
 
 template<>
 int32_t FcKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::FC::FP16");
-    return ComputeFcCommon<DataType::FP16>(static_cast<FcParam*>(param_));
+    return ComputeFcCommon<DataType::FP16>(ParamAs<FcParam>());
 }
 
 template <DataType dtype>
@@ -78,19 +78,19 @@ int32_t ComputeCommonFp8Fc(feather::operators::FcParam* param) {
 template <>
 int32_t FcKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() {
     AutoTimer timer("Common::FC::FP8E4M3");
-    return ComputeCommonFp8Fc<DataType::FP8E4M3>(static_cast<FcParam*>(param_));
+    return ComputeCommonFp8Fc<DataType::FP8E4M3>(ParamAs<FcParam>());
 }
 
 template <>
 int32_t FcKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() {
     AutoTimer timer("Common::FC::FP8E5M2");
-    return ComputeCommonFp8Fc<DataType::FP8E5M2>(static_cast<FcParam*>(param_));
+    return ComputeCommonFp8Fc<DataType::FP8E5M2>(ParamAs<FcParam>());
 }
 
 template <>
 int32_t FcKernel<DeviceType::COMMON, DataType::INT8>::compute() {
     AutoTimer timer("Common::FC::INT8");
-    auto* param = static_cast<feather::operators::FcParam*>(param_);
+    auto* param = ParamAs<feather::operators::FcParam>();
     if (param == nullptr || param->input == nullptr || param->w == nullptr || param->out == nullptr ||
         param->input->dims().size() != 2 || param->w->dims().size() != 2 ||
         param->input->dims()[1] != param->w->dims()[0]) {

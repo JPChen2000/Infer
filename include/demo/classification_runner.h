@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "core/graph.h"
-#include "core/graph_lowering.h"
+#include "core/execution_plan.h"
 #include "core/static_graph.h"
 #include "demo/image_io.h"
 #include "model/model_io.h"
@@ -55,9 +55,9 @@ class ClassificationRunner {
     const std::string& DescribeLastBuild() const { return last_build_summary_; }
     const std::string& DescribeLastRun() const { return last_run_summary_; }
     const std::string& LastError() const { return last_error_; }
-    void SetRuntimeProfilingEnabled(bool enabled) { runtime_graph_.SetProfilingEnabled(enabled); }
+    void SetRuntimeProfilingEnabled(bool enabled) { Runtime().SetProfilingEnabled(enabled); }
     const std::vector<RuntimeProfileSummary>& RuntimeProfileSummaries() const {
-        return runtime_graph_.ProfileSummaries();
+        return Runtime().ProfileSummaries();
     }
 
    private:
@@ -69,8 +69,11 @@ class ClassificationRunner {
 
     model::ModelLoader loader_;
     StaticGraph static_graph_;
-    RuntimeGraph runtime_graph_;
-    GraphLowering lowering_;
+    RuntimeGraph& Runtime() { return session_ ? session_->runtime() : bootstrap_graph_; }
+    const RuntimeGraph& Runtime() const { return session_ ? session_->runtime() : bootstrap_graph_; }
+    RuntimeGraph bootstrap_graph_;
+    std::shared_ptr<const CompiledGraph> compiled_graph_;
+    std::unique_ptr<ExecutionSession> session_;
     std::string input_name_;
     std::string output_name_;
     int input_size_{};

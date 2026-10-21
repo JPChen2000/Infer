@@ -1,3 +1,4 @@
+#include "test/python_test_utils.h"
 #include <gtest/gtest.h>
 
 #include <cstdlib>
@@ -143,7 +144,7 @@ onnx.save(model, output_path)
         return false;
     }
     const std::string command =
-        "/home/jarvis/miniconda3/bin/python3 \"" + script_path.string() + "\" \"" + model_path.string() + "\"";
+        feather::test::PythonCommand() + " \"" + script_path.string() + "\" \"" + model_path.string() + "\"";
     return std::system(command.c_str()) == 0;
 }
 
@@ -184,9 +185,9 @@ TEST(yolov5_onnx_import_test, ImportBuildAndLowerYolov5Model) {
     const auto input_raw_path = std::filesystem::temp_directory_path() / "yolov5n_import_test_input.raw";
     const auto output_ref_path = std::filesystem::temp_directory_path() / "yolov5n_import_test_output.raw";
 
-    ASSERT_TRUE(std::filesystem::exists(onnx_path));
+    if (!std::filesystem::is_regular_file(onnx_path)) GTEST_SKIP() << "YOLOv5 ONNX fixture unavailable: " << onnx_path;
 
-    const std::string command = "/home/jarvis/miniconda3/bin/python3 \"" + script_path.string() + "\" --input \"" +
+    const std::string command = feather::test::PythonCommand() + " \"" + script_path.string() + "\" --input \"" +
                                 onnx_path.string() + "\" --output \"" + output_path.string() + "\"";
     ASSERT_EQ(std::system(command.c_str()), 0);
 
@@ -201,7 +202,7 @@ TEST(yolov5_onnx_import_test, ImportBuildAndLowerYolov5Model) {
     ASSERT_TRUE(WriteTensorRaw(input_raw_path, *input_tensor));
 
     const std::string ref_command =
-        "/home/jarvis/miniconda3/bin/python3 \"" + ref_script_path.string() + "\" --model \"" + onnx_path.string() +
+        feather::test::PythonCommand() + " \"" + ref_script_path.string() + "\" --model \"" + onnx_path.string() +
         "\" --input-raw \"" + input_raw_path.string() + "\" --output-raw \"" + output_ref_path.string() + "\"";
     ASSERT_EQ(std::system(ref_command.c_str()), 0);
     const auto reference = ReadFloatVectorRaw(output_ref_path);
@@ -225,7 +226,8 @@ TEST(yolov5_onnx_import_test, ImportBuildAndLowerYolov5Model) {
 
     RuntimeGraph runtime_graph;
     GraphLowering lowering;
-    ASSERT_EQ(lowering.Lower(static_graph, &runtime_graph), 0);
+    const auto lowered = lowering.LowerStatus(static_graph, &runtime_graph);
+    ASSERT_TRUE(lowered.ok()) << lowered.message();
     ASSERT_GT(runtime_graph.NodeSize(), 0U);
 
     ASSERT_EQ(runtime_graph.Run(), 0);

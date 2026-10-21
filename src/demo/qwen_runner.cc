@@ -157,6 +157,7 @@ int64_t SelectGreedyBf16(const BFloat16* values, int64_t count) {
 
 QwenRunner::~QwenRunner() {
 #ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
     ResetCudaGraphs();
 #endif
 }
@@ -165,13 +166,19 @@ int64_t QwenRunner::CudaGraphLaunchCount() const { return cuda_graph_launch_coun
 
 void QwenRunner::SetRuntimeProfilingEnabled(bool enabled) {
 #ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
+#endif
+#ifdef FEATHER_WITH_CUDA
     ResetCudaGraphs();
 #endif
-    runtime_graph_.SetProfilingEnabled(enabled);
+    Runtime().SetProfilingEnabled(enabled);
 }
 
 #ifdef FEATHER_WITH_CUDA
 void QwenRunner::ResetCudaGraphs() {
+#ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
+#endif
     bool has_executable = false;
     for (const auto& slot : cuda_graph_slots_) {
         has_executable = has_executable || slot.executable != nullptr;
@@ -181,8 +188,7 @@ void QwenRunner::ResetCudaGraphs() {
     }
     for (auto& slot : cuda_graph_slots_) {
         if (slot.executable != nullptr) {
-            (void)cudaGraphExecDestroy(slot.executable);
-            slot.executable = nullptr;
+            slot.executable.reset();
         }
         slot.logits_device = nullptr;
         slot.logits_bytes = 0;
@@ -193,73 +199,53 @@ void QwenRunner::ResetCudaGraphs() {
 }
 
 int32_t QwenRunner::CaptureCudaGraph(int slot) {
+#ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
+#endif
     if (slot < 0 || slot >= static_cast<int>(cuda_graph_slots_.size()) ||
         cuda_graph_slots_[static_cast<size_t>(slot)].executable != nullptr) {
         return -1;
     }
-    const auto stream = kernel::cuda_detail::InferenceStream();
-    if (stream == nullptr || cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal) != cudaSuccess) {
-        (void)cudaGetLastError();
-        return 1;
-    }
-
-    const int32_t graph_status = runtime_graph_.Run();
-    cudaGraph_t graph = nullptr;
-    const auto capture_status = cudaStreamEndCapture(stream, &graph);
-    if (graph_status != 0 || capture_status != cudaSuccess || graph == nullptr) {
-        if (graph != nullptr) {
-            (void)cudaGraphDestroy(graph);
-        }
-        (void)cudaGetLastError();
-        return 1;
-    }
-
-    cudaGraphExec_t executable = nullptr;
-    const auto instantiate_status = cudaGraphInstantiate(&executable, graph, nullptr, nullptr, 0);
-    (void)cudaGraphDestroy(graph);
-    if (instantiate_status != cudaSuccess || executable == nullptr) {
-        if (executable != nullptr) {
-            (void)cudaGraphExecDestroy(executable);
-        }
-        (void)cudaGetLastError();
-        return 1;
-    }
-    auto logits = runtime_graph_.GetTensor(logits_output_name_);
+    std::unique_ptr<ExecutionCapture> executable;
+    const auto capture_status = Runtime().Backend().Capture([&] { return Runtime().RunStatus(); }, &executable);
+    if (!capture_status.ok()) return 1;
+    auto logits = Runtime().GetTensor(logits_output_name_);
     const size_t logits_bytes = logits == nullptr ? 0 : TensorBytes(*logits);
     void* logits_device = nullptr;
     if (logits_bytes == 0 ||
         kernel::cuda_detail::AcquireTensorDevice(logits.get(), logits_bytes, logits->raw_data(), &logits_device) != 0 ||
         logits_device == nullptr) {
-        (void)cudaGraphExecDestroy(executable);
         return 1;
     }
     auto& graph_slot = cuda_graph_slots_[static_cast<size_t>(slot)];
-    graph_slot.executable = executable;
+    graph_slot.executable = std::move(executable);
     graph_slot.logits_device = logits_device;
     graph_slot.logits_bytes = logits_bytes;
     return 0;
 }
 
 int32_t QwenRunner::LaunchCudaGraph(int slot) {
+#ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
+#endif
     if (slot < 0 || slot >= static_cast<int>(cuda_graph_slots_.size())) {
         return -1;
     }
-    const auto executable = cuda_graph_slots_[static_cast<size_t>(slot)].executable;
-    const auto stream = kernel::cuda_detail::InferenceStream();
-    if (executable == nullptr || stream == nullptr || cudaGraphLaunch(executable, stream) != cudaSuccess) {
-        (void)cudaGetLastError();
-        return -1;
-    }
+    const auto& executable = cuda_graph_slots_[static_cast<size_t>(slot)].executable;
+    if (!executable || !executable->Launch().ok()) return -1;
     ++cuda_graph_launch_count_;
     return 0;
 }
 
 int32_t QwenRunner::SyncCudaGraphLogits(int slot) {
+#ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
+#endif
     if (slot < 0 || slot >= static_cast<int>(cuda_graph_slots_.size())) {
         return -1;
     }
     const auto& graph_slot = cuda_graph_slots_[static_cast<size_t>(slot)];
-    auto logits = runtime_graph_.GetTensor(logits_output_name_);
+    auto logits = Runtime().GetTensor(logits_output_name_);
     const auto stream = kernel::cuda_detail::InferenceStream();
     if (graph_slot.logits_device == nullptr || graph_slot.logits_bytes == 0 || logits == nullptr ||
         graph_slot.logits_bytes != TensorBytes(*logits) || stream == nullptr ||
@@ -318,6 +304,9 @@ const model::ValueDesc* QwenRunner::FindValueDesc(const std::string& name) const
 }
 
 int32_t QwenRunner::Load(const std::string& model_path, QwenBackend backend) {
+#ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
+#endif
 #ifdef FEATHER_WITH_CUDA
     ResetCudaGraphs();
 #endif
@@ -397,9 +386,11 @@ int32_t QwenRunner::Load(const std::string& model_path, QwenBackend backend) {
 
     static_graph_ = StaticGraph();
     static_graph_.SetKernelDevice(backend_device_);
-    static_graph_.SetPassManager(CreateDefaultPassManager());
-    runtime_graph_.Clear();
-    runtime_graph_.SetThreadMode(RuntimeThreadMode::kSerialGraph);
+    static_graph_.SetPassManager(CreateQwenPassManager());
+    session_.reset();
+    compiled_graph_.reset();
+    Runtime().Clear();
+    Runtime().SetThreadMode(RuntimeThreadMode::kSerialGraph);
     if (static_graph_.SetModel(model) != 0) {
         last_error_ = "failed to set Qwen model on static graph";
         return -1;
@@ -431,33 +422,42 @@ int32_t QwenRunner::Load(const std::string& model_path, QwenBackend backend) {
     }
     std::ostringstream summary;
     summary << "model=" << model.name << " backend=" << QwenBackendName(backend) << " max_context=" << max_context_
-            << " static_nodes=" << static_graph_.NodeSize() << " runtime_nodes=" << runtime_graph_.NodeSize();
+            << " static_nodes=" << static_graph_.NodeSize() << " runtime_nodes=" << Runtime().NodeSize();
     last_build_summary_ = summary.str();
     return 0;
 }
 
 int32_t QwenRunner::PrepareExecutableGraph() {
-    if (static_graph_.Build() != 0 || static_graph_.ApplyPasses() != 0) {
-        return -1;
-    }
-    runtime_graph_.Clear();
-    runtime_graph_.SetThreadMode(RuntimeThreadMode::kSerialGraph);
-    return lowering_.Lower(static_graph_, &runtime_graph_);
+    if (static_graph_.Build() != 0 || static_graph_.ApplyPasses() != 0) return -1;
+    std::shared_ptr<const CompiledGraph> compiled;
+    auto status = CompiledGraph::Compile(static_graph_, &compiled);
+    if (!status.ok()) { last_error_ = status.message(); return -1; }
+    std::unique_ptr<ExecutionSession> session;
+    SessionOptions options;
+    status = compiled->CreateSession(&session, options);
+    if (!status.ok()) { last_error_ = status.message(); return -1; }
+    session->runtime().SetProfilingEnabled(Runtime().ProfilingEnabled());
+    compiled_graph_ = std::move(compiled);
+    session_ = std::move(session);
+    return 0;
 }
 
 int32_t QwenRunner::Reset() {
 #ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
+#endif
+#ifdef FEATHER_WITH_CUDA
     ResetCudaGraphs();
 #endif
-    if (runtime_graph_.NodeSize() == 0) {
+    if (Runtime().NodeSize() == 0) {
         last_error_ = "Qwen runner is not loaded";
         return -1;
     }
 #ifdef FEATHER_WITH_CUDA
     if (backend_device_ == DeviceType::CUDA) {
         for (const auto& binding : states_) {
-            auto input = runtime_graph_.GetTensor(binding.input_name);
-            auto output = runtime_graph_.GetTensor(binding.output_name);
+            auto input = Runtime().GetTensor(binding.input_name);
+            auto output = Runtime().GetTensor(binding.output_name);
             if (input != nullptr) {
                 kernel::cuda_detail::MarkTensorDevicePersistent(input.get(), true);
             }
@@ -465,9 +465,9 @@ int32_t QwenRunner::Reset() {
                 kernel::cuda_detail::MarkTensorDevicePersistent(output.get(), true);
             }
             const auto producer_name = static_graph_.GetProducer(binding.output_name);
-            const auto* producer = runtime_graph_.GetNode(producer_name);
+            const auto* producer = Runtime().GetNode(producer_name);
             if (producer != nullptr && producer->op_type == "Identity" && producer->inputs.size() == 1) {
-                auto identity_input = runtime_graph_.GetTensor(producer->inputs[0]);
+                auto identity_input = Runtime().GetTensor(producer->inputs[0]);
                 if (identity_input != nullptr) {
                     kernel::cuda_detail::MarkTensorDevicePersistent(identity_input.get(), true);
                 }
@@ -476,7 +476,7 @@ int32_t QwenRunner::Reset() {
     }
 #endif
     for (const auto& input_name : loader_.model().graph.inputs) {
-        auto tensor = runtime_graph_.GetTensor(input_name);
+        auto tensor = Runtime().GetTensor(input_name);
         if (tensor == nullptr || !tensor->IsInitialized()) {
             last_error_ = "Qwen runtime input is missing: " + input_name;
             return -1;
@@ -499,9 +499,12 @@ int32_t QwenRunner::Reset() {
 }
 
 int32_t QwenRunner::SetDecodeInputs(int64_t token_id) {
-    auto token_ids = runtime_graph_.GetTensor(token_input_name_);
-    auto position = runtime_graph_.GetTensor(position_input_name_);
-    auto mask = runtime_graph_.GetTensor(attention_mask_input_name_);
+#ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
+#endif
+    auto token_ids = Runtime().GetTensor(token_input_name_);
+    auto position = Runtime().GetTensor(position_input_name_);
+    auto mask = Runtime().GetTensor(attention_mask_input_name_);
     if (token_ids == nullptr || position == nullptr || mask == nullptr || token_ids->numel() != 1 || position->numel() != 1 ||
         token_ids->data_type() != DataType::INT64 || position->data_type() != DataType::INT64 ||
         mask->data_type() != DataType::BF16 || mask->numel() != max_context_) {
@@ -528,120 +531,15 @@ int32_t QwenRunner::SetDecodeInputs(int64_t token_id) {
 }
 
 int32_t QwenRunner::CopyState(const StateBinding& binding) {
-    auto input = runtime_graph_.GetTensor(binding.input_name);
-    auto output = runtime_graph_.GetTensor(binding.output_name);
-    if (input == nullptr || output == nullptr || input->data_type() != output->data_type() || !input->IsInitialized() ||
-        !output->IsInitialized()) {
-        last_error_ = "Qwen state tensor is unavailable: " + binding.input_name;
-        return -1;
-    }
-    if (binding.cache_axis < 0) {
-        if (input->dims() != output->dims() || TensorBytes(*input) != TensorBytes(*output)) {
-            last_error_ = "Qwen state shape changed unexpectedly: " + binding.input_name;
-            return -1;
-        }
-#ifdef FEATHER_WITH_CUDA
-        if (backend_device_ != DeviceType::CUDA) {
-#else
-        {
-#endif
-            // Host Identity nodes are storage views. When a next-state graph
-            // output is such a view, swapping the output itself would leave
-            // the Identity input aliasing the following token's state input.
-            // Swap its source buffer instead so producer and consumer remain
-            // on opposite sides of the recurrent ping-pong pair.
-            const auto producer_name = static_graph_.GetProducer(binding.output_name);
-            const auto* producer = runtime_graph_.GetNode(producer_name);
-            if (producer != nullptr && producer->op_type == "Identity" && producer->inputs.size() == 1) {
-                auto identity_input = runtime_graph_.GetTensor(producer->inputs[0]);
-                if (identity_input != nullptr && identity_input->IsInitialized() &&
-                    identity_input->data_type() == input->data_type() && identity_input->dims() == input->dims() &&
-                    TensorBytes(*identity_input) == TensorBytes(*input)) {
-                    // An Identity of the state itself is already persistent;
-                    // self-swapping it is unnecessary.
-                    if (identity_input.get() == input.get() || identity_input->raw_data() == input->raw_data()) {
-                        return 0;
-                    }
-                    input->SwapStorage(*identity_input);
-                    return 0;
-                }
-            }
-            // Recurrent and convolution states have a same-shaped next-state
-            // tensor. Ping-pong the two buffers so the following token reads
-            // the new state without copying it back into the graph input.
-            input->SwapStorage(*output);
-            return 0;
-        }
-#ifdef FEATHER_WITH_CUDA
-        const auto producer_name = static_graph_.GetProducer(binding.output_name);
-        const auto* producer = runtime_graph_.GetNode(producer_name);
-        if (backend_device_ == DeviceType::CUDA) {
-            std::shared_ptr<Tensor> swap_target = output;
-            if (producer != nullptr && producer->op_type == "Identity" && producer->inputs.size() == 1) {
-                auto identity_input = runtime_graph_.GetTensor(producer->inputs[0]);
-                if (identity_input != nullptr && identity_input->IsInitialized() &&
-                    identity_input->data_type() == input->data_type() && identity_input->dims() == input->dims() &&
-                    TensorBytes(*identity_input) == TensorBytes(*input)) {
-                    if (identity_input.get() == input.get()) {
-                        return 0;
-                    }
-                    swap_target = identity_input;
-                }
-            }
-            if (kernel::cuda_detail::SwapTensorDeviceStorage(input.get(), swap_target.get()) != 0) {
-                last_error_ = "Qwen CUDA state device swap failed: " + binding.input_name;
-                return -1;
-            }
-            return 0;
-        }
-#endif
-        std::memcpy(input->raw_data(), output->raw_data(), TensorBytes(*input));
-#ifdef FEATHER_WITH_CUDA
-        if (backend_device_ == DeviceType::CUDA) kernel::cuda_detail::InvalidateTensorDevice(input.get());
-#endif
-        return 0;
-    }
-    const auto& input_dims = input->dims().data();
-    const auto& output_dims = output->dims().data();
-    const size_t axis = static_cast<size_t>(binding.cache_axis);
-    if (axis >= input_dims.size() || input_dims.size() != output_dims.size() || input_dims[axis] <= 1 ||
-        output_dims[axis] != 1) {
-        last_error_ = "Qwen cache state shape is invalid: " + binding.input_name;
-        return -1;
-    }
-#ifdef FEATHER_WITH_CUDA
-    if (backend_device_ == DeviceType::CUDA) {
-        if (kernel::cuda_detail::AppendTensorStateOnDevice(input.get(), output.get(), binding.cache_axis) != 0) {
-            last_error_ = "Qwen CUDA cache state append failed: " + binding.input_name;
-            return -1;
-        }
-        return 0;
-    }
-#endif
-    int64_t outer = 1;
-    int64_t inner = 1;
-    for (size_t index = 0; index < axis; ++index) outer *= input_dims[index];
-    for (size_t index = axis + 1; index < input_dims.size(); ++index) inner *= input_dims[index];
-    const size_t element_bytes = DataTypeBytes(input->data_type());
-    const size_t block_bytes = static_cast<size_t>(inner) * element_bytes;
-    const size_t input_slots = static_cast<size_t>(input_dims[axis]);
-    auto* destination = static_cast<uint8_t*>(input->raw_data());
-    const auto* source = static_cast<const uint8_t*>(output->raw_data());
-    for (int64_t index = 0; index < outer; ++index) {
-        auto* cache = destination + static_cast<size_t>(index) * input_slots * block_bytes;
-        std::memmove(cache, cache + block_bytes, (input_slots - 1) * block_bytes);
-        std::memcpy(cache + (input_slots - 1) * block_bytes, source + static_cast<size_t>(index) * block_bytes,
-                    block_bytes);
-    }
-#ifdef FEATHER_WITH_CUDA
-    if (backend_device_ == DeviceType::CUDA) {
-        kernel::cuda_detail::InvalidateTensorDevice(input.get());
-    }
-#endif
-    return 0;
+    const auto status = ApplyStateBinding(Runtime(), binding, backend_device_);
+    if (!status.ok()) last_error_ = status.message();
+    return status.ok() ? 0 : -1;
 }
 
 int32_t QwenRunner::UpdateStates() {
+#ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
+#endif
     for (const auto& binding : states_) {
         if (CopyState(binding) != 0) {
             return -1;
@@ -651,7 +549,10 @@ int32_t QwenRunner::UpdateStates() {
 }
 
 int64_t QwenRunner::SelectGreedyToken() const {
-    const auto logits = runtime_graph_.GetTensor(logits_output_name_);
+#ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
+#endif
+    const auto logits = Runtime().GetTensor(logits_output_name_);
     if (logits == nullptr || logits->numel() <= 0) {
         return -1;
     }
@@ -670,6 +571,9 @@ int64_t QwenRunner::SelectGreedyToken() const {
 }
 
 int32_t QwenRunner::RunToken(int64_t token_id, int64_t* next_token_id) {
+#ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
+#endif
     if (next_token_id == nullptr || SetDecodeInputs(token_id) != 0) {
         return -1;
     }
@@ -680,17 +584,17 @@ int32_t QwenRunner::RunToken(int64_t token_id, int64_t* next_token_id) {
     if (backend_device_ == DeviceType::CUDA) {
         {
             kernel::cuda_detail::DeferredHostSyncScope deferred_host_sync;
-            const bool use_cuda_graph = !runtime_graph_.ProfilingEnabled() && !cuda_graph_capture_disabled_ &&
+            const bool use_cuda_graph = !Runtime().ProfilingEnabled() && !cuda_graph_capture_disabled_ &&
                                         tokens_processed_ > 1;
             if (!use_cuda_graph) {
-                run_status = runtime_graph_.Run();
+                run_status = Runtime().Run();
             } else {
                 const int slot = cuda_graph_slot_;
                 if (cuda_graph_slots_[static_cast<size_t>(slot)].executable == nullptr) {
                     const int32_t capture_status = CaptureCudaGraph(slot);
                     if (capture_status != 0) {
                         cuda_graph_capture_disabled_ = true;
-                        run_status = runtime_graph_.Run();
+                        run_status = Runtime().Run();
                     }
                 }
                 if (run_status == 0 && !cuda_graph_capture_disabled_) {
@@ -700,7 +604,7 @@ int32_t QwenRunner::RunToken(int64_t token_id, int64_t* next_token_id) {
                     }
                     if (run_status != 0) {
                         cuda_graph_capture_disabled_ = true;
-                        run_status = runtime_graph_.Run();
+                        run_status = Runtime().Run();
                     }
                 }
             }
@@ -710,12 +614,12 @@ int32_t QwenRunner::RunToken(int64_t token_id, int64_t* next_token_id) {
         }
         if (run_status == 0) {
             run_status = cuda_graph_slot_used >= 0 ? SyncCudaGraphLogits(cuda_graph_slot_used)
-                                                    : SyncTensorFromCuda(runtime_graph_.GetTensor(logits_output_name_));
+                                                    : SyncTensorFromCuda(Runtime().GetTensor(logits_output_name_));
         }
     } else
 #endif
     {
-        run_status = runtime_graph_.Run();
+        run_status = Runtime().Run();
     }
     if (run_status != 0) {
         last_error_ = "Qwen runtime graph execution failed";
@@ -750,6 +654,9 @@ int32_t QwenRunner::GenerateImpl(const std::vector<int64_t>& prompt_tokens, int 
                                  const std::vector<int64_t>& stop_token_ids,
                                  const std::function<void(int64_t)>& on_token,
                                  std::vector<int64_t>* generated_tokens) {
+#ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
+#endif
     last_error_.clear();
     if (prompt_tokens.empty() || max_new_tokens <= 0 || (!on_token && generated_tokens == nullptr)) {
         last_error_ = "Qwen prompt and max_new_tokens must be non-empty and positive";
@@ -786,6 +693,9 @@ int32_t QwenRunner::GenerateImpl(const std::vector<int64_t>& prompt_tokens, int 
 int32_t QwenRunner::GenerateStream(const std::vector<int64_t>& prompt_tokens, int max_new_tokens,
                                    const std::vector<int64_t>& stop_token_ids,
                                    const std::function<void(int64_t)>& on_token) {
+#ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
+#endif
     if (!on_token) {
         last_error_ = "Qwen streaming callback must not be empty";
         return -1;
@@ -795,6 +705,9 @@ int32_t QwenRunner::GenerateStream(const std::vector<int64_t>& prompt_tokens, in
 
 int32_t QwenRunner::Generate(const std::vector<int64_t>& prompt_tokens, int max_new_tokens,
                               const std::vector<int64_t>& stop_token_ids, std::vector<int64_t>* generated_tokens) {
+#ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
+#endif
     if (generated_tokens == nullptr) {
         last_error_ = "Qwen prompt and max_new_tokens must be non-empty and positive";
         return -1;
@@ -804,6 +717,9 @@ int32_t QwenRunner::Generate(const std::vector<int64_t>& prompt_tokens, int max_
 }
 
 int32_t QwenRunner::Consume(const std::vector<int64_t>& token_ids) {
+#ifdef FEATHER_WITH_CUDA
+    kernel::cuda_detail::ExecutionContextScope context_scope(Runtime().CudaContext());
+#endif
     last_error_.clear();
     if (token_ids.empty()) {
         last_error_ = "Qwen tokens to consume must be non-empty";

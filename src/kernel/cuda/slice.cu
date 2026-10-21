@@ -82,12 +82,12 @@ int RunSlice(feather::operators::SliceParam* param, const char* timer_name) {
 
 template <>
 int32_t SliceKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunSlice<DataType::FP32>(static_cast<feather::operators::SliceParam*>(param_), "CUDA::Slice::FP32");
+    return RunSlice<DataType::FP32>(ParamAs<feather::operators::SliceParam>(), "CUDA::Slice::FP32");
 }
 
 template <>
 int32_t SliceKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunSlice<DataType::FP16>(static_cast<feather::operators::SliceParam*>(param_), "CUDA::Slice::FP16");
+    return RunSlice<DataType::FP16>(ParamAs<feather::operators::SliceParam>(), "CUDA::Slice::FP16");
 }
 
 void EnsureCudaSliceKernelsRegistered() { (void)g_cuda_slice_kernels_registered; }

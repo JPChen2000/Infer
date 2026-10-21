@@ -312,29 +312,18 @@ int32_t ComputeSoftmaxFp16X86(feather::operators::SoftmaxParam* param) {
 template <>
 int32_t SoftmaxKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::Softmax::FP32");
-    auto* param = static_cast<feather::operators::SoftmaxParam*>(param_);
+    auto* param = ParamAs<feather::operators::SoftmaxParam>();
     return ComputeSoftmaxFp32X86(param);
 }
 
 template <>
 int32_t SoftmaxKernel<DeviceType::X86, DataType::FP16>::compute() {
     AutoTimer timer("X86::Softmax::FP16");
-    auto* param = static_cast<feather::operators::SoftmaxParam*>(param_);
+    auto* param = ParamAs<feather::operators::SoftmaxParam>();
     return ComputeSoftmaxFp16X86(param);
 }
 
-void EnsureX86SoftmaxKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "Softmax",
-            []() { return std::make_unique<SoftmaxKernel<DeviceType::X86, DataType::FP32>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP16, "Softmax",
-            []() { return std::make_unique<SoftmaxKernel<DeviceType::X86, DataType::FP16>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

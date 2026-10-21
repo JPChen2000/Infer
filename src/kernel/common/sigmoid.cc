@@ -39,19 +39,19 @@ int32_t ComputeSigmoidKernel(feather::operators::UnaryParam* param) {
 template <>
 int32_t SigmoidKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Sigmoid::FP32");
-    return ComputeSigmoidKernel<DataType::FP32>(static_cast<feather::operators::UnaryParam*>(param_));
+    return ComputeSigmoidKernel<DataType::FP32>(ParamAs<feather::operators::UnaryParam>());
 }
 
 template <>
 int32_t SigmoidKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Sigmoid::FP16");
-    return ComputeSigmoidKernel<DataType::FP16>(static_cast<feather::operators::UnaryParam*>(param_));
+    return ComputeSigmoidKernel<DataType::FP16>(ParamAs<feather::operators::UnaryParam>());
 }
 
 template <>
 int32_t SigmoidKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Sigmoid::BF16");
-    return ComputeSigmoidKernel<DataType::BF16>(static_cast<feather::operators::UnaryParam*>(param_));
+    return ComputeSigmoidKernel<DataType::BF16>(ParamAs<feather::operators::UnaryParam>());
 }
 
 typedef feather::kernel::SigmoidKernel<DeviceType::COMMON, DataType::FP32> SigmoidCommonFP32Kernel;

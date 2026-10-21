@@ -408,13 +408,13 @@ int32_t ComputeConv2DKernel(feather::operators::Conv2dParam* param) {
 template <>
 int32_t Conv2DKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Conv2D::FP32");
-    return ComputeConv2DKernel<DataType::FP32>(static_cast<feather::operators::Conv2dParam*>(param_));
+    return ComputeConv2DKernel<DataType::FP32>(ParamAs<feather::operators::Conv2dParam>());
 }
 
 template <>
 int32_t Conv2DKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Conv2D::FP16");
-    auto* param = static_cast<feather::operators::Conv2dParam*>(param_);
+    auto* param = ParamAs<feather::operators::Conv2dParam>();
     if (param == nullptr) {
         return -1;
     }
@@ -445,7 +445,7 @@ int32_t Conv2DKernel<DeviceType::COMMON, DataType::FP16>::compute() {
 template <>
 int32_t Conv2DKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Conv2D::BF16");
-    return ComputeConv2DKernel<DataType::BF16>(static_cast<feather::operators::Conv2dParam*>(param_));
+    return ComputeConv2DKernel<DataType::BF16>(ParamAs<feather::operators::Conv2dParam>());
 }
 
 typedef feather::kernel::Conv2DKernel<DeviceType::COMMON, DataType::FP32> Conv2DCommonFP32Kernel;
@@ -466,7 +466,7 @@ void EnsureConv2DKernelsRegistered() {
 template <>
 int32_t Conv2DKernel<DeviceType::COMMON, DataType::INT8>::compute() {
     AutoTimer timer("Common::Conv2D::INT8");
-    auto* param = static_cast<feather::operators::Conv2dParam*>(param_);
+    auto* param = ParamAs<feather::operators::Conv2dParam>();
     if (param == nullptr || param->input == nullptr || param->w == nullptr || param->out == nullptr ||
         param->input->dims().size() != 4 || param->w->dims().size() != 4 || param->out->dims().size() != 4 ||
         param->stride_h <= 0 || param->stride_w <= 0 || param->dilation_h <= 0 || param->dilation_w <= 0 ||

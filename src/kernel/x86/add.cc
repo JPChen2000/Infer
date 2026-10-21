@@ -87,7 +87,7 @@ int32_t ComputeAddFallback(feather::operators::BinaryParam* param) {
 template <>
 int32_t AddKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::Add::FP32");
-    auto* param = static_cast<feather::operators::BinaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::BinaryParam>();
     if (param == nullptr || param->lhs == nullptr || param->rhs == nullptr || param->out == nullptr) {
         return -1;
     }
@@ -106,7 +106,7 @@ int32_t AddKernel<DeviceType::X86, DataType::FP32>::compute() {
 template <>
 int32_t AddKernel<DeviceType::X86, DataType::FP16>::compute() {
     AutoTimer timer("X86::Add::FP16");
-    auto* param = static_cast<feather::operators::BinaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::BinaryParam>();
     if (param == nullptr || param->lhs == nullptr || param->rhs == nullptr || param->out == nullptr) {
         return -1;
     }
@@ -141,7 +141,7 @@ int32_t AddKernel<DeviceType::X86, DataType::FP16>::compute() {
 template <>
 int32_t AddKernel<DeviceType::X86, DataType::BF16>::compute() {
     AutoTimer timer("X86::Add::BF16");
-    auto* param = static_cast<feather::operators::BinaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::BinaryParam>();
     if (param == nullptr || param->lhs == nullptr || param->rhs == nullptr || param->out == nullptr) {
         return -1;
     }
@@ -160,36 +160,16 @@ int32_t ComputeX86Fp8Add(feather::operators::BinaryParam* param) {
 template <>
 int32_t AddKernel<DeviceType::X86, DataType::FP8E4M3>::compute() {
     AutoTimer timer("X86::Add::FP8E4M3");
-    return ComputeX86Fp8Add<DataType::FP8E4M3>(static_cast<feather::operators::BinaryParam*>(param_));
+    return ComputeX86Fp8Add<DataType::FP8E4M3>(ParamAs<feather::operators::BinaryParam>());
 }
 
 template <>
 int32_t AddKernel<DeviceType::X86, DataType::FP8E5M2>::compute() {
     AutoTimer timer("X86::Add::FP8E5M2");
-    return ComputeX86Fp8Add<DataType::FP8E5M2>(static_cast<feather::operators::BinaryParam*>(param_));
+    return ComputeX86Fp8Add<DataType::FP8E5M2>(ParamAs<feather::operators::BinaryParam>());
 }
 
-void EnsureX86AddKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "Add",
-            []() { return std::make_unique<AddKernel<DeviceType::X86, DataType::FP32>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP16, "Add",
-            []() { return std::make_unique<AddKernel<DeviceType::X86, DataType::FP16>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::BF16, "Add",
-            []() { return std::make_unique<AddKernel<DeviceType::X86, DataType::BF16>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP8E4M3, "Add",
-            []() { return std::make_unique<AddKernel<DeviceType::X86, DataType::FP8E4M3>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP8E5M2, "Add",
-            []() { return std::make_unique<AddKernel<DeviceType::X86, DataType::FP8E5M2>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

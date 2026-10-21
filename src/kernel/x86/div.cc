@@ -12,7 +12,7 @@ namespace kernel {
 template <>
 int32_t DivKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::Div::FP32");
-    auto* param = static_cast<feather::operators::BinaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::BinaryParam>();
     if (param == nullptr) {
         return -1;
     }
@@ -36,30 +36,16 @@ int32_t ComputeX86Fp8Div(feather::operators::BinaryParam* param) {
 template <>
 int32_t DivKernel<DeviceType::X86, DataType::FP8E4M3>::compute() {
     AutoTimer timer("X86::Div::FP8E4M3");
-    return ComputeX86Fp8Div<DataType::FP8E4M3>(static_cast<feather::operators::BinaryParam*>(param_));
+    return ComputeX86Fp8Div<DataType::FP8E4M3>(ParamAs<feather::operators::BinaryParam>());
 }
 
 template <>
 int32_t DivKernel<DeviceType::X86, DataType::FP8E5M2>::compute() {
     AutoTimer timer("X86::Div::FP8E5M2");
-    return ComputeX86Fp8Div<DataType::FP8E5M2>(static_cast<feather::operators::BinaryParam*>(param_));
+    return ComputeX86Fp8Div<DataType::FP8E5M2>(ParamAs<feather::operators::BinaryParam>());
 }
 
-void EnsureX86DivKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "Div",
-            []() { return std::make_unique<DivKernel<DeviceType::X86, DataType::FP32>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP8E4M3, "Div",
-            []() { return std::make_unique<DivKernel<DeviceType::X86, DataType::FP8E4M3>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP8E5M2, "Div",
-            []() { return std::make_unique<DivKernel<DeviceType::X86, DataType::FP8E5M2>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

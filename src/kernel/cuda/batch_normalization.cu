@@ -110,13 +110,13 @@ int RunBatchNormalization(feather::operators::BatchNormParam* param, const char*
 
 template <>
 int32_t BatchNormalizationKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunBatchNormalization<DataType::FP32>(static_cast<feather::operators::BatchNormParam*>(param_),
+    return RunBatchNormalization<DataType::FP32>(ParamAs<feather::operators::BatchNormParam>(),
                                                  "CUDA::BatchNormalization::FP32");
 }
 
 template <>
 int32_t BatchNormalizationKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunBatchNormalization<DataType::FP16>(static_cast<feather::operators::BatchNormParam*>(param_),
+    return RunBatchNormalization<DataType::FP16>(ParamAs<feather::operators::BatchNormParam>(),
                                                  "CUDA::BatchNormalization::FP16");
 }
 

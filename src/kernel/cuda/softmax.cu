@@ -89,19 +89,19 @@ int RunSoftmax(feather::operators::SoftmaxParam* param, const char* timer_name) 
 
 template <>
 int32_t SoftmaxKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunSoftmax<DataType::FP32>(static_cast<feather::operators::SoftmaxParam*>(param_),
+    return RunSoftmax<DataType::FP32>(ParamAs<feather::operators::SoftmaxParam>(),
                                      "CUDA::Softmax::FP32");
 }
 
 template <>
 int32_t SoftmaxKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunSoftmax<DataType::FP16>(static_cast<feather::operators::SoftmaxParam*>(param_),
+    return RunSoftmax<DataType::FP16>(ParamAs<feather::operators::SoftmaxParam>(),
                                      "CUDA::Softmax::FP16");
 }
 
 template <>
 int32_t SoftmaxKernel<DeviceType::CUDA, DataType::BF16>::compute() {
-    return RunSoftmax<DataType::BF16>(static_cast<feather::operators::SoftmaxParam*>(param_),
+    return RunSoftmax<DataType::BF16>(ParamAs<feather::operators::SoftmaxParam>(),
                                       "CUDA::Softmax::BF16");
 }
 

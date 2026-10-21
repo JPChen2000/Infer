@@ -39,19 +39,19 @@ int RunIdentity(feather::operators::UnaryParam* param, const char* timer_name) {
 
 template <>
 int32_t IdentityKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunIdentity<DataType::FP32>(static_cast<feather::operators::UnaryParam*>(param_),
+    return RunIdentity<DataType::FP32>(ParamAs<feather::operators::UnaryParam>(),
                                       "CUDA::Identity::FP32");
 }
 
 template <>
 int32_t IdentityKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunIdentity<DataType::FP16>(static_cast<feather::operators::UnaryParam*>(param_),
+    return RunIdentity<DataType::FP16>(ParamAs<feather::operators::UnaryParam>(),
                                       "CUDA::Identity::FP16");
 }
 
 template <>
 int32_t IdentityKernel<DeviceType::CUDA, DataType::BF16>::compute() {
-    return RunIdentity<DataType::BF16>(static_cast<feather::operators::UnaryParam*>(param_),
+    return RunIdentity<DataType::BF16>(ParamAs<feather::operators::UnaryParam>(),
                                        "CUDA::Identity::BF16");
 }
 

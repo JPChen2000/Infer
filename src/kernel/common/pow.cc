@@ -43,19 +43,19 @@ int32_t ComputePowKernel(feather::operators::PowParam* param) {
 template <>
 int32_t PowKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Pow::FP32");
-    return ComputePowKernel<DataType::FP32>(static_cast<feather::operators::PowParam*>(param_));
+    return ComputePowKernel<DataType::FP32>(ParamAs<feather::operators::PowParam>());
 }
 
 template <>
 int32_t PowKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Pow::FP16");
-    return ComputePowKernel<DataType::FP16>(static_cast<feather::operators::PowParam*>(param_));
+    return ComputePowKernel<DataType::FP16>(ParamAs<feather::operators::PowParam>());
 }
 
 template <>
 int32_t PowKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Pow::BF16");
-    return ComputePowKernel<DataType::BF16>(static_cast<feather::operators::PowParam*>(param_));
+    return ComputePowKernel<DataType::BF16>(ParamAs<feather::operators::PowParam>());
 }
 
 typedef feather::kernel::PowKernel<DeviceType::COMMON, DataType::FP32> PowCommonFP32Kernel;

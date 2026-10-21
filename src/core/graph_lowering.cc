@@ -1,12 +1,9 @@
 #include "core/graph_lowering.h"
 
-#ifdef FEATHER_WITH_CUDA
-#include "src/kernel/cuda/runtime.h"
-#endif
 
 namespace feather {
 
-Status GraphLowering::LowerStatus(StaticGraph& static_graph, RuntimeGraph* runtime_graph) const {
+Status GraphLowering::LowerStatus(const StaticGraph& static_graph, RuntimeGraph* runtime_graph) const {
     const auto fail = [](const std::string& message) {
         return Status::Error(StatusCode::kBuildFailed, message);
     };
@@ -14,10 +11,12 @@ Status GraphLowering::LowerStatus(StaticGraph& static_graph, RuntimeGraph* runti
         return fail("runtime graph is null");
     }
 
+    const auto static_status = static_graph.ValidateStructureStatus();
+    if (!static_status.ok()) return static_status;
+    auto context_scope = runtime_graph->Backend().Enter();
     const auto requested_thread_mode = runtime_graph->ThreadMode();
     runtime_graph->Clear();
-    runtime_graph->SetThreadMode(static_graph.KernelDevice() == DeviceType::CUDA ? RuntimeThreadMode::kSerialGraph
-                                                                                : requested_thread_mode);
+    runtime_graph->SetThreadMode(requested_thread_mode);
     runtime_graph->SetOutputNames(static_graph.model().graph.outputs);
     for (const auto& item : static_graph.tensors()) {
         if (runtime_graph->SetTensor(item.first, item.second) != 0) {
@@ -25,17 +24,15 @@ Status GraphLowering::LowerStatus(StaticGraph& static_graph, RuntimeGraph* runti
         }
     }
 
-#ifdef FEATHER_WITH_CUDA
     for (const auto& value : static_graph.model().graph.values) {
         if (!value.constant) {
             continue;
         }
         auto tensor = static_graph.GetTensor(value.tensor.name);
         if (tensor != nullptr) {
-            kernel::cuda_detail::MarkTensorDevicePersistent(tensor.get(), true);
+            runtime_graph->Backend().MarkPersistent(*tensor, true);
         }
     }
-#endif
 
     for (const auto& static_node : static_graph.nodes()) {
         if (static_node.removed) {
@@ -50,11 +47,13 @@ Status GraphLowering::LowerStatus(StaticGraph& static_graph, RuntimeGraph* runti
         node.op_type = op->type();
         node.inputs = static_node.inputs;
         node.outputs = static_node.outputs;
-        node.kernel = op->DetachKernel();
+        node.kernel = op->kernel() ? op->kernel()->Clone() : nullptr;
         if (node.kernel == nullptr) {
             return fail("operator has no kernel: " + static_node.name);
         }
         node.kernel_device = node.kernel->device();
+        if (!runtime_graph->Backend().Capabilities(node.kernel_device).parallel_nodes)
+            runtime_graph->SetThreadMode(RuntimeThreadMode::kSerialGraph);
         runtime_graph->AddNode(std::move(node));
     }
 
@@ -66,7 +65,7 @@ Status GraphLowering::LowerStatus(StaticGraph& static_graph, RuntimeGraph* runti
     return check_status.ok() ? Status::Ok() : check_status;
 }
 
-int32_t GraphLowering::Lower(StaticGraph& static_graph, RuntimeGraph* runtime_graph) const {
+int32_t GraphLowering::Lower(const StaticGraph& static_graph, RuntimeGraph* runtime_graph) const {
     return LowerStatus(static_graph, runtime_graph).ok() ? 0 : -1;
 }
 

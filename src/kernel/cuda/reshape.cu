@@ -39,19 +39,19 @@ int RunReshape(feather::operators::ReshapeParam* param, const char* timer_name) 
 
 template <>
 int32_t ReshapeKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunReshape<DataType::FP32>(static_cast<feather::operators::ReshapeParam*>(param_),
+    return RunReshape<DataType::FP32>(ParamAs<feather::operators::ReshapeParam>(),
                                      "CUDA::Reshape::FP32");
 }
 
 template <>
 int32_t ReshapeKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunReshape<DataType::FP16>(static_cast<feather::operators::ReshapeParam*>(param_),
+    return RunReshape<DataType::FP16>(ParamAs<feather::operators::ReshapeParam>(),
                                      "CUDA::Reshape::FP16");
 }
 
 template <>
 int32_t ReshapeKernel<DeviceType::CUDA, DataType::BF16>::compute() {
-    return RunReshape<DataType::BF16>(static_cast<feather::operators::ReshapeParam*>(param_),
+    return RunReshape<DataType::BF16>(ParamAs<feather::operators::ReshapeParam>(),
                                       "CUDA::Reshape::BF16");
 }
 

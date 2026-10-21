@@ -49,6 +49,7 @@ TEST(qwen_direct_export_test, LoadsDirectSafetensorsExportAndBuildsAtomicGraph) 
     EXPECT_EQ(model.graph.nodes.size(), 2613U);
 
     feather::StaticGraph graph;
+    graph.SetPassManager(feather::CreateQwenPassManager());
     graph.SetKernelDevice(feather::DeviceType::COMMON);
     ASSERT_EQ(graph.SetModel(model), 0);
     for (const auto& value : model.graph.values) {
@@ -80,6 +81,7 @@ TEST(qwen_direct_export_test, LowersEveryQwenDecodeNodeToCuda) {
     feather::model::ModelLoader loader;
     ASSERT_TRUE(loader.Load(path.string()));
     feather::StaticGraph graph;
+    graph.SetPassManager(feather::CreateQwenPassManager());
     graph.SetKernelDevice(feather::DeviceType::CUDA);
     ASSERT_EQ(graph.SetModel(loader.model()), 0);
     for (const auto& value : loader.model().graph.values) {

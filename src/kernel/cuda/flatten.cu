@@ -35,13 +35,13 @@ int RunFlatten(feather::operators::FlattenParam* param, const char* timer_name) 
 
 template <>
 int32_t FlattenKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunFlatten<DataType::FP32>(static_cast<feather::operators::FlattenParam*>(param_),
+    return RunFlatten<DataType::FP32>(ParamAs<feather::operators::FlattenParam>(),
                                      "CUDA::Flatten::FP32");
 }
 
 template <>
 int32_t FlattenKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunFlatten<DataType::FP16>(static_cast<feather::operators::FlattenParam*>(param_),
+    return RunFlatten<DataType::FP16>(ParamAs<feather::operators::FlattenParam>(),
                                      "CUDA::Flatten::FP16");
 }
 

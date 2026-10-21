@@ -8,8 +8,8 @@ namespace feather {
 
 class GraphLowering {
    public:
-    int32_t Lower(StaticGraph& static_graph, RuntimeGraph* runtime_graph) const;
-    Status LowerStatus(StaticGraph& static_graph, RuntimeGraph* runtime_graph) const;
+    int32_t Lower(const StaticGraph& static_graph, RuntimeGraph* runtime_graph) const;
+    Status LowerStatus(const StaticGraph& static_graph, RuntimeGraph* runtime_graph) const;
 };
 
 }  // namespace feather

@@ -11,40 +11,26 @@ namespace kernel {
 
 namespace {
 
-bool g_x86_int8_fused_kernels_registered = []() {
-    auto& dispatcher = KernelDispatcher::instance();
-    dispatcher.registerKernel(DeviceType::X86, DataType::INT8, "Shape", []() {
-        return std::make_unique<ShapeKernel<DeviceType::X86, DataType::INT8>>();
-    });
-    dispatcher.registerKernel(DeviceType::X86, DataType::INT8, "ResizeConcat", []() {
-        return std::make_unique<ResizeConcatKernel<DeviceType::X86, DataType::INT8>>();
-    });
-    dispatcher.registerKernel(DeviceType::X86, DataType::INT8, "YoloDecode", []() {
-        return std::make_unique<YoloDecodeKernel<DeviceType::X86, DataType::INT8>>();
-    });
-    return true;
-}();
+
 
 }  // namespace
 
 template <>
 int32_t ShapeKernel<DeviceType::X86, DataType::INT8>::compute() {
-    return common::ComputeShapeInt8(static_cast<feather::operators::ShapeParam*>(param_));
+    return common::ComputeShapeInt8(ParamAs<feather::operators::ShapeParam>());
 }
 
 template <>
 int32_t ResizeConcatKernel<DeviceType::X86, DataType::INT8>::compute() {
-    return common::ComputeResizeConcatInt8(static_cast<feather::operators::ResizeConcatParam*>(param_));
+    return common::ComputeResizeConcatInt8(ParamAs<feather::operators::ResizeConcatParam>());
 }
 
 template <>
 int32_t YoloDecodeKernel<DeviceType::X86, DataType::INT8>::compute() {
-    return common::ComputeYoloDecodeInt8(static_cast<feather::operators::YoloDecodeParam*>(param_));
+    return common::ComputeYoloDecodeInt8(ParamAs<feather::operators::YoloDecodeParam>());
 }
 
-void EnsureX86Int8FusedKernelsRegistered() {
-    (void)g_x86_int8_fused_kernels_registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

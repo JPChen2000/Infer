@@ -45,7 +45,7 @@ const std::array<uint16_t, 1u << 16>& GetSigmoidFp16Lut() {
 template <>
 int32_t SigmoidKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::Sigmoid::FP32");
-    auto* param = static_cast<feather::operators::UnaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::UnaryParam>();
     if (param == nullptr || param->input == nullptr || param->out == nullptr) {
         return -1;
     }
@@ -77,7 +77,7 @@ int32_t SigmoidKernel<DeviceType::X86, DataType::FP32>::compute() {
 template <>
 int32_t SigmoidKernel<DeviceType::X86, DataType::FP16>::compute() {
     AutoTimer timer("X86::Sigmoid::FP16");
-    auto* param = static_cast<feather::operators::UnaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::UnaryParam>();
     if (param == nullptr || param->input == nullptr || param->out == nullptr) {
         return -1;
     }
@@ -108,18 +108,7 @@ int32_t SigmoidKernel<DeviceType::X86, DataType::FP16>::compute() {
     return 0;
 }
 
-void EnsureX86SigmoidKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "Sigmoid",
-            []() { return std::make_unique<SigmoidKernel<DeviceType::X86, DataType::FP32>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP16, "Sigmoid",
-            []() { return std::make_unique<SigmoidKernel<DeviceType::X86, DataType::FP16>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

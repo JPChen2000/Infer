@@ -28,19 +28,19 @@ bool g_cuda_sqrt_kernels_registered = []() {
 template <>
 int32_t SqrtKernel<DeviceType::CUDA, DataType::FP32>::compute() {
     return cuda_detail::RunUnaryElementwise<DataType::FP32, 4>(
-        static_cast<feather::operators::UnaryParam*>(param_), "CUDA::Sqrt::FP32");
+        ParamAs<feather::operators::UnaryParam>(), "CUDA::Sqrt::FP32");
 }
 
 template <>
 int32_t SqrtKernel<DeviceType::CUDA, DataType::FP16>::compute() {
     return cuda_detail::RunUnaryElementwise<DataType::FP16, 4>(
-        static_cast<feather::operators::UnaryParam*>(param_), "CUDA::Sqrt::FP16");
+        ParamAs<feather::operators::UnaryParam>(), "CUDA::Sqrt::FP16");
 }
 
 template <>
 int32_t SqrtKernel<DeviceType::CUDA, DataType::BF16>::compute() {
     return cuda_detail::RunUnaryElementwise<DataType::BF16, 4>(
-        static_cast<feather::operators::UnaryParam*>(param_), "CUDA::Sqrt::BF16");
+        ParamAs<feather::operators::UnaryParam>(), "CUDA::Sqrt::BF16");
 }
 
 void EnsureCudaSqrtKernelsRegistered() { (void)g_cuda_sqrt_kernels_registered; }

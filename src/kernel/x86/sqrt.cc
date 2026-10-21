@@ -12,7 +12,7 @@ namespace kernel {
 template <>
 int32_t SqrtKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::Sqrt::FP32");
-    auto* param = static_cast<feather::operators::UnaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::UnaryParam>();
     if (param == nullptr || param->input == nullptr || param->out == nullptr ||
         param->input->data_type() != DataType::FP32 ||
         (param->out->data_type() != DataType::UNKNOWN && param->out->data_type() != DataType::FP32) ||
@@ -34,15 +34,7 @@ int32_t SqrtKernel<DeviceType::X86, DataType::FP32>::compute() {
     return 0;
 }
 
-void EnsureX86SqrtKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "Sqrt",
-            []() { return std::make_unique<SqrtKernel<DeviceType::X86, DataType::FP32>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

@@ -84,37 +84,37 @@ int32_t ComputeExpand(feather::operators::ExpandParam* param) {
 template <>
 int32_t ExpandKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Expand::FP32");
-    return ComputeExpand<DataType::FP32>(static_cast<feather::operators::ExpandParam*>(param_));
+    return ComputeExpand<DataType::FP32>(ParamAs<feather::operators::ExpandParam>());
 }
 
 template <>
 int32_t ExpandKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Expand::FP16");
-    return ComputeExpand<DataType::FP16>(static_cast<feather::operators::ExpandParam*>(param_));
+    return ComputeExpand<DataType::FP16>(ParamAs<feather::operators::ExpandParam>());
 }
 
 template <>
 int32_t ExpandKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Expand::BF16");
-    return ComputeExpand<DataType::BF16>(static_cast<feather::operators::ExpandParam*>(param_));
+    return ComputeExpand<DataType::BF16>(ParamAs<feather::operators::ExpandParam>());
 }
 
 template <>
 int32_t ExpandKernel<DeviceType::COMMON, DataType::INT32>::compute() {
     AutoTimer timer("Common::Expand::INT32");
-    return ComputeExpand<DataType::INT32>(static_cast<feather::operators::ExpandParam*>(param_));
+    return ComputeExpand<DataType::INT32>(ParamAs<feather::operators::ExpandParam>());
 }
 
 template <>
 int32_t ExpandKernel<DeviceType::COMMON, DataType::INT64>::compute() {
     AutoTimer timer("Common::Expand::INT64");
-    return ComputeExpand<DataType::INT64>(static_cast<feather::operators::ExpandParam*>(param_));
+    return ComputeExpand<DataType::INT64>(ParamAs<feather::operators::ExpandParam>());
 }
 
 template <>
 int32_t ExpandKernel<DeviceType::COMMON, DataType::BOOL>::compute() {
     AutoTimer timer("Common::Expand::BOOL");
-    return ComputeExpand<DataType::BOOL>(static_cast<feather::operators::ExpandParam*>(param_));
+    return ComputeExpand<DataType::BOOL>(ParamAs<feather::operators::ExpandParam>());
 }
 
 void EnsureCommonExpandKernelsRegistered() { (void)g_common_expand_kernels_registered; }

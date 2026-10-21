@@ -14,6 +14,12 @@ struct FcParam : ParamBase {
     std::shared_ptr<Tensor> w;
     std::shared_ptr<Tensor> bias;
     std::shared_ptr<Tensor> out;
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(w);
+        visit(bias);
+        visit(out);
+    }
 };
 
 struct GemmParam : ParamBase {
@@ -25,6 +31,12 @@ struct GemmParam : ParamBase {
     float beta{1.0f};
     bool trans_a{false};
     bool trans_b{false};
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(a);
+        visit(b);
+        visit(bias);
+        visit(out);
+    }
 };
 
 struct Conv2dParam : ParamBase {
@@ -39,6 +51,12 @@ struct Conv2dParam : ParamBase {
     int32_t dilation_h{1};
     int32_t dilation_w{1};
     int32_t group{1};
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(w);
+        visit(bias);
+        visit(out);
+    }
 };
 
 // Qwen's linear-attention convolution consumes a three-token BF16 state and
@@ -57,6 +75,14 @@ struct QwenDepthwiseConvStateParam : ParamBase {
     DataType fp8_dtype{DataType::UNKNOWN};
     float fp8_input_scale{1.0f};
     float fp8_output_scale{1.0f};
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(state);
+        visit(mixed);
+        visit(weight);
+        visit(conv_out);
+        visit(discarded_prefix);
+        visit(next_state);
+    }
 };
 
 struct BatchNormParam : ParamBase {
@@ -67,23 +93,45 @@ struct BatchNormParam : ParamBase {
     std::shared_ptr<Tensor> var;
     std::shared_ptr<Tensor> out;
     float epsilon{1e-5f};
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(scale);
+        visit(bias);
+        visit(mean);
+        visit(var);
+        visit(out);
+    }
 };
 
 struct UnaryParam : ParamBase {
     std::shared_ptr<Tensor> input;
     std::shared_ptr<Tensor> out;
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(out);
+    }
 };
 
 struct BinaryParam : ParamBase {
     std::shared_ptr<Tensor> lhs;
     std::shared_ptr<Tensor> rhs;
     std::shared_ptr<Tensor> out;
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(lhs);
+        visit(rhs);
+        visit(out);
+    }
 };
 
 struct MatMulParam : ParamBase {
     std::shared_ptr<Tensor> a;
     std::shared_ptr<Tensor> b;
     std::shared_ptr<Tensor> out;
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(a);
+        visit(b);
+        visit(out);
+    }
 };
 
 // Fused Qwen lm-head projection and greedy token selection. The weight is
@@ -97,6 +145,11 @@ struct QwenGemmArgmaxParam : ParamBase {
     // original Cast-to-BF16 node.  Keep that scale explicit so the fused
     // terminal path preserves the exported graph's greedy-selection values.
     float output_scale{1.0f};
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(a);
+        visit(b);
+        visit(out);
+    }
 };
 
 struct QwenGatedDeltaStateParam : ParamBase {
@@ -106,12 +159,25 @@ struct QwenGatedDeltaStateParam : ParamBase {
     std::shared_ptr<Tensor> beta;
     std::shared_ptr<Tensor> decay;
     std::shared_ptr<Tensor> out;
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(state);
+        visit(k);
+        visit(v);
+        visit(beta);
+        visit(decay);
+        visit(out);
+    }
 };
 
 struct QwenGatedDeltaOutputParam : ParamBase {
     std::shared_ptr<Tensor> state;
     std::shared_ptr<Tensor> q;
     std::shared_ptr<Tensor> out;
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(state);
+        visit(q);
+        visit(out);
+    }
 };
 
 struct QwenGatedDeltaParam : ParamBase {
@@ -123,6 +189,16 @@ struct QwenGatedDeltaParam : ParamBase {
     std::shared_ptr<Tensor> q;
     std::shared_ptr<Tensor> next_state;
     std::shared_ptr<Tensor> out;
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(state);
+        visit(k);
+        visit(v);
+        visit(beta);
+        visit(decay);
+        visit(q);
+        visit(next_state);
+        visit(out);
+    }
 };
 
 struct QwenRmsNormParam : ParamBase {
@@ -131,6 +207,12 @@ struct QwenRmsNormParam : ParamBase {
     std::shared_ptr<Tensor> epsilon;
     std::shared_ptr<Tensor> out;
     float weight_offset{0.0f};
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(weight);
+        visit(epsilon);
+        visit(out);
+    }
 };
 
 struct ReshapeParam : ParamBase {
@@ -138,6 +220,11 @@ struct ReshapeParam : ParamBase {
     std::shared_ptr<Tensor> shape;
     std::shared_ptr<Tensor> out;
     std::vector<int64_t> target_shape;
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(shape);
+        visit(out);
+    }
 };
 
 struct AxesParam : ParamBase {
@@ -145,12 +232,21 @@ struct AxesParam : ParamBase {
     std::shared_ptr<Tensor> axes_tensor;
     std::shared_ptr<Tensor> out;
     std::vector<int64_t> axes;
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(axes_tensor);
+        visit(out);
+    }
 };
 
 struct CastParam : ParamBase {
     std::shared_ptr<Tensor> input;
     std::shared_ptr<Tensor> out;
     DataType to{DataType::FP32};
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(out);
+    }
 };
 
 struct ReduceMeanParam : ParamBase {
@@ -158,6 +254,10 @@ struct ReduceMeanParam : ParamBase {
     std::shared_ptr<Tensor> out;
     std::vector<int64_t> axes;
     bool keepdims{true};
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(out);
+    }
 };
 
 struct ReduceSumParam : ParamBase {
@@ -165,6 +265,10 @@ struct ReduceSumParam : ParamBase {
     std::shared_ptr<Tensor> out;
     std::vector<int64_t> axes;
     bool keepdims{true};
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(out);
+    }
 };
 
 struct GatherParam : ParamBase {
@@ -172,12 +276,22 @@ struct GatherParam : ParamBase {
     std::shared_ptr<Tensor> indices;
     std::shared_ptr<Tensor> out;
     int32_t axis{0};
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(data);
+        visit(indices);
+        visit(out);
+    }
 };
 
 struct EqualParam : ParamBase {
     std::shared_ptr<Tensor> lhs;
     std::shared_ptr<Tensor> rhs;
     std::shared_ptr<Tensor> out;
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(lhs);
+        visit(rhs);
+        visit(out);
+    }
 };
 
 struct ShapeParam : ParamBase {
@@ -185,6 +299,10 @@ struct ShapeParam : ParamBase {
     std::shared_ptr<Tensor> out;
     int64_t start{0};
     int64_t end{std::numeric_limits<int64_t>::max()};
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(out);
+    }
 };
 
 struct ConstantOfShapeParam : ParamBase {
@@ -194,12 +312,21 @@ struct ConstantOfShapeParam : ParamBase {
     int64_t int_value{0};
     float float_value{0.0f};
     bool use_float_value{false};
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(shape);
+        visit(out);
+    }
 };
 
 struct ExpandParam : ParamBase {
     std::shared_ptr<Tensor> input;
     std::shared_ptr<Tensor> shape;
     std::shared_ptr<Tensor> out;
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(shape);
+        visit(out);
+    }
 };
 
 struct WhereParam : ParamBase {
@@ -207,12 +334,22 @@ struct WhereParam : ParamBase {
     std::shared_ptr<Tensor> x;
     std::shared_ptr<Tensor> y;
     std::shared_ptr<Tensor> out;
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(condition);
+        visit(x);
+        visit(y);
+        visit(out);
+    }
 };
 
 struct FlattenParam : ParamBase {
     std::shared_ptr<Tensor> input;
     std::shared_ptr<Tensor> out;
     int32_t axis;
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(out);
+    }
 };
 
 struct PoolParam : ParamBase {
@@ -224,17 +361,29 @@ struct PoolParam : ParamBase {
     int32_t stride_w;
     int32_t pad_h;
     int32_t pad_w;
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(out);
+    }
 };
 
 struct GlobalAveragePoolParam : ParamBase {
     std::shared_ptr<Tensor> input;
     std::shared_ptr<Tensor> out;
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(out);
+    }
 };
 
 struct ConcatParam : ParamBase {
     std::vector<std::shared_ptr<Tensor>> inputs;
     std::shared_ptr<Tensor> out;
     int32_t axis;
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(out);
+        for (auto& tensor : inputs) visit(tensor);
+    }
 };
 
 struct SplitParam : ParamBase {
@@ -243,18 +392,31 @@ struct SplitParam : ParamBase {
     std::vector<std::shared_ptr<Tensor>> outputs;
     int32_t axis;
     std::vector<int64_t> split_sizes;
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(split);
+        for (auto& tensor : outputs) visit(tensor);
+    }
 };
 
 struct SoftmaxParam : ParamBase {
     std::shared_ptr<Tensor> input;
     std::shared_ptr<Tensor> out;
     int32_t axis;
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(out);
+    }
 };
 
 struct TransposeParam : ParamBase {
     std::shared_ptr<Tensor> input;
     std::shared_ptr<Tensor> out;
     std::vector<int64_t> perm;
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(out);
+    }
 };
 
 struct SliceParam : ParamBase {
@@ -267,6 +429,14 @@ struct SliceParam : ParamBase {
     int32_t axis;
     int32_t start;
     int32_t end;
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(starts);
+        visit(ends);
+        visit(axes);
+        visit(steps);
+        visit(out);
+    }
 };
 
 struct ResizeParam : ParamBase {
@@ -276,6 +446,13 @@ struct ResizeParam : ParamBase {
     std::shared_ptr<Tensor> sizes;
     std::shared_ptr<Tensor> out;
     std::vector<float> scales;
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(roi);
+        visit(scales_tensor);
+        visit(sizes);
+        visit(out);
+    }
 };
 
 struct ResizeConcatParam : ParamBase {
@@ -285,6 +462,11 @@ struct ResizeConcatParam : ParamBase {
     std::vector<float> scales;
     int32_t axis{1};
     int32_t resize_input_index{0};
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(resize_input);
+        visit(concat_input);
+        visit(out);
+    }
 };
 
 struct PowParam : ParamBase {
@@ -292,6 +474,11 @@ struct PowParam : ParamBase {
     std::shared_ptr<Tensor> exponent_tensor;
     std::shared_ptr<Tensor> out;
     float exponent{1.0f};
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(exponent_tensor);
+        visit(out);
+    }
 };
 
 struct YoloDecodeParam : ParamBase {
@@ -302,6 +489,15 @@ struct YoloDecodeParam : ParamBase {
     std::shared_ptr<Tensor> wh_scale;
     std::shared_ptr<Tensor> anchor_grid;
     std::shared_ptr<Tensor> out;
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(xy_scale);
+        visit(grid);
+        visit(stride);
+        visit(wh_scale);
+        visit(anchor_grid);
+        visit(out);
+    }
 };
 
 struct QuantizeLinearParam : ParamBase {
@@ -310,6 +506,12 @@ struct QuantizeLinearParam : ParamBase {
     std::shared_ptr<Tensor> zero_point;
     std::shared_ptr<Tensor> out;
     int64_t axis{-1};
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(scale);
+        visit(zero_point);
+        visit(out);
+    }
 };
 
 struct DequantizeLinearParam : ParamBase {
@@ -319,6 +521,12 @@ struct DequantizeLinearParam : ParamBase {
     std::shared_ptr<Tensor> out;
     DataType to{DataType::FP32};
     int64_t axis{-1};
+    template <typename Visitor> void VisitTensors(Visitor&& visit) {
+        visit(input);
+        visit(scale);
+        visit(zero_point);
+        visit(out);
+    }
 };
 
 }  // namespace operators

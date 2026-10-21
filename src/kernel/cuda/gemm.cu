@@ -171,28 +171,28 @@ int RunFp8Gemm(feather::operators::GemmParam* param, const char* timer_name) {
 
 template <>
 int32_t GemmKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunGemm<DataType::FP32>(static_cast<feather::operators::GemmParam*>(param_), "CUDA::Gemm::FP32");
+    return RunGemm<DataType::FP32>(ParamAs<feather::operators::GemmParam>(), "CUDA::Gemm::FP32");
 }
 
 template <>
 int32_t GemmKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunGemm<DataType::FP16>(static_cast<feather::operators::GemmParam*>(param_), "CUDA::Gemm::FP16");
+    return RunGemm<DataType::FP16>(ParamAs<feather::operators::GemmParam>(), "CUDA::Gemm::FP16");
 }
 
 template <>
 int32_t GemmKernel<DeviceType::CUDA, DataType::BF16>::compute() {
-    return RunGemm<DataType::BF16>(static_cast<feather::operators::GemmParam*>(param_), "CUDA::Gemm::BF16");
+    return RunGemm<DataType::BF16>(ParamAs<feather::operators::GemmParam>(), "CUDA::Gemm::BF16");
 }
 
 template <>
 int32_t GemmKernel<DeviceType::CUDA, DataType::FP8E4M3>::compute() {
-    return RunFp8Gemm<DataType::FP8E4M3>(static_cast<feather::operators::GemmParam*>(param_),
+    return RunFp8Gemm<DataType::FP8E4M3>(ParamAs<feather::operators::GemmParam>(),
                                          "CUDA::Gemm::FP8E4M3");
 }
 
 template <>
 int32_t GemmKernel<DeviceType::CUDA, DataType::FP8E5M2>::compute() {
-    return RunFp8Gemm<DataType::FP8E5M2>(static_cast<feather::operators::GemmParam*>(param_),
+    return RunFp8Gemm<DataType::FP8E5M2>(ParamAs<feather::operators::GemmParam>(),
                                          "CUDA::Gemm::FP8E5M2");
 }
 

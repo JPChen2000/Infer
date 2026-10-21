@@ -193,12 +193,12 @@ int32_t DispatchUnary(Param* param) { return Fn(param); }
     template <>                                                                                            \
     int32_t Class<DeviceType::COMMON, DataType::FP8E4M3>::compute() {                                   \
         AutoTimer timer("Common::" Label "::FP8E4M3");                                                \
-        return Function<DataType::FP8E4M3>(static_cast<ParamType*>(param_));                             \
+        return Function<DataType::FP8E4M3>(ParamAs<ParamType>());                             \
     }                                                                                                     \
     template <>                                                                                            \
     int32_t Class<DeviceType::COMMON, DataType::FP8E5M2>::compute() {                                   \
         AutoTimer timer("Common::" Label "::FP8E5M2");                                                \
-        return Function<DataType::FP8E5M2>(static_cast<ParamType*>(param_));                             \
+        return Function<DataType::FP8E5M2>(ParamAs<ParamType>());                             \
     }
 
 DEFINE_FP8_UNARY_KERNELS(ReluKernel, operators::UnaryParam, ComputeRelu, "ReLU")
@@ -218,49 +218,49 @@ DEFINE_FP8_UNARY_KERNELS(PowKernel, operators::PowParam, ComputePow, "Pow")
 template <>
 int32_t IdentityKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() {
     AutoTimer timer("Common::Identity::FP8E4M3");
-    return ComputeIdentity<DataType::FP8E4M3>(static_cast<operators::UnaryParam*>(param_));
+    return ComputeIdentity<DataType::FP8E4M3>(ParamAs<operators::UnaryParam>());
 }
 template <>
 int32_t IdentityKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() {
     AutoTimer timer("Common::Identity::FP8E5M2");
-    return ComputeIdentity<DataType::FP8E5M2>(static_cast<operators::UnaryParam*>(param_));
+    return ComputeIdentity<DataType::FP8E5M2>(ParamAs<operators::UnaryParam>());
 }
 
 template <>
-int32_t ReshapeKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() { return ComputeReshape<DataType::FP8E4M3>(static_cast<operators::ReshapeParam*>(param_)); }
+int32_t ReshapeKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() { return ComputeReshape<DataType::FP8E4M3>(ParamAs<operators::ReshapeParam>()); }
 template <>
-int32_t ReshapeKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() { return ComputeReshape<DataType::FP8E5M2>(static_cast<operators::ReshapeParam*>(param_)); }
+int32_t ReshapeKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() { return ComputeReshape<DataType::FP8E5M2>(ParamAs<operators::ReshapeParam>()); }
 template <>
-int32_t UnsqueezeKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() { return ComputeUnsqueeze<DataType::FP8E4M3>(static_cast<operators::AxesParam*>(param_)); }
+int32_t UnsqueezeKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() { return ComputeUnsqueeze<DataType::FP8E4M3>(ParamAs<operators::AxesParam>()); }
 template <>
-int32_t UnsqueezeKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() { return ComputeUnsqueeze<DataType::FP8E5M2>(static_cast<operators::AxesParam*>(param_)); }
+int32_t UnsqueezeKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() { return ComputeUnsqueeze<DataType::FP8E5M2>(ParamAs<operators::AxesParam>()); }
 template <>
-int32_t SqueezeKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() { return ComputeSqueeze<DataType::FP8E4M3>(static_cast<operators::AxesParam*>(param_)); }
+int32_t SqueezeKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() { return ComputeSqueeze<DataType::FP8E4M3>(ParamAs<operators::AxesParam>()); }
 template <>
-int32_t SqueezeKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() { return ComputeSqueeze<DataType::FP8E5M2>(static_cast<operators::AxesParam*>(param_)); }
+int32_t SqueezeKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() { return ComputeSqueeze<DataType::FP8E5M2>(ParamAs<operators::AxesParam>()); }
 template <>
-int32_t FlattenKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() { return ComputeFlatten<DataType::FP8E4M3>(static_cast<operators::FlattenParam*>(param_)); }
+int32_t FlattenKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() { return ComputeFlatten<DataType::FP8E4M3>(ParamAs<operators::FlattenParam>()); }
 template <>
-int32_t FlattenKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() { return ComputeFlatten<DataType::FP8E5M2>(static_cast<operators::FlattenParam*>(param_)); }
+int32_t FlattenKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() { return ComputeFlatten<DataType::FP8E5M2>(ParamAs<operators::FlattenParam>()); }
 template <>
 int32_t GlobalAveragePoolKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() {
-    return fp8_host::GlobalAveragePool<DataType::FP8E4M3>(static_cast<operators::GlobalAveragePoolParam*>(param_));
+    return fp8_host::GlobalAveragePool<DataType::FP8E4M3>(ParamAs<operators::GlobalAveragePoolParam>());
 }
 template <>
 int32_t GlobalAveragePoolKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() {
-    return fp8_host::GlobalAveragePool<DataType::FP8E5M2>(static_cast<operators::GlobalAveragePoolParam*>(param_));
+    return fp8_host::GlobalAveragePool<DataType::FP8E5M2>(ParamAs<operators::GlobalAveragePoolParam>());
 }
 
 #define DEFINE_FP8_PARAM_KERNELS(Class, ParamType, Function, Label)                                     \
     template <>                                                                                            \
     int32_t Class<DeviceType::COMMON, DataType::FP8E4M3>::compute() {                                   \
         AutoTimer timer("Common::" Label "::FP8E4M3");                                                \
-        return Function<DataType::FP8E4M3>(static_cast<ParamType*>(param_));                             \
+        return Function<DataType::FP8E4M3>(ParamAs<ParamType>());                             \
     }                                                                                                     \
     template <>                                                                                            \
     int32_t Class<DeviceType::COMMON, DataType::FP8E5M2>::compute() {                                   \
         AutoTimer timer("Common::" Label "::FP8E5M2");                                                \
-        return Function<DataType::FP8E5M2>(static_cast<ParamType*>(param_));                             \
+        return Function<DataType::FP8E5M2>(ParamAs<ParamType>());                             \
     }
 
 DEFINE_FP8_PARAM_KERNELS(TransposeKernel, operators::TransposeParam, fp8_host::Transpose, "Transpose")

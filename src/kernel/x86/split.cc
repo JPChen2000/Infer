@@ -131,7 +131,7 @@ int32_t ComputeSplitRaw(feather::operators::SplitParam* param, DataType dtype,
 template <>
 int32_t SplitKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::Split::FP32");
-    auto* param = static_cast<feather::operators::SplitParam*>(param_);
+    auto* param = ParamAs<feather::operators::SplitParam>();
     if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::FP32) {
         return ComputeSplitFallback<DataType::FP32>(param);
     }
@@ -141,7 +141,7 @@ int32_t SplitKernel<DeviceType::X86, DataType::FP32>::compute() {
 template <>
 int32_t SplitKernel<DeviceType::X86, DataType::FP16>::compute() {
     AutoTimer timer("X86::Split::FP16");
-    auto* param = static_cast<feather::operators::SplitParam*>(param_);
+    auto* param = ParamAs<feather::operators::SplitParam>();
     if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::FP16) {
         return ComputeSplitFallback<DataType::FP16>(param);
     }
@@ -151,7 +151,7 @@ int32_t SplitKernel<DeviceType::X86, DataType::FP16>::compute() {
 template <>
 int32_t SplitKernel<DeviceType::X86, DataType::BF16>::compute() {
     AutoTimer timer("X86::Split::BF16");
-    auto* param = static_cast<feather::operators::SplitParam*>(param_);
+    auto* param = ParamAs<feather::operators::SplitParam>();
     if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::BF16) {
         return ComputeSplitFallback<DataType::BF16>(param);
     }
@@ -161,21 +161,7 @@ int32_t SplitKernel<DeviceType::X86, DataType::BF16>::compute() {
                                      });
 }
 
-void EnsureX86SplitKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "Split",
-            []() { return std::make_unique<SplitKernel<DeviceType::X86, DataType::FP32>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP16, "Split",
-            []() { return std::make_unique<SplitKernel<DeviceType::X86, DataType::FP16>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::BF16, "Split",
-            []() { return std::make_unique<SplitKernel<DeviceType::X86, DataType::BF16>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

@@ -1,3 +1,4 @@
+#include "test/python_test_utils.h"
 #include <gtest/gtest.h>
 
 #include <cstdlib>
@@ -67,20 +68,21 @@ onnx.save(model, output_path)
         return false;
     }
     const std::string command =
-        "/home/jarvis/miniconda3/bin/python3 \"" + script_path.string() + "\" \"" + model_path.string() + "\"";
+        feather::test::PythonCommand() + " \"" + script_path.string() + "\" \"" + model_path.string() + "\"";
     return std::system(command.c_str()) == 0;
 }
 
 }  // namespace
 
 TEST(classification_onnx_import_test, PreservesClassificationOnnxOperatorNames) {
+    if (!feather::test::HasPythonModules("numpy, onnx")) GTEST_SKIP() << "set FEATHER_TEST_PYTHON to Python with numpy and onnx";
     const auto repo_root = std::filesystem::path(__FILE__).parent_path().parent_path();
     const auto script_path = repo_root / "tools" / "onnx_to_feather.py";
     const auto onnx_path = std::filesystem::temp_directory_path() / "feather_tiny_classification.onnx";
     const auto output_path = std::filesystem::temp_directory_path() / "feather_tiny_classification.fth";
 
     ASSERT_TRUE(WriteTinyClassificationOnnxModel(onnx_path));
-    const std::string command = "/home/jarvis/miniconda3/bin/python3 \"" + script_path.string() + "\" --input \"" +
+    const std::string command = feather::test::PythonCommand() + " \"" + script_path.string() + "\" --input \"" +
                                 onnx_path.string() + "\" --output \"" + output_path.string() + "\"";
     ASSERT_EQ(std::system(command.c_str()), 0);
 
@@ -99,13 +101,14 @@ TEST(classification_onnx_import_test, PreservesClassificationOnnxOperatorNames) 
 }
 
 TEST(classification_onnx_import_test, RunsTinyClassificationGraphOnCpu) {
+    if (!feather::test::HasPythonModules("numpy, onnx")) GTEST_SKIP() << "set FEATHER_TEST_PYTHON to Python with numpy and onnx";
     const auto repo_root = std::filesystem::path(__FILE__).parent_path().parent_path();
     const auto script_path = repo_root / "tools" / "onnx_to_feather.py";
     const auto onnx_path = std::filesystem::temp_directory_path() / "feather_tiny_classification_run.onnx";
     const auto output_path = std::filesystem::temp_directory_path() / "feather_tiny_classification_run.fth";
 
     ASSERT_TRUE(WriteTinyClassificationOnnxModel(onnx_path));
-    const std::string command = "/home/jarvis/miniconda3/bin/python3 \"" + script_path.string() + "\" --input \"" +
+    const std::string command = feather::test::PythonCommand() + " \"" + script_path.string() + "\" --input \"" +
                                 onnx_path.string() + "\" --output \"" + output_path.string() + "\"";
     ASSERT_EQ(std::system(command.c_str()), 0);
 

@@ -172,7 +172,7 @@ bool ValidateCombined(const operators::QwenGatedDeltaParam* p, int64_t* heads, i
 template <>
 int32_t QwenGatedDeltaStateKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::QwenGatedDeltaState::FP32");
-    auto* p = static_cast<operators::QwenGatedDeltaStateParam*>(param_);
+    auto* p = ParamAs<operators::QwenGatedDeltaStateParam>();
     if (p == nullptr || p->state == nullptr || p->k == nullptr || p->v == nullptr || p->beta == nullptr ||
         p->decay == nullptr || p->out == nullptr || p->state->data_type() != DataType::FP32 ||
         p->k->data_type() != DataType::FP32 || p->v->data_type() != DataType::FP32 ||
@@ -212,7 +212,7 @@ int32_t QwenGatedDeltaStateKernel<DeviceType::X86, DataType::FP32>::compute() {
 template <>
 int32_t QwenGatedDeltaOutputKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::QwenGatedDeltaOutput::FP32");
-    auto* p = static_cast<operators::QwenGatedDeltaOutputParam*>(param_);
+    auto* p = ParamAs<operators::QwenGatedDeltaOutputParam>();
     if (p == nullptr || p->state == nullptr || p->q == nullptr || p->out == nullptr ||
         p->state->data_type() != DataType::FP32 || p->q->data_type() != DataType::FP32 ||
         p->state->dims().size() != 4 || p->state->dims()[0] != 1) return -1;
@@ -245,7 +245,7 @@ int32_t QwenGatedDeltaOutputKernel<DeviceType::X86, DataType::FP32>::compute() {
 template <>
 int32_t QwenGatedDeltaKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::QwenGatedDelta::FP32");
-    auto* p = static_cast<operators::QwenGatedDeltaParam*>(param_);
+    auto* p = ParamAs<operators::QwenGatedDeltaParam>();
     int64_t heads = 0, key = 0, value = 0;
     if (!ValidateCombined(p, &heads, &key, &value)) return -1;
 
@@ -286,22 +286,7 @@ int32_t QwenGatedDeltaKernel<DeviceType::X86, DataType::FP32>::compute() {
     return 0;
 }
 
-void EnsureX86QwenGatedDeltaKernelsRegistered() {
-    static bool registered = []() {
-        auto& d = KernelDispatcher::instance();
-        d.registerKernel(DeviceType::X86, DataType::FP32, "QwenGatedDeltaState", []() {
-            return std::make_unique<QwenGatedDeltaStateKernel<DeviceType::X86, DataType::FP32>>();
-        });
-        d.registerKernel(DeviceType::X86, DataType::FP32, "QwenGatedDeltaOutput", []() {
-            return std::make_unique<QwenGatedDeltaOutputKernel<DeviceType::X86, DataType::FP32>>();
-        });
-        d.registerKernel(DeviceType::X86, DataType::FP32, "QwenGatedDelta", []() {
-            return std::make_unique<QwenGatedDeltaKernel<DeviceType::X86, DataType::FP32>>();
-        });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

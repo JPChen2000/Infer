@@ -169,12 +169,12 @@ bool g_cuda_int8_fused_kernels_registered = []() {
 
 template <>
 int32_t ShapeKernel<DeviceType::CUDA, DataType::INT8>::compute() {
-    return common::ComputeShapeInt8(static_cast<feather::operators::ShapeParam*>(param_));
+    return common::ComputeShapeInt8(ParamAs<feather::operators::ShapeParam>());
 }
 
 template <>
 int32_t ResizeConcatKernel<DeviceType::CUDA, DataType::INT8>::compute() {
-    auto* param = static_cast<feather::operators::ResizeConcatParam*>(param_);
+    auto* param = ParamAs<feather::operators::ResizeConcatParam>();
     if (param == nullptr || param->resize_input == nullptr || param->concat_input == nullptr || param->out == nullptr) return -1;
     const auto resize_dims = param->resize_input->dims().data();
     const auto concat_dims = param->concat_input->dims().data();
@@ -219,7 +219,7 @@ int32_t ResizeConcatKernel<DeviceType::CUDA, DataType::INT8>::compute() {
 
 template <>
 int32_t YoloDecodeKernel<DeviceType::CUDA, DataType::INT8>::compute() {
-    auto* param = static_cast<feather::operators::YoloDecodeParam*>(param_);
+    auto* param = ParamAs<feather::operators::YoloDecodeParam>();
     if (param == nullptr || param->input == nullptr || param->out == nullptr || param->xy_scale == nullptr ||
         param->grid == nullptr || param->stride == nullptr || param->wh_scale == nullptr || param->anchor_grid == nullptr) return -1;
     const auto input_dims = param->input->dims().data();

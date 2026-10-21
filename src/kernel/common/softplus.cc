@@ -29,15 +29,15 @@ int32_t RunSoftplus(feather::operators::UnaryParam* param) {
 
 template <> int32_t SoftplusKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Softplus::FP32");
-    return RunSoftplus<DataType::FP32>(static_cast<feather::operators::UnaryParam*>(param_));
+    return RunSoftplus<DataType::FP32>(ParamAs<feather::operators::UnaryParam>());
 }
 template <> int32_t SoftplusKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Softplus::FP16");
-    return RunSoftplus<DataType::FP16>(static_cast<feather::operators::UnaryParam*>(param_));
+    return RunSoftplus<DataType::FP16>(ParamAs<feather::operators::UnaryParam>());
 }
 template <> int32_t SoftplusKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Softplus::BF16");
-    return RunSoftplus<DataType::BF16>(static_cast<feather::operators::UnaryParam*>(param_));
+    return RunSoftplus<DataType::BF16>(ParamAs<feather::operators::UnaryParam>());
 }
 
 void EnsureSoftplusKernelsRegistered() { (void)g_softplus_kernels_registered; }

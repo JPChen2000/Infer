@@ -35,13 +35,13 @@ int32_t ComputeFlattenKernel(feather::operators::FlattenParam* param) {
 template <>
 int32_t FlattenKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Flatten::FP32");
-    return ComputeFlattenKernel<DataType::FP32>(static_cast<feather::operators::FlattenParam*>(param_));
+    return ComputeFlattenKernel<DataType::FP32>(ParamAs<feather::operators::FlattenParam>());
 }
 
 template <>
 int32_t FlattenKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Flatten::FP16");
-    return ComputeFlattenKernel<DataType::FP16>(static_cast<feather::operators::FlattenParam*>(param_));
+    return ComputeFlattenKernel<DataType::FP16>(ParamAs<feather::operators::FlattenParam>());
 }
 
 typedef feather::kernel::FlattenKernel<DeviceType::COMMON, DataType::FP32> FlattenCommonFP32Kernel;

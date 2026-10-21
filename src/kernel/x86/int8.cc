@@ -2332,48 +2332,30 @@ int32_t ComputeX86Int8Conv2D(feather::operators::Conv2dParam* param, const Tenso
 
 }  // namespace
 
-void EnsureX86Int8KernelsRegistered() {
-    static const bool registered = []() {
-        auto& dispatcher = KernelDispatcher::instance();
-        dispatcher.registerKernel(DeviceType::X86, DataType::INT8, "FC", []() {
-            return std::make_unique<FcKernel<DeviceType::X86, DataType::INT8>>();
-        });
-        dispatcher.registerKernel(DeviceType::X86, DataType::INT8, "Gemm", []() {
-            return std::make_unique<GemmKernel<DeviceType::X86, DataType::INT8>>();
-        });
-        dispatcher.registerKernel(DeviceType::X86, DataType::INT8, "MatMul", []() {
-            return std::make_unique<MatMulKernel<DeviceType::X86, DataType::INT8>>();
-        });
-        dispatcher.registerKernel(DeviceType::X86, DataType::INT8, "Conv2D", []() {
-            return std::make_unique<Conv2DKernel<DeviceType::X86, DataType::INT8>>();
-        });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 template <>
 int32_t FcKernel<DeviceType::X86, DataType::INT8>::compute() {
     AutoTimer timer("X86::FC::INT8");
-    return ComputeX86Int8Fc(static_cast<feather::operators::FcParam*>(param_));
+    return ComputeX86Int8Fc(ParamAs<feather::operators::FcParam>());
 }
 
 template <>
 int32_t GemmKernel<DeviceType::X86, DataType::INT8>::compute() {
     AutoTimer timer("X86::Gemm::INT8");
-    return ComputeX86Int8Gemm(static_cast<feather::operators::GemmParam*>(param_));
+    return ComputeX86Int8Gemm(ParamAs<feather::operators::GemmParam>());
 }
 
 template <>
 int32_t MatMulKernel<DeviceType::X86, DataType::INT8>::compute() {
     AutoTimer timer("X86::MatMul::INT8");
-    return ComputeX86Int8MatMul(static_cast<feather::operators::MatMulParam*>(param_));
+    return ComputeX86Int8MatMul(ParamAs<feather::operators::MatMulParam>());
 }
 
 template <>
 int32_t Conv2DKernel<DeviceType::X86, DataType::INT8>::compute() {
     AutoTimer timer("X86::Conv2D::INT8");
-    return ComputeX86Int8Conv2D(static_cast<feather::operators::Conv2dParam*>(param_),
+    return ComputeX86Int8Conv2D(ParamAs<feather::operators::Conv2dParam>(),
                                 &cached_int8_weight_tensor_, &cached_int8_weight_oc8_buffer_,
                                 &cached_int8_maddubs_weight_tensor_, &cached_int8_maddubs_weight_buffer_,
                                 &cached_int8_pointwise_maddubs_weight_tensor_,

@@ -1,5 +1,6 @@
 #ifndef FEATHER_INFER_UTIL_TYPES_H
 #define FEATHER_INFER_UTIL_TYPES_H
+#include "util/cpu_features.h"
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
@@ -70,6 +71,13 @@ struct QuantizationParams {
     }
 };
 
+inline bool HasSameQuantization(const QuantizationParams& a, const QuantizationParams& b) {
+    if (a.enabled != b.enabled) return false;
+    if (!a.enabled) return true;
+    return a.scale == b.scale && a.zero_point == b.zero_point && a.granularity == b.granularity &&
+           a.axis == b.axis && a.block_size == b.block_size && a.scales == b.scales && a.zero_points == b.zero_points;
+}
+
 // FP8 kernels consume one scalar scale for an entire tensor. Disabled
 // quantization denotes the implicit unit scale; enabled non-scalar schemes
 // need a kernel that explicitly implements their indexing semantics.
@@ -121,7 +129,7 @@ enum class DeviceType {
 
 inline DeviceType GetHostRuntimeDevice() {
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386) || defined(_M_IX86)
-    return DeviceType::X86;
+    return HostSupportsX86Kernels() ? DeviceType::X86 : DeviceType::COMMON;
 #elif defined(__aarch64__)
     return DeviceType::ARM64;
 #elif defined(__arm__) || defined(_M_ARM)

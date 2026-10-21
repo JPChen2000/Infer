@@ -29,7 +29,7 @@ bool g_tanh_kernels_registered = []() {
 template <>
 int32_t TanhKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Tanh::FP32");
-    auto* param = static_cast<feather::operators::UnaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::UnaryParam>();
     if (param == nullptr) {
         return -1;
     }
@@ -40,7 +40,7 @@ int32_t TanhKernel<DeviceType::COMMON, DataType::FP32>::compute() {
 template <>
 int32_t TanhKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Tanh::FP16");
-    auto* param = static_cast<feather::operators::UnaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::UnaryParam>();
     if (param == nullptr) {
         return -1;
     }
@@ -51,7 +51,7 @@ int32_t TanhKernel<DeviceType::COMMON, DataType::FP16>::compute() {
 template <>
 int32_t TanhKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Tanh::BF16");
-    auto* param = static_cast<feather::operators::UnaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::UnaryParam>();
     if (param == nullptr) {
         return -1;
     }

@@ -94,13 +94,13 @@ bool g_common_qwen_rms_norm_kernels_registered = []() {
 template <>
 int32_t QwenRmsNormKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::QwenRmsNorm::FP32");
-    return ComputeQwenRmsNorm<DataType::FP32>(static_cast<operators::QwenRmsNormParam*>(param_));
+    return ComputeQwenRmsNorm<DataType::FP32>(ParamAs<operators::QwenRmsNormParam>());
 }
 
 template <>
 int32_t QwenRmsNormKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::QwenRmsNorm::BF16");
-    return ComputeQwenRmsNorm<DataType::BF16>(static_cast<operators::QwenRmsNormParam*>(param_));
+    return ComputeQwenRmsNorm<DataType::BF16>(ParamAs<operators::QwenRmsNormParam>());
 }
 
 void EnsureCommonQwenRmsNormKernelsRegistered() { (void)g_common_qwen_rms_norm_kernels_registered; }

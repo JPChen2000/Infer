@@ -260,28 +260,28 @@ int RunFp8MatMul(feather::operators::MatMulParam* param, const char* timer_name)
 
 template <>
 int32_t MatMulKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunMatMul<DataType::FP32>(static_cast<feather::operators::MatMulParam*>(param_), "CUDA::MatMul::FP32");
+    return RunMatMul<DataType::FP32>(ParamAs<feather::operators::MatMulParam>(), "CUDA::MatMul::FP32");
 }
 
 template <>
 int32_t MatMulKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunMatMul<DataType::FP16>(static_cast<feather::operators::MatMulParam*>(param_), "CUDA::MatMul::FP16");
+    return RunMatMul<DataType::FP16>(ParamAs<feather::operators::MatMulParam>(), "CUDA::MatMul::FP16");
 }
 
 template <>
 int32_t MatMulKernel<DeviceType::CUDA, DataType::BF16>::compute() {
-    return RunMatMul<DataType::BF16>(static_cast<feather::operators::MatMulParam*>(param_), "CUDA::MatMul::BF16");
+    return RunMatMul<DataType::BF16>(ParamAs<feather::operators::MatMulParam>(), "CUDA::MatMul::BF16");
 }
 
 template <>
 int32_t MatMulKernel<DeviceType::CUDA, DataType::FP8E4M3>::compute() {
-    return RunFp8MatMul<DataType::FP8E4M3>(static_cast<feather::operators::MatMulParam*>(param_),
+    return RunFp8MatMul<DataType::FP8E4M3>(ParamAs<feather::operators::MatMulParam>(),
                                            "CUDA::MatMul::FP8E4M3");
 }
 
 template <>
 int32_t MatMulKernel<DeviceType::CUDA, DataType::FP8E5M2>::compute() {
-    return RunFp8MatMul<DataType::FP8E5M2>(static_cast<feather::operators::MatMulParam*>(param_),
+    return RunFp8MatMul<DataType::FP8E5M2>(ParamAs<feather::operators::MatMulParam>(),
                                            "CUDA::MatMul::FP8E5M2");
 }
 

@@ -25,19 +25,19 @@ bool g_cuda_sigmoid_kernels_registered = []() {
 
 template <>
 int32_t SigmoidKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return cuda_detail::RunUnary<DataType::FP32, 1>(static_cast<feather::operators::UnaryParam*>(param_),
+    return cuda_detail::RunUnary<DataType::FP32, 1>(ParamAs<feather::operators::UnaryParam>(),
                                                    "CUDA::Sigmoid::FP32");
 }
 
 template <>
 int32_t SigmoidKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return cuda_detail::RunUnary<DataType::FP16, 1>(static_cast<feather::operators::UnaryParam*>(param_),
+    return cuda_detail::RunUnary<DataType::FP16, 1>(ParamAs<feather::operators::UnaryParam>(),
                                                    "CUDA::Sigmoid::FP16");
 }
 
 template <>
 int32_t SigmoidKernel<DeviceType::CUDA, DataType::BF16>::compute() {
-    return cuda_detail::RunUnary<DataType::BF16, 1>(static_cast<feather::operators::UnaryParam*>(param_),
+    return cuda_detail::RunUnary<DataType::BF16, 1>(ParamAs<feather::operators::UnaryParam>(),
                                                     "CUDA::Sigmoid::BF16");
 }
 

@@ -90,19 +90,19 @@ int RunTranspose(feather::operators::TransposeParam* param, const char* timer_na
 
 template <>
 int32_t TransposeKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunTranspose<DataType::FP32>(static_cast<feather::operators::TransposeParam*>(param_),
+    return RunTranspose<DataType::FP32>(ParamAs<feather::operators::TransposeParam>(),
                                        "CUDA::Transpose::FP32");
 }
 
 template <>
 int32_t TransposeKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunTranspose<DataType::FP16>(static_cast<feather::operators::TransposeParam*>(param_),
+    return RunTranspose<DataType::FP16>(ParamAs<feather::operators::TransposeParam>(),
                                        "CUDA::Transpose::FP16");
 }
 
 template <>
 int32_t TransposeKernel<DeviceType::CUDA, DataType::BF16>::compute() {
-    return RunTranspose<DataType::BF16>(static_cast<feather::operators::TransposeParam*>(param_),
+    return RunTranspose<DataType::BF16>(ParamAs<feather::operators::TransposeParam>(),
                                         "CUDA::Transpose::BF16");
 }
 

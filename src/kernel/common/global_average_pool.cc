@@ -56,13 +56,13 @@ int32_t ComputeGlobalAveragePool(feather::operators::GlobalAveragePoolParam* par
 template <>
 int32_t GlobalAveragePoolKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::GlobalAveragePool::FP32");
-    return ComputeGlobalAveragePool<DataType::FP32>(static_cast<feather::operators::GlobalAveragePoolParam*>(param_));
+    return ComputeGlobalAveragePool<DataType::FP32>(ParamAs<feather::operators::GlobalAveragePoolParam>());
 }
 
 template <>
 int32_t GlobalAveragePoolKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::GlobalAveragePool::FP16");
-    return ComputeGlobalAveragePool<DataType::FP16>(static_cast<feather::operators::GlobalAveragePoolParam*>(param_));
+    return ComputeGlobalAveragePool<DataType::FP16>(ParamAs<feather::operators::GlobalAveragePoolParam>());
 }
 
 typedef feather::kernel::GlobalAveragePoolKernel<DeviceType::COMMON, DataType::FP32> GlobalAveragePoolCommonFP32Kernel;

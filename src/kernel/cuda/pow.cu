@@ -23,13 +23,13 @@ bool g_cuda_pow_kernels_registered = []() {
 
 template <>
 int32_t PowKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return cuda_detail::RunPow<DataType::FP32>(static_cast<feather::operators::PowParam*>(param_),
+    return cuda_detail::RunPow<DataType::FP32>(ParamAs<feather::operators::PowParam>(),
                                               "CUDA::Pow::FP32");
 }
 
 template <>
 int32_t PowKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return cuda_detail::RunPow<DataType::FP16>(static_cast<feather::operators::PowParam*>(param_),
+    return cuda_detail::RunPow<DataType::FP16>(ParamAs<feather::operators::PowParam>(),
                                               "CUDA::Pow::FP16");
 }
 

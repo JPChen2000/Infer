@@ -43,25 +43,25 @@ int32_t ComputeReshapeKernel(feather::operators::ReshapeParam* param) {
 template <>
 int32_t ReshapeKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Reshape::FP32");
-    return ComputeReshapeKernel<DataType::FP32>(static_cast<feather::operators::ReshapeParam*>(param_));
+    return ComputeReshapeKernel<DataType::FP32>(ParamAs<feather::operators::ReshapeParam>());
 }
 
 template <>
 int32_t ReshapeKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Reshape::FP16");
-    return ComputeReshapeKernel<DataType::FP16>(static_cast<feather::operators::ReshapeParam*>(param_));
+    return ComputeReshapeKernel<DataType::FP16>(ParamAs<feather::operators::ReshapeParam>());
 }
 
 template <>
 int32_t ReshapeKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Reshape::BF16");
-    return ComputeReshapeKernel<DataType::BF16>(static_cast<feather::operators::ReshapeParam*>(param_));
+    return ComputeReshapeKernel<DataType::BF16>(ParamAs<feather::operators::ReshapeParam>());
 }
 
 template <>
 int32_t ReshapeKernel<DeviceType::COMMON, DataType::BOOL>::compute() {
     AutoTimer timer("Common::Reshape::BOOL");
-    return ComputeReshapeKernel<DataType::BOOL>(static_cast<feather::operators::ReshapeParam*>(param_));
+    return ComputeReshapeKernel<DataType::BOOL>(ParamAs<feather::operators::ReshapeParam>());
 }
 
 typedef feather::kernel::ReshapeKernel<DeviceType::COMMON, DataType::FP32> ReshapeCommonFP32Kernel;

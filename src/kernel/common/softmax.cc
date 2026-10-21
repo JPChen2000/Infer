@@ -78,19 +78,19 @@ int32_t ComputeSoftmaxCommon(feather::operators::SoftmaxParam* param) {
 template <>
 int32_t SoftmaxKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Softmax::FP32");
-    return ComputeSoftmaxCommon<DataType::FP32>(static_cast<feather::operators::SoftmaxParam*>(param_));
+    return ComputeSoftmaxCommon<DataType::FP32>(ParamAs<feather::operators::SoftmaxParam>());
 }
 
 template <>
 int32_t SoftmaxKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Softmax::FP16");
-    return ComputeSoftmaxCommon<DataType::FP16>(static_cast<feather::operators::SoftmaxParam*>(param_));
+    return ComputeSoftmaxCommon<DataType::FP16>(ParamAs<feather::operators::SoftmaxParam>());
 }
 
 template <>
 int32_t SoftmaxKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Softmax::BF16");
-    return ComputeSoftmaxCommon<DataType::BF16>(static_cast<feather::operators::SoftmaxParam*>(param_));
+    return ComputeSoftmaxCommon<DataType::BF16>(ParamAs<feather::operators::SoftmaxParam>());
 }
 
 typedef feather::kernel::SoftmaxKernel<DeviceType::COMMON, DataType::FP32> SoftmaxCommonFP32Kernel;

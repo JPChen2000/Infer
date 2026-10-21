@@ -81,26 +81,26 @@ int32_t ComputeSliceCommon(feather::operators::SliceParam* param) {
 template <>
 int32_t SliceKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Slice::FP32");
-    auto* param = static_cast<feather::operators::SliceParam*>(param_);
+    auto* param = ParamAs<feather::operators::SliceParam>();
     return ComputeSliceCommon<DataType::FP32>(param);
 }
 
 template <>
 int32_t SliceKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Slice::FP16");
-    auto* param = static_cast<feather::operators::SliceParam*>(param_);
+    auto* param = ParamAs<feather::operators::SliceParam>();
     return ComputeSliceCommon<DataType::FP16>(param);
 }
 
 template <>
 int32_t SliceKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Slice::BF16");
-    return ComputeSliceCommon<DataType::BF16>(static_cast<feather::operators::SliceParam*>(param_));
+    return ComputeSliceCommon<DataType::BF16>(ParamAs<feather::operators::SliceParam>());
 }
 
 int32_t SliceKernel<DeviceType::COMMON, DataType::INT64>::compute() {
     AutoTimer timer("Common::Slice::INT64");
-    auto* param = static_cast<feather::operators::SliceParam*>(param_);
+    auto* param = ParamAs<feather::operators::SliceParam>();
     if (param == nullptr || param->input == nullptr || param->out == nullptr) {
         return -1;
     }

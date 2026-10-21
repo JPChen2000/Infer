@@ -22,8 +22,11 @@ class OperatorRegistry {
     using TensorMap = std::unordered_map<std::string, std::shared_ptr<Tensor>>;
     struct BuildContext {
         DeviceType device{GetHostRuntimeDevice()};
+        KernelFallbackPolicy fallback{KernelFallbackPolicy::kAllowCommon};
         DataType data_type{DataType::UNKNOWN};
         DataLayout layout{DataLayout::ND};
+        bool defer_kernels{false};
+        size_t workspace_limit{static_cast<size_t>(-1)};
     };
     using Builder = std::function<std::shared_ptr<OpBase>(const model::NodeDesc&, TensorMap&, const BuildContext&)>;
 
@@ -87,8 +90,8 @@ inline DataLayout ResolveExecutionLayout(const std::vector<std::shared_ptr<Tenso
 inline std::unique_ptr<KernelBase> CreateKernelForTensor(DeviceType device, const std::string& op_type,
                                                          const std::vector<std::shared_ptr<Tensor>>& tensors,
                                                          DataType fallback = DataType::FP32) {
-    return KernelDispatcher::instance().create(device, ResolveExecutionDataType(tensors, fallback),
-                                               ResolveExecutionLayout(tensors), op_type);
+    return KernelDispatcher::instance().create(KernelRequest{device, ResolveExecutionDataType(tensors, fallback),
+        ResolveExecutionLayout(tensors), op_type, tensors, KernelSelectionScope::Node(), KernelSelectionScope::WorkspaceLimit()}, KernelSelectionScope::Policy());
 }
 
 inline std::unique_ptr<KernelBase> CreateHostKernelForTensor(const std::string& op_type,

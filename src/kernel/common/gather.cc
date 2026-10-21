@@ -78,19 +78,19 @@ int32_t ComputeGather(feather::operators::GatherParam* param) {
 template <>
 int32_t GatherKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Gather::FP32");
-    return ComputeGather<DataType::FP32>(static_cast<feather::operators::GatherParam*>(param_));
+    return ComputeGather<DataType::FP32>(ParamAs<feather::operators::GatherParam>());
 }
 
 template <>
 int32_t GatherKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Gather::FP16");
-    return ComputeGather<DataType::FP16>(static_cast<feather::operators::GatherParam*>(param_));
+    return ComputeGather<DataType::FP16>(ParamAs<feather::operators::GatherParam>());
 }
 
 template <>
 int32_t GatherKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Gather::BF16");
-    return ComputeGather<DataType::BF16>(static_cast<feather::operators::GatherParam*>(param_));
+    return ComputeGather<DataType::BF16>(ParamAs<feather::operators::GatherParam>());
 }
 
 void EnsureCommonGatherKernelsRegistered() { (void)g_common_gather_kernels_registered; }

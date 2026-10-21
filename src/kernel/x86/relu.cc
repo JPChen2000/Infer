@@ -30,7 +30,7 @@ int32_t ComputeReluFallback(feather::operators::UnaryParam* param) {
 template <>
 int32_t ReluKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::ReLU::FP32");
-    auto* param = static_cast<feather::operators::UnaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::UnaryParam>();
     if (param == nullptr || param->input == nullptr || param->out == nullptr) {
         return -1;
     }
@@ -58,21 +58,10 @@ int32_t ReluKernel<DeviceType::X86, DataType::FP32>::compute() {
 template <>
 int32_t ReluKernel<DeviceType::X86, DataType::FP16>::compute() {
     AutoTimer timer("X86::ReLU::FP16");
-    return ComputeReluFallback<DataType::FP16>(static_cast<feather::operators::UnaryParam*>(param_));
+    return ComputeReluFallback<DataType::FP16>(ParamAs<feather::operators::UnaryParam>());
 }
 
-void EnsureX86ReluKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "ReLU",
-            []() { return std::make_unique<ReluKernel<DeviceType::X86, DataType::FP32>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP16, "ReLU",
-            []() { return std::make_unique<ReluKernel<DeviceType::X86, DataType::FP16>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

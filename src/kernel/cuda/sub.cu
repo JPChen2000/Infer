@@ -33,19 +33,19 @@ bool g_cuda_sub_kernels_registered = []() {
 
 template <>
 int32_t SubKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return cuda_detail::RunBinary<DataType::FP32, 2>(static_cast<feather::operators::BinaryParam*>(param_),
+    return cuda_detail::RunBinary<DataType::FP32, 2>(ParamAs<feather::operators::BinaryParam>(),
                                                      "CUDA::Sub::FP32");
 }
 
 template <>
 int32_t SubKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return cuda_detail::RunBinary<DataType::FP16, 2>(static_cast<feather::operators::BinaryParam*>(param_),
+    return cuda_detail::RunBinary<DataType::FP16, 2>(ParamAs<feather::operators::BinaryParam>(),
                                                      "CUDA::Sub::FP16");
 }
 
 template <>
 int32_t SubKernel<DeviceType::CUDA, DataType::BF16>::compute() {
-    return cuda_detail::RunBinary<DataType::BF16, 2>(static_cast<feather::operators::BinaryParam*>(param_),
+    return cuda_detail::RunBinary<DataType::BF16, 2>(ParamAs<feather::operators::BinaryParam>(),
                                                      "CUDA::Sub::BF16");
 }
 
@@ -56,12 +56,12 @@ int32_t ComputeCudaFp8Sub(feather::operators::BinaryParam* param) {
 
 template <>
 int32_t SubKernel<DeviceType::CUDA, DataType::FP8E4M3>::compute() {
-    return ComputeCudaFp8Sub<DataType::FP8E4M3>(static_cast<feather::operators::BinaryParam*>(param_));
+    return ComputeCudaFp8Sub<DataType::FP8E4M3>(ParamAs<feather::operators::BinaryParam>());
 }
 
 template <>
 int32_t SubKernel<DeviceType::CUDA, DataType::FP8E5M2>::compute() {
-    return ComputeCudaFp8Sub<DataType::FP8E5M2>(static_cast<feather::operators::BinaryParam*>(param_));
+    return ComputeCudaFp8Sub<DataType::FP8E5M2>(ParamAs<feather::operators::BinaryParam>());
 }
 
 void EnsureCudaSubKernelsRegistered() { (void)g_cuda_sub_kernels_registered; }

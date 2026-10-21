@@ -90,25 +90,25 @@ int32_t ComputePoolKernel(feather::operators::PoolParam* param) {
 template <>
 int32_t AvgPoolKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::AvgPool::FP32");
-    return ComputePoolKernel<DataType::FP32, false>(static_cast<feather::operators::PoolParam*>(param_));
+    return ComputePoolKernel<DataType::FP32, false>(ParamAs<feather::operators::PoolParam>());
 }
 
 template <>
 int32_t AvgPoolKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::AvgPool::FP16");
-    return ComputePoolKernel<DataType::FP16, false>(static_cast<feather::operators::PoolParam*>(param_));
+    return ComputePoolKernel<DataType::FP16, false>(ParamAs<feather::operators::PoolParam>());
 }
 
 template <>
 int32_t MaxPoolKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::MaxPool::FP32");
-    return ComputePoolKernel<DataType::FP32, true>(static_cast<feather::operators::PoolParam*>(param_));
+    return ComputePoolKernel<DataType::FP32, true>(ParamAs<feather::operators::PoolParam>());
 }
 
 template <>
 int32_t MaxPoolKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::MaxPool::FP16");
-    return ComputePoolKernel<DataType::FP16, true>(static_cast<feather::operators::PoolParam*>(param_));
+    return ComputePoolKernel<DataType::FP16, true>(ParamAs<feather::operators::PoolParam>());
 }
 
 typedef feather::kernel::AvgPoolKernel<DeviceType::COMMON, DataType::FP32> AvgPoolCommonFP32Kernel;

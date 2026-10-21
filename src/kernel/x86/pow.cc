@@ -37,7 +37,7 @@ inline float PowScalar(float value, float exponent) { return std::pow(value, exp
 template <>
 int32_t PowKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::Pow::FP32");
-    auto* param = static_cast<feather::operators::PowParam*>(param_);
+    auto* param = ParamAs<feather::operators::PowParam>();
     if (param == nullptr || param->input == nullptr || param->out == nullptr) {
         return -1;
     }
@@ -85,7 +85,7 @@ int32_t PowKernel<DeviceType::X86, DataType::FP32>::compute() {
 template <>
 int32_t PowKernel<DeviceType::X86, DataType::FP16>::compute() {
     AutoTimer timer("X86::Pow::FP16");
-    auto* param = static_cast<feather::operators::PowParam*>(param_);
+    auto* param = ParamAs<feather::operators::PowParam>();
     if (param == nullptr || param->input == nullptr || param->out == nullptr) {
         return -1;
     }
@@ -137,18 +137,7 @@ int32_t PowKernel<DeviceType::X86, DataType::FP16>::compute() {
     return 0;
 }
 
-void EnsureX86PowKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP32, "Pow",
-            []() { return std::make_unique<PowKernel<DeviceType::X86, DataType::FP32>>(); });
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::FP16, "Pow",
-            []() { return std::make_unique<PowKernel<DeviceType::X86, DataType::FP16>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

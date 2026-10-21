@@ -86,19 +86,19 @@ int32_t ComputeGemmCommon(feather::operators::GemmParam* param) {
 template <>
 int32_t GemmKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Gemm::FP32");
-    return ComputeGemmCommon<DataType::FP32>(static_cast<feather::operators::GemmParam*>(param_));
+    return ComputeGemmCommon<DataType::FP32>(ParamAs<feather::operators::GemmParam>());
 }
 
 template <>
 int32_t GemmKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Gemm::FP16");
-    return ComputeGemmCommon<DataType::FP16>(static_cast<feather::operators::GemmParam*>(param_));
+    return ComputeGemmCommon<DataType::FP16>(ParamAs<feather::operators::GemmParam>());
 }
 
 template <>
 int32_t GemmKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Gemm::BF16");
-    return ComputeGemmCommon<DataType::BF16>(static_cast<feather::operators::GemmParam*>(param_));
+    return ComputeGemmCommon<DataType::BF16>(ParamAs<feather::operators::GemmParam>());
 }
 
 template <DataType dtype>
@@ -109,19 +109,19 @@ int32_t ComputeCommonFp8Gemm(feather::operators::GemmParam* param) {
 template <>
 int32_t GemmKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() {
     AutoTimer timer("Common::Gemm::FP8E4M3");
-    return ComputeCommonFp8Gemm<DataType::FP8E4M3>(static_cast<feather::operators::GemmParam*>(param_));
+    return ComputeCommonFp8Gemm<DataType::FP8E4M3>(ParamAs<feather::operators::GemmParam>());
 }
 
 template <>
 int32_t GemmKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() {
     AutoTimer timer("Common::Gemm::FP8E5M2");
-    return ComputeCommonFp8Gemm<DataType::FP8E5M2>(static_cast<feather::operators::GemmParam*>(param_));
+    return ComputeCommonFp8Gemm<DataType::FP8E5M2>(ParamAs<feather::operators::GemmParam>());
 }
 
 template <>
 int32_t GemmKernel<DeviceType::COMMON, DataType::INT8>::compute() {
     AutoTimer timer("Common::Gemm::INT8");
-    auto* param = static_cast<feather::operators::GemmParam*>(param_);
+    auto* param = ParamAs<feather::operators::GemmParam>();
     if (param == nullptr || param->a == nullptr || param->b == nullptr || param->out == nullptr ||
         param->a->dims().size() < 2 || param->b->dims().size() != 2 || param->trans_a ||
         !std::isfinite(param->alpha) || !std::isfinite(param->beta)) {

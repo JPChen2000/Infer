@@ -19,7 +19,7 @@ bool g_quantize_linear_kernels_registered = []() {
 }  // namespace
 
 int32_t CommonQuantizeLinearKernel::compute() {
-    auto* param = static_cast<operators::QuantizeLinearParam*>(param_);
+    auto* param = ParamAs<operators::QuantizeLinearParam>();
     if (param == nullptr || param->input == nullptr ||
         (param->input->data_type() != DataType::FP32 && param->input->data_type() != DataType::FP16 &&
          param->input->data_type() != DataType::BF16)) return -1;

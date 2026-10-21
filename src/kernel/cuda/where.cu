@@ -107,12 +107,12 @@ int32_t RunWhere(feather::operators::WhereParam* param, const char* timer_name) 
 
 template <>
 int32_t WhereKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunWhere<DataType::FP32>(static_cast<feather::operators::WhereParam*>(param_), "CUDA::Where::FP32");
+    return RunWhere<DataType::FP32>(ParamAs<feather::operators::WhereParam>(), "CUDA::Where::FP32");
 }
 
 template <>
 int32_t WhereKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunWhere<DataType::FP16>(static_cast<feather::operators::WhereParam*>(param_), "CUDA::Where::FP16");
+    return RunWhere<DataType::FP16>(ParamAs<feather::operators::WhereParam>(), "CUDA::Where::FP16");
 }
 
 void EnsureCudaWhereKernelsRegistered() { (void)g_cuda_where_kernels_registered; }

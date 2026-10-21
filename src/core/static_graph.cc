@@ -1,6 +1,7 @@
 #include "core/static_graph.h"
 
 #include <algorithm>
+#include <queue>
 #include <unordered_set>
 #include <utility>
 
@@ -10,8 +11,82 @@ namespace feather {
 
 namespace {
 
+Status ValidateAndOrderGraph(model::ModelDesc* model,
+                             const std::unordered_set<std::string>& bindings,
+                             std::vector<size_t>* order) {
+    const auto fail = [](const std::string& message) {
+        return Status::Error(StatusCode::kBuildFailed, message);
+    };
+    auto& graph = model->graph;
+    std::unordered_set<std::string> values, sources, names;
+    for (const auto& value : graph.values) {
+        size_t count = 0;
+        if (value.tensor.name.empty() || !values.insert(value.tensor.name).second)
+            return fail("empty or duplicate value name: " + value.tensor.name);
+        if (!CheckedElementCount(value.tensor.dims, &count))
+            return fail("invalid shape for value: " + value.tensor.name);
+        if (value.constant) sources.insert(value.tensor.name);
+    }
+    std::unordered_set<std::string> inputs;
+    for (const auto& input : graph.inputs) {
+        if (values.count(input) == 0 || !inputs.insert(input).second)
+            return fail("unknown or duplicate graph input: " + input);
+        sources.insert(input);
+    }
+    for (const auto& node : graph.nodes) {
+        if (!node.name.empty() && !names.insert(node.name).second)
+            return fail("duplicate node name: " + node.name);
+    }
+    std::unordered_map<std::string, size_t> producers;
+    for (size_t i = 0; i < graph.nodes.size(); ++i) {
+        auto& node = graph.nodes[i];
+        if (node.name.empty()) {
+            node.name = "__node_" + std::to_string(i);
+            while (!names.insert(node.name).second) node.name += "_";
+        }
+        for (const auto& output : node.outputs) {
+            if (values.count(output) == 0 || sources.count(output) != 0 ||
+                !producers.emplace(output, i).second)
+                return fail("invalid or duplicate producer for value: " + output);
+        }
+    }
+    // Explicit caller bindings may supply external values omitted from the
+    // serialized input list. Allocated placeholders are never treated as sources.
+    for (const auto& binding : bindings) {
+        if (values.count(binding) != 0 && producers.count(binding) == 0) sources.insert(binding);
+    }
+    std::vector<size_t> pending(graph.nodes.size(), 0);
+    std::vector<std::vector<size_t>> users(graph.nodes.size());
+    for (size_t i = 0; i < graph.nodes.size(); ++i) {
+        for (const auto& input : graph.nodes[i].inputs) {
+            if (input.empty()) continue;  // omitted optional input
+            if (sources.count(input) != 0) continue;
+            const auto it = producers.find(input);
+            if (it == producers.end()) return fail("value has no source: " + input);
+            ++pending[i];
+            users[it->second].push_back(i);
+        }
+    }
+    std::unordered_set<std::string> outputs;
+    for (const auto& output : graph.outputs) {
+        if (!outputs.insert(output).second ||
+            (sources.count(output) == 0 && producers.count(output) == 0))
+            return fail("unknown or duplicate graph output: " + output);
+    }
+    std::priority_queue<size_t, std::vector<size_t>, std::greater<size_t>> ready;
+    for (size_t i = 0; i < pending.size(); ++i) if (pending[i] == 0) ready.push(i);
+    while (!ready.empty()) {
+        const auto i = ready.top(); ready.pop(); order->push_back(i);
+        for (const auto user : users[i]) if (--pending[user] == 0) ready.push(user);
+    }
+    return order->size() == graph.nodes.size() ? Status::Ok() : fail("graph contains a cycle");
+}
+
 std::shared_ptr<Tensor> CreateTensorFromValue(const model::ValueDesc& value) {
-    auto tensor = std::make_shared<Tensor>(value.tensor.dims);
+    size_t bytes = 0;
+    if (!CheckedTensorBytes(value.tensor.dims, value.tensor.data_type, &bytes)) return nullptr;
+    auto tensor = std::make_shared<Tensor>(bytes);
+    tensor->Resize(value.tensor.dims);
     tensor->set_data_type(value.tensor.data_type);
     tensor->set_layout(value.tensor.layout);
     tensor->set_quantization(value.tensor.quantization);
@@ -88,6 +163,8 @@ int32_t EvaluateBuildTimeControlOp(const std::shared_ptr<OpBase>& op) {
 int32_t StaticGraph::SetModel(const model::ModelDesc& model) {
     model_ = model;
     ClearGraphState();
+    tensors_.clear();
+    bound_tensor_names_.clear();
     if (pass_manager_ == nullptr) {
         pass_manager_ = CreateDefaultPassManager();
     }
@@ -99,6 +176,7 @@ int32_t StaticGraph::SetTensor(const std::string& name, std::shared_ptr<Tensor> 
         return -1;
     }
     tensors_[name] = std::move(tensor);
+    bound_tensor_names_.insert(name);
     return 0;
 }
 
@@ -131,12 +209,16 @@ std::shared_ptr<Tensor> StaticGraph::GetTensor(const std::string& name) const {
 }
 
 Status StaticGraph::BuildStatus() {
+    DeferredAllocationScope allocation_scope;
     ClearGraphState();
 
     const auto fail = [](const std::string& message) {
         return Status::Error(StatusCode::kBuildFailed, message);
     };
 
+    std::vector<size_t> order;
+    const auto validation = ValidateAndOrderGraph(&model_, bound_tensor_names_, &order);
+    if (!validation.ok()) return validation;
     std::unordered_set<std::string> static_values;
 
     for (const auto& input_name : model_.graph.inputs) {
@@ -167,8 +249,9 @@ Status StaticGraph::BuildStatus() {
         }
     }
 
-    for (const auto& node : model_.graph.nodes) {
-        auto op = OperatorRegistry::instance().Create(node, tensors_, OperatorRegistry::BuildContext{kernel_device_});
+    for (const auto node_index : order) {
+        const auto& node = model_.graph.nodes[node_index];
+        auto op = OperatorRegistry::instance().Create(node, tensors_, OperatorRegistry::BuildContext{kernel_device_, fallback_policy_, DataType::UNKNOWN, DataLayout::ND, true, workspace_limit_});
         if (op == nullptr) {
             std::cerr << "StaticGraph::Build failed to create node=" << node.name << " op=" << node.op_type << '\n';
             return fail("failed to create operator " + node.op_type + " for node " + node.name);
@@ -213,24 +296,17 @@ Status StaticGraph::BuildStatus() {
         nodes_.push_back(std::move(static_node));
     }
 
+    build_time_values_ = std::move(static_values);
+    built_ = true;
     return CheckStatus();
 }
 
 int32_t StaticGraph::Build() { return BuildStatus().ok() ? 0 : -1; }
 
-int32_t StaticGraph::Check() const {
-    for (const auto& node : nodes_) {
-        if (node.removed) {
-            continue;
-        }
-        if (node.op == nullptr || !node.op->HasKernel()) {
-            return -1;
-        }
-    }
-    return 0;
-}
+int32_t StaticGraph::Check() const { return CheckStatus().ok() ? 0 : -1; }
 
 Status StaticGraph::CheckStatus() const {
+    if (!built_) return Status::Error(StatusCode::kBuildFailed, "static graph has not been built successfully");
     for (const auto& node : nodes_) {
         if (!node.removed && (node.op == nullptr || !node.op->HasKernel())) {
             return Status::Error(StatusCode::kBuildFailed, "invalid static node: " + node.name);
@@ -239,20 +315,37 @@ Status StaticGraph::CheckStatus() const {
     return Status::Ok();
 }
 
-int32_t StaticGraph::ApplyPasses() {
-    if (pass_manager_ == nullptr) {
-        return 0;
+Status StaticGraph::ValidateStructureStatus() const {
+    auto status = CheckStatus();
+    if (!status.ok()) return status;
+    auto active = model_;
+    active.graph.nodes.clear();
+    for (const auto& node : nodes_) {
+        if (node.removed) continue;
+        model::NodeDesc desc;
+        desc.name = node.name; desc.op_type = node.op_type;
+        desc.inputs = node.inputs; desc.outputs = node.outputs;
+        active.graph.nodes.push_back(std::move(desc));
     }
-    return pass_manager_->Run(this);
+    for (auto& output : active.graph.outputs) {
+        std::unordered_set<std::string> visited;
+        while (output_aliases_.count(output)) {
+            if (!visited.insert(output).second) return Status::Error(StatusCode::kBuildFailed, "cycle in output aliases");
+            output = output_aliases_.at(output);
+        }
+    }
+    // Different public output names may legitimately alias the same value.
+    std::sort(active.graph.outputs.begin(), active.graph.outputs.end());
+    active.graph.outputs.erase(std::unique(active.graph.outputs.begin(), active.graph.outputs.end()), active.graph.outputs.end());
+    std::vector<size_t> order;
+    return ValidateAndOrderGraph(&active, bound_tensor_names_, &order);
 }
 
+int32_t StaticGraph::ApplyPasses() { return ApplyPassesStatus().ok() ? 0 : -1; }
+
 Status StaticGraph::ApplyPassesStatus() {
-    if (pass_manager_ == nullptr) {
-        return Status::Ok();
-    }
-    return pass_manager_->Run(this) == 0
-               ? Status::Ok()
-               : Status::Error(StatusCode::kBuildFailed, "static graph pass pipeline failed");
+    DeferredAllocationScope allocation_scope;
+    return pass_manager_ ? pass_manager_->RunStatus(this) : CheckStatus();
 }
 
 void StaticGraph::SetPassManager(std::shared_ptr<PassManager> pass_manager) { pass_manager_ = std::move(pass_manager); }
@@ -456,7 +549,7 @@ bool StaticGraph::ReplaceNodeDesc(const model::NodeDesc& desc) {
             return false;
         }
     }
-    auto op = OperatorRegistry::instance().Create(desc, tensors_, OperatorRegistry::BuildContext{kernel_device_});
+    auto op = OperatorRegistry::instance().Create(desc, tensors_, OperatorRegistry::BuildContext{kernel_device_, fallback_policy_, DataType::UNKNOWN, DataLayout::ND, true, workspace_limit_});
     if (op == nullptr || op->outputs().size() != static_node.outputs.size()) {
         return false;
     }
@@ -525,7 +618,7 @@ bool StaticGraph::ReplaceNodeDescAndAbsorbNode(const model::NodeDesc& desc,
         return false;
     }
 
-    auto op = OperatorRegistry::instance().Create(desc, tensors_, OperatorRegistry::BuildContext{kernel_device_});
+    auto op = OperatorRegistry::instance().Create(desc, tensors_, OperatorRegistry::BuildContext{kernel_device_, fallback_policy_, DataType::UNKNOWN, DataLayout::ND, true, workspace_limit_});
     if (op == nullptr || op->outputs().size() != desc.outputs.size()) {
         return false;
     }
@@ -561,6 +654,8 @@ bool StaticGraph::ReplaceNodeDescAndAbsorbNode(const model::NodeDesc& desc,
 }
 
 void StaticGraph::ClearGraphState() {
+    built_ = false;
+    build_time_values_.clear();
     nodes_.clear();
     node_index_by_name_.clear();
     producer_by_value_.clear();
@@ -611,7 +706,7 @@ bool StaticGraph::RebuildNode(size_t node_index) {
         break;
     }
 
-    auto op = OperatorRegistry::instance().Create(desc, tensors_, OperatorRegistry::BuildContext{kernel_device_});
+    auto op = OperatorRegistry::instance().Create(desc, tensors_, OperatorRegistry::BuildContext{kernel_device_, fallback_policy_, DataType::UNKNOWN, DataLayout::ND, true, workspace_limit_});
     if (op == nullptr) {
         return false;
     }

@@ -124,18 +124,10 @@ int32_t ComputeExpandBf16(feather::operators::ExpandParam* param) {
 template <>
 int32_t ExpandKernel<DeviceType::X86, DataType::BF16>::compute() {
     AutoTimer timer("X86::Expand::BF16");
-    return ComputeExpandBf16(static_cast<feather::operators::ExpandParam*>(param_));
+    return ComputeExpandBf16(ParamAs<feather::operators::ExpandParam>());
 }
 
-void EnsureX86ExpandKernelsRegistered() {
-    static bool registered = []() {
-        KernelDispatcher::instance().registerKernel(
-            DeviceType::X86, DataType::BF16, "Expand",
-            []() { return std::make_unique<ExpandKernel<DeviceType::X86, DataType::BF16>>(); });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

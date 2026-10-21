@@ -34,12 +34,15 @@ class StaticGraph {
     bool SetValueDataType(const std::string& name, DataType data_type);
     std::shared_ptr<Tensor> GetTensor(const std::string& name) const;
     void SetKernelDevice(DeviceType device) { kernel_device_ = device == DeviceType::UNKNOWN ? GetHostRuntimeDevice() : device; }
+    void SetFallbackPolicy(KernelFallbackPolicy policy) { fallback_policy_ = policy; }
+    void SetWorkspaceLimit(size_t bytes) { workspace_limit_ = bytes; }
     DeviceType KernelDevice() const { return kernel_device_; }
 
     int32_t Build();
     Status BuildStatus();
     int32_t Check() const;
     Status CheckStatus() const;
+    Status ValidateStructureStatus() const;
     int32_t ApplyPasses();
     Status ApplyPassesStatus();
     void SetPassManager(std::shared_ptr<PassManager> pass_manager);
@@ -66,6 +69,8 @@ class StaticGraph {
     bool ReplaceNodeDescAndAbsorbNode(const model::NodeDesc& desc, const std::string& absorbed_node_name);
 
     const std::unordered_map<std::string, std::shared_ptr<Tensor>>& tensors() const { return tensors_; }
+    const std::unordered_set<std::string>& bound_tensor_names() const { return bound_tensor_names_; }
+    const std::unordered_set<std::string>& build_time_values() const { return build_time_values_; }
     const std::vector<StaticNode>& nodes() const { return nodes_; }
 
    private:
@@ -76,6 +81,7 @@ class StaticGraph {
 
     model::ModelDesc model_;
     std::unordered_map<std::string, std::shared_ptr<Tensor>> tensors_;
+    std::unordered_set<std::string> bound_tensor_names_;
     std::vector<StaticNode> nodes_;
     std::unordered_map<std::string, size_t> node_index_by_name_;
     std::unordered_map<std::string, std::string> producer_by_value_;
@@ -83,6 +89,10 @@ class StaticGraph {
     std::unordered_map<std::string, std::string> output_aliases_;
     std::shared_ptr<PassManager> pass_manager_;
     DeviceType kernel_device_{GetHostRuntimeDevice()};
+    KernelFallbackPolicy fallback_policy_{KernelFallbackPolicy::kAllowCommon};
+    size_t workspace_limit_{static_cast<size_t>(-1)};
+    std::unordered_set<std::string> build_time_values_;
+    bool built_{false};
 };
 
 }  // namespace feather

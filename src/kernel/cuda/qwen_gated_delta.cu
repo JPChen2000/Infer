@@ -238,7 +238,7 @@ bool g_cuda_qwen_gated_delta_kernels_registered = []() {
 template <>
 int32_t QwenGatedDeltaStateKernel<DeviceType::CUDA, DataType::FP32>::compute() {
     AutoTimer timer("CUDA::QwenGatedDeltaState::FP32");
-    auto* param = static_cast<operators::QwenGatedDeltaStateParam*>(param_);
+    auto* param = ParamAs<operators::QwenGatedDeltaStateParam>();
     int64_t heads = 0;
     int64_t key = 0;
     int64_t value = 0;
@@ -248,7 +248,7 @@ int32_t QwenGatedDeltaStateKernel<DeviceType::CUDA, DataType::FP32>::compute() {
 template <>
 int32_t QwenGatedDeltaOutputKernel<DeviceType::CUDA, DataType::FP32>::compute() {
     AutoTimer timer("CUDA::QwenGatedDeltaOutput::FP32");
-    auto* param = static_cast<operators::QwenGatedDeltaOutputParam*>(param_);
+    auto* param = ParamAs<operators::QwenGatedDeltaOutputParam>();
     int64_t heads = 0;
     int64_t key = 0;
     int64_t value = 0;
@@ -258,7 +258,7 @@ int32_t QwenGatedDeltaOutputKernel<DeviceType::CUDA, DataType::FP32>::compute() 
 template <>
 int32_t QwenGatedDeltaKernel<DeviceType::CUDA, DataType::FP32>::compute() {
     AutoTimer timer("CUDA::QwenGatedDelta::FP32");
-    auto* param = static_cast<operators::QwenGatedDeltaParam*>(param_);
+    auto* param = ParamAs<operators::QwenGatedDeltaParam>();
     int64_t heads = 0;
     int64_t key = 0;
     int64_t value = 0;

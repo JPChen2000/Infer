@@ -153,12 +153,12 @@ int RunResize(feather::operators::ResizeParam* param, const char* timer_name) {
 
 template <>
 int32_t ResizeKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunResize<DataType::FP32>(static_cast<feather::operators::ResizeParam*>(param_), "CUDA::Resize::FP32");
+    return RunResize<DataType::FP32>(ParamAs<feather::operators::ResizeParam>(), "CUDA::Resize::FP32");
 }
 
 template <>
 int32_t ResizeKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunResize<DataType::FP16>(static_cast<feather::operators::ResizeParam*>(param_), "CUDA::Resize::FP16");
+    return RunResize<DataType::FP16>(ParamAs<feather::operators::ResizeParam>(), "CUDA::Resize::FP16");
 }
 
 void EnsureCudaResizeKernelsRegistered() { (void)g_cuda_resize_kernels_registered; }

@@ -81,7 +81,7 @@ int32_t RunFloatingCast(feather::operators::CastParam* param, const char* timer_
 
 template <>
 int32_t CastKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    auto* param = static_cast<feather::operators::CastParam*>(param_);
+    auto* param = ParamAs<feather::operators::CastParam>();
     if (param == nullptr) {
         return -1;
     }
@@ -105,7 +105,7 @@ int32_t CastKernel<DeviceType::CUDA, DataType::FP32>::compute() {
 
 template <>
 int32_t CastKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    auto* param = static_cast<feather::operators::CastParam*>(param_);
+    auto* param = ParamAs<feather::operators::CastParam>();
     if (param == nullptr) {
         return -1;
     }
@@ -129,7 +129,7 @@ int32_t CastKernel<DeviceType::CUDA, DataType::FP16>::compute() {
 
 template <>
 int32_t CastKernel<DeviceType::CUDA, DataType::BF16>::compute() {
-    auto* param = static_cast<feather::operators::CastParam*>(param_);
+    auto* param = ParamAs<feather::operators::CastParam>();
     if (param == nullptr) {
         return -1;
     }
@@ -153,7 +153,7 @@ int32_t CastKernel<DeviceType::CUDA, DataType::BF16>::compute() {
 
 template <>
 int32_t CastKernel<DeviceType::CUDA, DataType::INT32>::compute() {
-    auto* param = static_cast<feather::operators::CastParam*>(param_);
+    auto* param = ParamAs<feather::operators::CastParam>();
     if (param == nullptr) {
         return -1;
     }
@@ -177,7 +177,7 @@ int32_t CastKernel<DeviceType::CUDA, DataType::INT32>::compute() {
 
 template <>
 int32_t CastKernel<DeviceType::CUDA, DataType::INT64>::compute() {
-    auto* param = static_cast<feather::operators::CastParam*>(param_);
+    auto* param = ParamAs<feather::operators::CastParam>();
     if (param == nullptr) {
         return -1;
     }
@@ -224,13 +224,13 @@ int32_t RunCudaFp8InputCast(feather::operators::CastParam* param, const char* ti
 
 template <>
 int32_t CastKernel<DeviceType::CUDA, DataType::FP8E4M3>::compute() {
-    return RunCudaFp8InputCast<DataType::FP8E4M3>(static_cast<feather::operators::CastParam*>(param_),
+    return RunCudaFp8InputCast<DataType::FP8E4M3>(ParamAs<feather::operators::CastParam>(),
                                                    "CUDA::Cast::FP8E4M3");
 }
 
 template <>
 int32_t CastKernel<DeviceType::CUDA, DataType::FP8E5M2>::compute() {
-    return RunCudaFp8InputCast<DataType::FP8E5M2>(static_cast<feather::operators::CastParam*>(param_),
+    return RunCudaFp8InputCast<DataType::FP8E5M2>(ParamAs<feather::operators::CastParam>(),
                                                   "CUDA::Cast::FP8E5M2");
 }
 

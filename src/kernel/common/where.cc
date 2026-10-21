@@ -77,37 +77,37 @@ int32_t ComputeWhere(feather::operators::WhereParam* param) {
 template <>
 int32_t WhereKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Where::FP32");
-    return ComputeWhere<DataType::FP32>(static_cast<feather::operators::WhereParam*>(param_));
+    return ComputeWhere<DataType::FP32>(ParamAs<feather::operators::WhereParam>());
 }
 
 template <>
 int32_t WhereKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Where::FP16");
-    return ComputeWhere<DataType::FP16>(static_cast<feather::operators::WhereParam*>(param_));
+    return ComputeWhere<DataType::FP16>(ParamAs<feather::operators::WhereParam>());
 }
 
 template <>
 int32_t WhereKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Where::BF16");
-    return ComputeWhere<DataType::BF16>(static_cast<feather::operators::WhereParam*>(param_));
+    return ComputeWhere<DataType::BF16>(ParamAs<feather::operators::WhereParam>());
 }
 
 template <>
 int32_t WhereKernel<DeviceType::COMMON, DataType::INT32>::compute() {
     AutoTimer timer("Common::Where::INT32");
-    return ComputeWhere<DataType::INT32>(static_cast<feather::operators::WhereParam*>(param_));
+    return ComputeWhere<DataType::INT32>(ParamAs<feather::operators::WhereParam>());
 }
 
 template <>
 int32_t WhereKernel<DeviceType::COMMON, DataType::INT64>::compute() {
     AutoTimer timer("Common::Where::INT64");
-    return ComputeWhere<DataType::INT64>(static_cast<feather::operators::WhereParam*>(param_));
+    return ComputeWhere<DataType::INT64>(ParamAs<feather::operators::WhereParam>());
 }
 
 template <>
 int32_t WhereKernel<DeviceType::COMMON, DataType::BOOL>::compute() {
     AutoTimer timer("Common::Where::BOOL");
-    return ComputeWhere<DataType::BOOL>(static_cast<feather::operators::WhereParam*>(param_));
+    return ComputeWhere<DataType::BOOL>(ParamAs<feather::operators::WhereParam>());
 }
 
 void EnsureCommonWhereKernelsRegistered() { (void)g_common_where_kernels_registered; }

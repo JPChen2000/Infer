@@ -106,19 +106,19 @@ int32_t ComputeTransposeKernel(feather::operators::TransposeParam* param) {
 template <>
 int32_t TransposeKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Transpose::FP32");
-    return ComputeTransposeKernel<DataType::FP32>(static_cast<feather::operators::TransposeParam*>(param_));
+    return ComputeTransposeKernel<DataType::FP32>(ParamAs<feather::operators::TransposeParam>());
 }
 
 template <>
 int32_t TransposeKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Transpose::FP16");
-    return ComputeTransposeKernel<DataType::FP16>(static_cast<feather::operators::TransposeParam*>(param_));
+    return ComputeTransposeKernel<DataType::FP16>(ParamAs<feather::operators::TransposeParam>());
 }
 
 template <>
 int32_t TransposeKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Transpose::BF16");
-    return ComputeTransposeKernel<DataType::BF16>(static_cast<feather::operators::TransposeParam*>(param_));
+    return ComputeTransposeKernel<DataType::BF16>(ParamAs<feather::operators::TransposeParam>());
 }
 
 typedef feather::kernel::TransposeKernel<DeviceType::COMMON, DataType::FP32> TransposeCommonFP32Kernel;

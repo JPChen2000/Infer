@@ -338,7 +338,7 @@ int32_t ComputeFp32ToBf16(feather::operators::CastParam* param) {
 template <>
 int32_t CastKernel<DeviceType::X86, DataType::BF16>::compute() {
     AutoTimer timer("X86::Cast::BF16");
-    auto* param = static_cast<feather::operators::CastParam*>(param_);
+    auto* param = ParamAs<feather::operators::CastParam>();
     if (param != nullptr && param->input != nullptr && param->input->data_type() == DataType::BF16 &&
         param->to == DataType::FP32) {
         return ComputeBf16ToFp32(param);
@@ -352,7 +352,7 @@ int32_t CastKernel<DeviceType::X86, DataType::BF16>::compute() {
 template <>
 int32_t CastKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::Cast::FP32");
-    auto* param = static_cast<feather::operators::CastParam*>(param_);
+    auto* param = ParamAs<feather::operators::CastParam>();
     if (param != nullptr && param->input != nullptr && param->input->data_type() == DataType::FP32 &&
         param->to == DataType::BF16) {
         return ComputeFp32ToBf16(param);
@@ -366,34 +366,16 @@ int32_t CastKernel<DeviceType::X86, DataType::FP32>::compute() {
 template <>
 int32_t CastKernel<DeviceType::X86, DataType::FP8E4M3>::compute() {
     AutoTimer timer("X86::Cast::FP8E4M3");
-    return ComputeFp8InputCast<DataType::FP8E4M3>(static_cast<feather::operators::CastParam*>(param_));
+    return ComputeFp8InputCast<DataType::FP8E4M3>(ParamAs<feather::operators::CastParam>());
 }
 
 template <>
 int32_t CastKernel<DeviceType::X86, DataType::FP8E5M2>::compute() {
     AutoTimer timer("X86::Cast::FP8E5M2");
-    return ComputeFp8InputCast<DataType::FP8E5M2>(static_cast<feather::operators::CastParam*>(param_));
+    return ComputeFp8InputCast<DataType::FP8E5M2>(ParamAs<feather::operators::CastParam>());
 }
 
-void EnsureX86CastKernelsRegistered() {
-    static bool registered = []() {
-        auto& dispatcher = KernelDispatcher::instance();
-        dispatcher.registerKernel(DeviceType::X86, DataType::BF16, "Cast", []() {
-            return std::make_unique<CastKernel<DeviceType::X86, DataType::BF16>>();
-        });
-        dispatcher.registerKernel(DeviceType::X86, DataType::FP32, "Cast", []() {
-            return std::make_unique<CastKernel<DeviceType::X86, DataType::FP32>>();
-        });
-        dispatcher.registerKernel(DeviceType::X86, DataType::FP8E4M3, "Cast", []() {
-            return std::make_unique<CastKernel<DeviceType::X86, DataType::FP8E4M3>>();
-        });
-        dispatcher.registerKernel(DeviceType::X86, DataType::FP8E5M2, "Cast", []() {
-            return std::make_unique<CastKernel<DeviceType::X86, DataType::FP8E5M2>>();
-        });
-        return true;
-    }();
-    (void)registered;
-}
+
 
 }  // namespace kernel
 }  // namespace feather

@@ -42,19 +42,19 @@ int32_t ComputeSiluKernel(feather::operators::UnaryParam* param) {
 template <>
 int32_t SiluKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::SiLU::FP32");
-    return ComputeSiluKernel<DataType::FP32>(static_cast<feather::operators::UnaryParam*>(param_));
+    return ComputeSiluKernel<DataType::FP32>(ParamAs<feather::operators::UnaryParam>());
 }
 
 template <>
 int32_t SiluKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::SiLU::FP16");
-    return ComputeSiluKernel<DataType::FP16>(static_cast<feather::operators::UnaryParam*>(param_));
+    return ComputeSiluKernel<DataType::FP16>(ParamAs<feather::operators::UnaryParam>());
 }
 
 template <>
 int32_t SiluKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::SiLU::BF16");
-    return ComputeSiluKernel<DataType::BF16>(static_cast<feather::operators::UnaryParam*>(param_));
+    return ComputeSiluKernel<DataType::BF16>(ParamAs<feather::operators::UnaryParam>());
 }
 
 typedef feather::kernel::SiluKernel<DeviceType::COMMON, DataType::FP32> SiluCommonFP32Kernel;

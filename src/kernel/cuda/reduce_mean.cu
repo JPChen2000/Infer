@@ -158,19 +158,19 @@ int32_t RunReduceMean(feather::operators::ReduceMeanParam* param, const char* ti
 
 template <>
 int32_t ReduceMeanKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunReduceMean<DataType::FP32>(static_cast<feather::operators::ReduceMeanParam*>(param_),
+    return RunReduceMean<DataType::FP32>(ParamAs<feather::operators::ReduceMeanParam>(),
                                          "CUDA::ReduceMean::FP32");
 }
 
 template <>
 int32_t ReduceMeanKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunReduceMean<DataType::FP16>(static_cast<feather::operators::ReduceMeanParam*>(param_),
+    return RunReduceMean<DataType::FP16>(ParamAs<feather::operators::ReduceMeanParam>(),
                                          "CUDA::ReduceMean::FP16");
 }
 
 template <>
 int32_t ReduceMeanKernel<DeviceType::CUDA, DataType::BF16>::compute() {
-    return RunReduceMean<DataType::BF16>(static_cast<feather::operators::ReduceMeanParam*>(param_),
+    return RunReduceMean<DataType::BF16>(ParamAs<feather::operators::ReduceMeanParam>(),
                                          "CUDA::ReduceMean::BF16");
 }
 

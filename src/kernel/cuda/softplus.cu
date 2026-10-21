@@ -28,19 +28,19 @@ bool g_cuda_softplus_kernels_registered = []() {
 template <>
 int32_t SoftplusKernel<DeviceType::CUDA, DataType::FP32>::compute() {
     return cuda_detail::RunUnaryElementwise<DataType::FP32, 11>(
-        static_cast<feather::operators::UnaryParam*>(param_), "CUDA::Softplus::FP32");
+        ParamAs<feather::operators::UnaryParam>(), "CUDA::Softplus::FP32");
 }
 
 template <>
 int32_t SoftplusKernel<DeviceType::CUDA, DataType::FP16>::compute() {
     return cuda_detail::RunUnaryElementwise<DataType::FP16, 11>(
-        static_cast<feather::operators::UnaryParam*>(param_), "CUDA::Softplus::FP16");
+        ParamAs<feather::operators::UnaryParam>(), "CUDA::Softplus::FP16");
 }
 
 template <>
 int32_t SoftplusKernel<DeviceType::CUDA, DataType::BF16>::compute() {
     return cuda_detail::RunUnaryElementwise<DataType::BF16, 11>(
-        static_cast<feather::operators::UnaryParam*>(param_), "CUDA::Softplus::BF16");
+        ParamAs<feather::operators::UnaryParam>(), "CUDA::Softplus::BF16");
 }
 
 void EnsureCudaSoftplusKernelsRegistered() { (void)g_cuda_softplus_kernels_registered; }

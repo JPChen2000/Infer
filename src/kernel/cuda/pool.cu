@@ -204,25 +204,25 @@ int RunPool(feather::operators::PoolParam* param, const char* timer_name) {
 
 template <>
 int32_t AvgPoolKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunPool<DataType::FP32, false>(static_cast<feather::operators::PoolParam*>(param_),
+    return RunPool<DataType::FP32, false>(ParamAs<feather::operators::PoolParam>(),
                                          "CUDA::AvgPool::FP32");
 }
 
 template <>
 int32_t AvgPoolKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunPool<DataType::FP16, false>(static_cast<feather::operators::PoolParam*>(param_),
+    return RunPool<DataType::FP16, false>(ParamAs<feather::operators::PoolParam>(),
                                          "CUDA::AvgPool::FP16");
 }
 
 template <>
 int32_t MaxPoolKernel<DeviceType::CUDA, DataType::FP32>::compute() {
-    return RunPool<DataType::FP32, true>(static_cast<feather::operators::PoolParam*>(param_),
+    return RunPool<DataType::FP32, true>(ParamAs<feather::operators::PoolParam>(),
                                         "CUDA::MaxPool::FP32");
 }
 
 template <>
 int32_t MaxPoolKernel<DeviceType::CUDA, DataType::FP16>::compute() {
-    return RunPool<DataType::FP16, true>(static_cast<feather::operators::PoolParam*>(param_),
+    return RunPool<DataType::FP16, true>(ParamAs<feather::operators::PoolParam>(),
                                         "CUDA::MaxPool::FP16");
 }
 

@@ -33,7 +33,7 @@ bool g_sub_kernels_registered = []() {
 template <>
 int32_t SubKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     AutoTimer timer("Common::Sub::FP32");
-    auto* param = static_cast<feather::operators::BinaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::BinaryParam>();
     if (param == nullptr) {
         return -1;
     }
@@ -44,7 +44,7 @@ int32_t SubKernel<DeviceType::COMMON, DataType::FP32>::compute() {
 template <>
 int32_t SubKernel<DeviceType::COMMON, DataType::FP16>::compute() {
     AutoTimer timer("Common::Sub::FP16");
-    auto* param = static_cast<feather::operators::BinaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::BinaryParam>();
     if (param == nullptr) {
         return -1;
     }
@@ -55,7 +55,7 @@ int32_t SubKernel<DeviceType::COMMON, DataType::FP16>::compute() {
 template <>
 int32_t SubKernel<DeviceType::COMMON, DataType::BF16>::compute() {
     AutoTimer timer("Common::Sub::BF16");
-    auto* param = static_cast<feather::operators::BinaryParam*>(param_);
+    auto* param = ParamAs<feather::operators::BinaryParam>();
     if (param == nullptr) {
         return -1;
     }
@@ -73,13 +73,13 @@ int32_t ComputeSubFp8(feather::operators::BinaryParam* param) {
 template <>
 int32_t SubKernel<DeviceType::COMMON, DataType::FP8E4M3>::compute() {
     AutoTimer timer("Common::Sub::FP8E4M3");
-    return ComputeSubFp8<DataType::FP8E4M3>(static_cast<feather::operators::BinaryParam*>(param_));
+    return ComputeSubFp8<DataType::FP8E4M3>(ParamAs<feather::operators::BinaryParam>());
 }
 
 template <>
 int32_t SubKernel<DeviceType::COMMON, DataType::FP8E5M2>::compute() {
     AutoTimer timer("Common::Sub::FP8E5M2");
-    return ComputeSubFp8<DataType::FP8E5M2>(static_cast<feather::operators::BinaryParam*>(param_));
+    return ComputeSubFp8<DataType::FP8E5M2>(ParamAs<feather::operators::BinaryParam>());
 }
 
 void EnsureSubKernelsRegistered() {

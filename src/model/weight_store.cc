@@ -1,4 +1,5 @@
 #include "model/weight_store.h"
+#include "core/shape_utils.h"
 
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -59,6 +60,9 @@ void MappedFile::Close() {
 bool WeightStore::AddShard(const std::string& path) { return GetOrOpenShard(path) != nullptr; }
 
 std::shared_ptr<Tensor> WeightStore::CreateTensorView(const TensorDesc& desc, const WeightLocation& location) {
+    size_t required_bytes = 0;
+    if (!CheckedTensorBytes(desc.dims, desc.data_type, &required_bytes) ||
+        location.byte_size != required_bytes) return nullptr;
     auto shard = GetOrOpenShard(location.shard_path);
     if (shard == nullptr) {
         return nullptr;
@@ -73,13 +77,14 @@ std::shared_ptr<Tensor> WeightStore::CreateTensorView(const TensorDesc& desc, co
         return nullptr;
     }
 
-    auto buffer = std::make_shared<Buffer>(shard->data(), shard->size(), shard);
+    auto buffer = std::make_shared<Buffer>(static_cast<char*>(shard->data()) + offset, byte_size, shard, true);
     auto tensor = std::make_shared<Tensor>();
     tensor->Resize(desc.dims);
     tensor->set_data_type(desc.data_type);
     tensor->set_layout(desc.layout);
     tensor->set_quantization(desc.quantization);
-    tensor->ResetBuffer(buffer, byte_size, offset);
+    tensor->ResetBuffer(buffer, byte_size);
+    tensor->set_immutable(true);
     return tensor;
 }
 

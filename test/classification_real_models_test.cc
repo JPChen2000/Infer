@@ -1,3 +1,4 @@
+#include "test/python_test_utils.h"
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -115,7 +116,7 @@ void RunClassificationModelAgainstOnnxRuntime(const std::filesystem::path& onnx_
     const auto input_raw_path = std::filesystem::temp_directory_path() / (case_name + "_input.raw");
     const auto output_ref_path = std::filesystem::temp_directory_path() / (case_name + "_ort.raw");
 
-    const std::string convert_command = "/home/jarvis/miniconda3/bin/python3 \"" + convert_script.string() +
+    const std::string convert_command = feather::test::PythonCommand() + " \"" + convert_script.string() +
                                         "\" --input \"" + onnx_path.string() + "\" --output \"" +
                                         fth_path.string() + "\"";
     ASSERT_EQ(std::system(convert_command.c_str()), 0);
@@ -130,7 +131,7 @@ void RunClassificationModelAgainstOnnxRuntime(const std::filesystem::path& onnx_
     ASSERT_NE(input_tensor, nullptr);
     ASSERT_TRUE(WriteTensorRaw(input_raw_path, *input_tensor));
 
-    const std::string ref_command = "/home/jarvis/miniconda3/bin/python3 \"" + ref_script.string() +
+    const std::string ref_command = feather::test::PythonCommand() + " \"" + ref_script.string() +
                                     "\" --model \"" + onnx_path.string() + "\" --input-raw \"" +
                                     input_raw_path.string() + "\" --output-raw \"" +
                                     output_ref_path.string() + "\"";

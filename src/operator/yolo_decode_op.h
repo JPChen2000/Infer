@@ -27,6 +27,7 @@ class YoloDecodeOp : public OpBase {
     }
     std::unique_ptr<KernelBase> DetachKernel() override { return std::move(kernel_); }
     bool HasKernel() const override { return kernel_ != nullptr; }
+    const KernelBase* kernel() const override { return kernel_.get(); }
     int32_t Run() override;
 
    private:
