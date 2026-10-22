@@ -330,3 +330,9 @@ docs/          设计与验证记录
 - [开发路线图（含历史阶段规划）](docs/development_roadmap.md)
 
 欢迎提交带有复现模型、输入形状、平台信息与测量结果的 Issue 或 Pull Request。算子扩展应包含数值对照，性能优化应同时说明测量条件、精度误差和模型级收益。
+
+## 许可证
+
+Feather 的原创代码与文档采用 [Apache License 2.0](LICENSE)，允许商用、修改和再分发，并提供明确的专利授权。版权与归属信息见 [NOTICE](NOTICE)。
+
+第三方组件、模型权重与测试图片遵循各自的许可证，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。

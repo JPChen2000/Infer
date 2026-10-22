@@ -3,6 +3,7 @@ from conans import ConanFile, CMake, tools
 
 class InferConan(ConanFile):
     name = "Infer"
+    license = "Apache-2.0"
     settings = "os", "compiler", "build_type", "arch"
     options = {
         "shared": [True, False],
@@ -12,7 +13,8 @@ class InferConan(ConanFile):
                        "fPIC": True,
                        "BUILD_UNITTEST": False}
     generators = "cmake"
-    exports_sources = "CMakeLists.txt", "include*", "src*"
+    exports_sources = ("CMakeLists.txt", "include*", "src*",
+                       "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md")
     install_folder = "./"
 
     def requirements(self):
