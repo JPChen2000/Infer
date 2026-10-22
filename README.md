@@ -336,3 +336,5 @@ docs/          设计与验证记录
 Feather 的原创代码与文档采用 [Apache License 2.0](LICENSE)，允许商用、修改和再分发，并提供明确的专利授权。版权与归属信息见 [NOTICE](NOTICE)。
 
 第三方组件、模型权重与测试图片遵循各自的许可证，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。
+
+项目自有源码使用统一的版权声明、`SPDX-License-Identifier: Apache-2.0` 标识和 Apache-2.0 授权文件头；新增源码应沿用这一格式。第三方源文件保留各自原有的版权与许可证声明。
