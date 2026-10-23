@@ -28,7 +28,7 @@ Feather 意为羽毛，呼应轻量、高效的设计目标。仓库地址为 `J
 | 精度 | FP32、FP16、BF16，以及部分算子的 FP8、INT8 路径 |
 | 存储 | 权重映射、只读权重共享与写时复制、延迟分配、串行主机激活 arena |
 | 模型工具 | ONNX → `.fth`、布局转换、INT8 校准与量化、结果比较 |
-| 示例与测量 | 分类、YOLOv5、ViT、Qwen 示例；算子 benchmark 与运行节点 profiling |
+| 示例与测量 | 分类、YOLOv5、ViT、Qwen、FLUX.2 示例；算子 benchmark 与运行节点 profiling |
 
 不同算子的 dtype、layout 和后端覆盖存在差异；支持一种数据类型不代表所有算子都有对应的原生实现。
 
@@ -52,6 +52,7 @@ Feather 意为羽毛，呼应轻量、高效的设计目标。仓库地址为 `J
 - Python 3 与 **Conan 1.x**。当前构建脚本使用 Conan 1 API，不能直接使用 Conan 2。
 - 默认启用 OpenMP；不需要时可设置 `-DFEATHER_ENABLE_OPENMP=OFF`。
 - Google Benchmark；开启单元测试时还需 GoogleTest，均由 Conan 管理。
+- Qwen 的 NFC tokenizer 需要 ICU 开发库（如 `libicu-dev`）；CMake 自动检测，FLUX.2 的具体准备步骤见 [文生图说明](docs/flux2.md)。
 
 ```sh
 git clone https://github.com/JPChen2000/Infer.git
@@ -138,6 +139,7 @@ build-cuda/bin/cuda_diagnostics
 | 目标检测 | `yolo_demo`、`yolov5_demo`、`yolov5_benchmark_demo` | YOLOv5 兼容入口及 YOLOv6/v8/v10/11/26 nano 检测图；[导出、输出契约与运行命令](docs/yolo_detection.md) |
 | 视觉 Transformer | `vit_demo`、`tools/export_vit_model.py` | 固定形状导出；部分聚合算子展开为基础算子 |
 | 文本与状态推理 | `qwen_demo`、`tools/export_qwen35_optimized.py`、`tools/export_qwen35_model.py`、`tools/export_transformer_models.py` | 指定导出配置，含通用状态更新与模型专用优化 |
+| 文生图 | `flux2_demo`、`tools/export_flux2_model.py` | FLUX.2 Klein 4B 四步蒸馏版，固定形状、FP32/BF16、纯 C++ 分阶段执行；[权重、导出、运行与验证边界](docs/flux2.md) |
 
 Qwen 的 `--fp8-format e4m3|e5m2` 导出使用混合精度：主要线性投影的权重、输入和结果使用 FP8；embedding/共享输出头、深度卷积权重及小型 a/b 循环控制投影保留原始 BF16 权重和接口。残差、MLP 激活与最终 logits 使用 BF16，循环状态更新与归一化规约使用 FP32。此前未保留这些权重的 FP8 模型需要重新导出，例如：
 

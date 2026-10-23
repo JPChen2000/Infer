@@ -34,6 +34,7 @@ void EnsureCudaConvTransposeKernelsRegistered();
 void EnsureCudaNonMaxSuppressionKernelsRegistered();
 void EnsureCudaNormalizationKernelsRegistered();
 void EnsureCudaCachedAttentionKernelsRegistered();
+void EnsureCudaScaledDotProductAttentionKernelsRegistered();
 void EnsureCudaFcKernelsRegistered();
 void EnsureCudaInt8KernelsRegistered();
 void EnsureCudaStandardInt8KernelsRegistered();
@@ -94,6 +95,7 @@ void EnsureCudaKernelsRegistered() {
     EnsureCudaNonMaxSuppressionKernelsRegistered();
     EnsureCudaNormalizationKernelsRegistered();
     EnsureCudaCachedAttentionKernelsRegistered();
+    EnsureCudaScaledDotProductAttentionKernelsRegistered();
     EnsureCudaFcKernelsRegistered();
     EnsureCudaInt8KernelsRegistered();
     EnsureCudaStandardInt8KernelsRegistered();

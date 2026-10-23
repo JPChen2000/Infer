@@ -111,6 +111,10 @@ Source: <https://github.com/google/googletest/tree/release-1.11.0>.
 
 ## Optional external dependencies
 
+ICU provides Unicode normalization and character handling for tokenizers when
+available. It is linked from the system installation and retains its Unicode
+License; see <https://github.com/unicode-org/icu/blob/main/LICENSE>.
+
 CUDA Toolkit, cuBLAS, cuBLASLt and cuDNN are provided by NVIDIA under their
 respective license agreements. Feather's Apache-2.0 license does not replace
 those agreements. Python packages used by export and reference tools likewise

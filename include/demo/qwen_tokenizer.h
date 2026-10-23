@@ -49,6 +49,8 @@ class QwenTokenizer {
     std::vector<std::string> special_tokens_by_length_;
     std::unordered_map<uint32_t, uint8_t> byte_decoder_;
     std::vector<std::string> byte_encoder_;
+    bool normalize_nfc_{false};
+    std::string split_pattern_;
     std::string last_error_;
 };
 

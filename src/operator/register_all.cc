@@ -75,6 +75,7 @@ void EnsureConvTransposeOperatorRegistered();
 void EnsureNonMaxSuppressionOperatorRegistered();
 void EnsureNormalizationOperatorsRegistered();
 void EnsureCachedAttentionOperatorRegistered();
+void EnsureScaledDotProductAttentionOperatorRegistered();
 
 void RegisterBuiltinOperators() {
     EnsureAddOperatorRegistered();
@@ -134,6 +135,7 @@ void RegisterBuiltinOperators() {
     EnsureNonMaxSuppressionOperatorRegistered();
     EnsureNormalizationOperatorsRegistered();
     EnsureCachedAttentionOperatorRegistered();
+    EnsureScaledDotProductAttentionOperatorRegistered();
 }
 
 void EnsureBuiltinOperatorsRegistered() { RegisterBuiltinOperators(); }

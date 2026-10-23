@@ -81,6 +81,7 @@ void EnsureYoloSelectionKernelsRegistered();
 void EnsureCommonNonMaxSuppressionKernelsRegistered();
 void EnsureCommonNormalizationKernelsRegistered();
 void EnsureCachedAttentionKernelsRegistered();
+void EnsureScaledDotProductAttentionKernelsRegistered();
 
 #ifdef FEATHER_WITH_CUDA
 void EnsureCudaKernelsRegistered();
@@ -91,6 +92,7 @@ void RegisterBuiltinKernels() {
     EnsureCommonNonMaxSuppressionKernelsRegistered();
     EnsureCommonNormalizationKernelsRegistered();
     EnsureCachedAttentionKernelsRegistered();
+    EnsureScaledDotProductAttentionKernelsRegistered();
     EnsureYoloSelectionKernelsRegistered();
     EnsureStandardCommonInt8KernelsRegistered();
     EnsureStandardX86Int8KernelsRegistered();

@@ -19,9 +19,17 @@
 #include <cctype>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <sstream>
 #include <string_view>
 #include <utility>
+
+#ifdef FEATHER_WITH_ICU
+#include <unicode/regex.h>
+#include <unicode/uchar.h>
+#include <unicode/unorm2.h>
+#include <unicode/ustring.h>
+#endif
 
 namespace feather {
 namespace demo {
@@ -140,14 +148,30 @@ class JsonCursor {
             }
             const char escaped = text_[position_++];
             switch (escaped) {
-                case '"': value->push_back('"'); break;
-                case '\\': value->push_back('\\'); break;
-                case '/': value->push_back('/'); break;
-                case 'b': value->push_back('\b'); break;
-                case 'f': value->push_back('\f'); break;
-                case 'n': value->push_back('\n'); break;
-                case 'r': value->push_back('\r'); break;
-                case 't': value->push_back('\t'); break;
+                case '"':
+                    value->push_back('"');
+                    break;
+                case '\\':
+                    value->push_back('\\');
+                    break;
+                case '/':
+                    value->push_back('/');
+                    break;
+                case 'b':
+                    value->push_back('\b');
+                    break;
+                case 'f':
+                    value->push_back('\f');
+                    break;
+                case 'n':
+                    value->push_back('\n');
+                    break;
+                case 'r':
+                    value->push_back('\r');
+                    break;
+                case 't':
+                    value->push_back('\t');
+                    break;
                 case 'u': {
                     uint32_t codepoint = 0;
                     if (!ParseHexCodepoint(&codepoint)) {
@@ -193,6 +217,13 @@ class JsonCursor {
         } catch (const std::exception&) {
             return false;
         }
+        return true;
+    }
+
+    bool ConsumeNull() {
+        SkipWhitespace();
+        if (text_.substr(position_, 4) != "null") return false;
+        position_ += 4;
         return true;
     }
 
@@ -244,8 +275,8 @@ class JsonCursor {
                 }
             }
         }
-        while (position_ < text_.size() && text_[position_] != ',' && text_[position_] != ']' && text_[position_] != '}' &&
-               !std::isspace(static_cast<unsigned char>(text_[position_]))) {
+        while (position_ < text_.size() && text_[position_] != ',' && text_[position_] != ']' &&
+               text_[position_] != '}' && !std::isspace(static_cast<unsigned char>(text_[position_]))) {
             ++position_;
         }
         return position_ > 0;
@@ -386,27 +417,141 @@ bool ParseSpecialTokens(const std::string& text, std::unordered_map<std::string,
 bool IsNewline(uint32_t codepoint) { return codepoint == '\n' || codepoint == '\r'; }
 
 bool IsWhitespace(uint32_t codepoint) {
+#ifdef FEATHER_WITH_ICU
+    return u_isUWhiteSpace(static_cast<UChar32>(codepoint));
+#else
     return codepoint == ' ' || codepoint == '\t' || codepoint == '\v' || codepoint == '\f' || IsNewline(codepoint) ||
            codepoint == 0x3000;
+#endif
 }
 
 bool IsDigit(uint32_t codepoint) {
+#ifdef FEATHER_WITH_ICU
+    const auto category = u_charType(static_cast<UChar32>(codepoint));
+    return category == U_DECIMAL_DIGIT_NUMBER || category == U_LETTER_NUMBER || category == U_OTHER_NUMBER;
+#else
     return (codepoint >= '0' && codepoint <= '9') || (codepoint >= 0xFF10 && codepoint <= 0xFF19);
+#endif
 }
 
+#ifndef FEATHER_WITH_ICU
 bool IsPunctuation(uint32_t codepoint) {
     return (codepoint >= 0x3001 && codepoint <= 0x303F) || (codepoint >= 0xFF00 && codepoint <= 0xFF0F) ||
            (codepoint >= 0xFF1A && codepoint <= 0xFF20) || (codepoint >= 0xFF3B && codepoint <= 0xFF40) ||
            (codepoint >= 0xFF5B && codepoint <= 0xFF65) || codepoint >= 0x1F000;
 }
+#endif
 
 bool IsLetter(uint32_t codepoint) {
+#ifdef FEATHER_WITH_ICU
+    const auto category = u_charType(static_cast<UChar32>(codepoint));
+    return category >= U_UPPERCASE_LETTER && category <= U_OTHER_LETTER;
+#else
     if ((codepoint >= 'a' && codepoint <= 'z') || (codepoint >= 'A' && codepoint <= 'Z') ||
         (codepoint >= 0xFF21 && codepoint <= 0xFF3A) || (codepoint >= 0xFF41 && codepoint <= 0xFF5A)) {
         return true;
     }
     return codepoint >= 0x80 && !IsWhitespace(codepoint) && !IsDigit(codepoint) && !IsPunctuation(codepoint);
+#endif
 }
+
+bool ParseNormalizer(const std::string& text, bool* nfc) {
+    *nfc = false;
+    JsonCursor cursor(text);
+    if (!cursor.Consume('{')) return false;
+    while (!cursor.Consume('}')) {
+        std::string key;
+        if (!cursor.ParseString(&key) || !cursor.Consume(':')) return false;
+        if (key != "normalizer") {
+            if (!cursor.SkipValue()) return false;
+        } else if (!cursor.ConsumeNull()) {
+            std::string type, field;
+            if (!cursor.Consume('{') || !cursor.ParseString(&field) || field != "type" || !cursor.Consume(':') ||
+                !cursor.ParseString(&type) || type != "NFC" || !cursor.Consume('}'))
+                return false;
+            *nfc = true;
+        }
+        if (cursor.Consume('}')) return true;
+        if (!cursor.Consume(',')) return false;
+    }
+    return true;
+}
+
+bool FindRegex(JsonCursor* cursor, std::string* pattern) {
+    if (cursor->Consume('{')) {
+        while (!cursor->Consume('}')) {
+            std::string key;
+            if (!cursor->ParseString(&key) || !cursor->Consume(':')) return false;
+            if (key == "Regex") {
+                if (!pattern->empty() || !cursor->ParseString(pattern)) return false;
+            } else if (!FindRegex(cursor, pattern)) {
+                return false;
+            }
+            if (cursor->Consume('}')) return true;
+            if (!cursor->Consume(',')) return false;
+        }
+        return true;
+    }
+    if (cursor->Consume('[')) {
+        while (!cursor->Consume(']')) {
+            if (!FindRegex(cursor, pattern)) return false;
+            if (cursor->Consume(']')) return true;
+            if (!cursor->Consume(',')) return false;
+        }
+        return true;
+    }
+    return cursor->SkipValue();
+}
+
+bool ParseSplitPattern(const std::string& text, std::string* pattern) {
+    pattern->clear();
+    JsonCursor cursor(text);
+    if (!cursor.Consume('{')) return false;
+    while (!cursor.Consume('}')) {
+        std::string key;
+        if (!cursor.ParseString(&key) || !cursor.Consume(':')) return false;
+        if (key == "pre_tokenizer") {
+            if (!FindRegex(&cursor, pattern)) return false;
+        } else if (!cursor.SkipValue()) {
+            return false;
+        }
+        if (cursor.Consume('}')) return true;
+        if (!cursor.Consume(',')) return false;
+    }
+    return true;
+}
+
+#ifdef FEATHER_WITH_ICU
+bool NormalizeNfc(const std::string& text, std::string* normalized) {
+    if (text.size() > static_cast<size_t>(std::numeric_limits<int32_t>::max())) return false;
+    UErrorCode error = U_ZERO_ERROR;
+    int32_t size = 0;
+    u_strFromUTF8(nullptr, 0, &size, text.data(), static_cast<int32_t>(text.size()), &error);
+    if (error != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(error)) return false;
+    error = U_ZERO_ERROR;
+    std::vector<UChar> utf16(static_cast<size_t>(size) + 1);
+    u_strFromUTF8(utf16.data(), static_cast<int32_t>(utf16.size()), &size, text.data(),
+                  static_cast<int32_t>(text.size()), &error);
+    if (U_FAILURE(error)) return false;
+    const auto* nfc = unorm2_getNFCInstance(&error);
+    if (U_FAILURE(error)) return false;
+    error = U_ZERO_ERROR;
+    int32_t count = unorm2_normalize(nfc, utf16.data(), size, nullptr, 0, &error);
+    if (error != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(error)) return false;
+    error = U_ZERO_ERROR;
+    std::vector<UChar> result(static_cast<size_t>(count) + 1);
+    count = unorm2_normalize(nfc, utf16.data(), size, result.data(), static_cast<int32_t>(result.size()), &error);
+    if (U_FAILURE(error)) return false;
+    int32_t bytes = 0;
+    error = U_ZERO_ERROR;
+    u_strToUTF8(nullptr, 0, &bytes, result.data(), count, &error);
+    if (error != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(error)) return false;
+    error = U_ZERO_ERROR;
+    normalized->resize(bytes);
+    u_strToUTF8(normalized->data(), bytes, &bytes, result.data(), count, &error);
+    return U_SUCCESS(error);
+}
+#endif
 
 struct Utf8Unit {
     size_t begin{};
@@ -434,6 +579,8 @@ std::string PairKey(const std::string& lhs, const std::string& rhs) { return lhs
 
 int32_t QwenTokenizer::Load(const std::string& tokenizer_dir) {
     last_error_.clear();
+    normalize_nfc_ = false;
+    split_pattern_.clear();
     token_to_id_.clear();
     id_to_token_.clear();
     merge_ranks_.clear();
@@ -450,6 +597,30 @@ int32_t QwenTokenizer::Load(const std::string& tokenizer_dir) {
         last_error_ = "missing Qwen tokenizer files under " + tokenizer_dir;
         return -1;
     }
+    if (!ParseNormalizer(tokenizer_text, &normalize_nfc_)) {
+        last_error_ = "unsupported or malformed Qwen tokenizer normalizer (expected NFC or null)";
+        return -1;
+    }
+    if (!ParseSplitPattern(tokenizer_text, &split_pattern_)) {
+        last_error_ = "malformed Qwen tokenizer pre-tokenizer regex";
+        return -1;
+    }
+#ifndef FEATHER_WITH_ICU
+    if (normalize_nfc_ || !split_pattern_.empty()) {
+        last_error_ = "Qwen tokenizer requires ICU support for Unicode normalization and splitting";
+        return -1;
+    }
+#else
+    if (!split_pattern_.empty()) {
+        UErrorCode error = U_ZERO_ERROR;
+        std::unique_ptr<icu::RegexPattern> pattern(
+            icu::RegexPattern::compile(icu::UnicodeString::fromUTF8(split_pattern_), 0, error));
+        if (U_FAILURE(error) || !pattern) {
+            last_error_ = "unsupported Qwen tokenizer pre-tokenizer regex";
+            return -1;
+        }
+    }
+#endif
     if (!ParseVocab(vocab_text, &token_to_id_, &id_to_token_) ||
         !ParseSpecialTokens(tokenizer_text, &special_token_to_id_, &special_id_to_token_)) {
         last_error_ = "failed to parse Qwen tokenizer JSON";
@@ -520,32 +691,70 @@ std::string QwenTokenizer::DecodeBytes(const std::string& text) const {
 }
 
 std::vector<std::string> QwenTokenizer::Pretokenize(const std::string& text) const {
+#ifdef FEATHER_WITH_ICU
+    if (!split_pattern_.empty()) {
+        UErrorCode error = U_ZERO_ERROR;
+        const auto input = icu::UnicodeString::fromUTF8(text);
+        icu::RegexMatcher matcher(icu::UnicodeString::fromUTF8(split_pattern_), input, 0, error);
+        std::vector<std::string> pieces;
+        while (U_SUCCESS(error) && matcher.find(error)) {
+            std::string piece;
+            input.tempSubStringBetween(matcher.start(error), matcher.end(error)).toUTF8String(piece);
+            if (U_FAILURE(error)) return {};
+            pieces.push_back(std::move(piece));
+        }
+        return U_SUCCESS(error) ? pieces : std::vector<std::string>{};
+    }
+#endif
     const auto units = SplitUtf8(text);
     std::vector<std::string> pieces;
+    // Qwen3's ordered alternatives: contractions, optionally prefixed letters,
+    // one number, punctuation with trailing newlines, then whitespace.
     for (size_t index = 0; index < units.size();) {
         const size_t begin = index;
-        if (IsWhitespace(units[index].codepoint)) {
-            if (units[index].codepoint == ' ' && index + 1 < units.size() &&
-                (IsLetter(units[index + 1].codepoint) || (!IsWhitespace(units[index + 1].codepoint) &&
-                                                         !IsDigit(units[index + 1].codepoint)))) {
-                ++index;
-                if (IsLetter(units[index].codepoint)) {
-                    while (index < units.size() && IsLetter(units[index].codepoint)) ++index;
-                } else {
-                    while (index < units.size() && !IsWhitespace(units[index].codepoint) &&
-                           !IsLetter(units[index].codepoint) && !IsDigit(units[index].codepoint)) ++index;
+        size_t contraction = 0;
+        if (units[index].codepoint == '\'') {
+            for (const std::string_view suffix : {"s", "t", "re", "ve", "m", "ll", "d"}) {
+                if (index + suffix.size() >= units.size()) continue;
+                bool matches = true;
+                for (size_t i = 0; i < suffix.size(); ++i) {
+                    auto c = units[index + 1 + i].codepoint;
+                    if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+                    matches &= c == static_cast<unsigned char>(suffix[i]);
                 }
-            } else {
-                while (index < units.size() && IsWhitespace(units[index].codepoint)) ++index;
+                if (matches) {
+                    contraction = suffix.size() + 1;
+                    break;
+                }
             }
-        } else if (IsLetter(units[index].codepoint)) {
+        }
+        const auto c = units[index].codepoint;
+        const bool prefix = !IsNewline(c) && !IsLetter(c) && !IsDigit(c) && index + 1 < units.size() &&
+                            IsLetter(units[index + 1].codepoint);
+        if (contraction) {
+            index += contraction;
+        } else if (IsLetter(c) || prefix) {
+            if (prefix) ++index;
             while (index < units.size() && IsLetter(units[index].codepoint)) ++index;
-        } else if (IsDigit(units[index].codepoint)) {
+        } else if (IsDigit(c)) {
             ++index;
-        } else {
-            while (index < units.size() && !IsWhitespace(units[index].codepoint) &&
-                   !IsLetter(units[index].codepoint) && !IsDigit(units[index].codepoint)) ++index;
+        } else if (!IsWhitespace(c) ||
+                   (c == ' ' && index + 1 < units.size() && !IsWhitespace(units[index + 1].codepoint) &&
+                    !IsLetter(units[index + 1].codepoint) && !IsDigit(units[index + 1].codepoint))) {
+            if (c == ' ') ++index;
+            while (index < units.size() && !IsWhitespace(units[index].codepoint) && !IsLetter(units[index].codepoint) &&
+                   !IsDigit(units[index].codepoint))
+                ++index;
             while (index < units.size() && IsNewline(units[index].codepoint)) ++index;
+        } else {
+            size_t end = index, after_newline = index;
+            while (end < units.size() && IsWhitespace(units[end].codepoint)) {
+                if (IsNewline(units[end].codepoint)) after_newline = end + 1;
+                ++end;
+            }
+            // \s*[\r\n]+ stops at the last newline. Otherwise \s+(?!\S)
+            // leaves one whitespace before text for the prefixed-letter branch.
+            index = after_newline > begin ? after_newline : end == units.size() || end == begin + 1 ? end : end - 1;
         }
         pieces.push_back(text.substr(units[begin].begin, units[index - 1].end - units[begin].begin));
     }
@@ -589,7 +798,14 @@ std::vector<int64_t> QwenTokenizer::Encode(const std::string& text) const {
                 matched_special = special;
             }
         }
-        const std::string regular = text.substr(begin, special_position - begin);
+        std::string regular = text.substr(begin, special_position - begin);
+#ifdef FEATHER_WITH_ICU
+        if (normalize_nfc_) {
+            std::string normalized;
+            if (!NormalizeNfc(regular, &normalized)) return {};
+            regular = std::move(normalized);
+        }
+#endif
         for (const auto& piece : Pretokenize(regular)) {
             for (const auto& symbol : ApplyBpe(piece)) {
                 const auto it = token_to_id_.find(symbol);

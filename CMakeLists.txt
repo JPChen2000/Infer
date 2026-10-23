@@ -59,6 +59,10 @@ List(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(util)
 
 find_package(Threads REQUIRED)
+option(FEATHER_ENABLE_ICU "Enable Unicode normalization and token splitting for Qwen tokenizers" ON)
+if (FEATHER_ENABLE_ICU)
+    find_package(ICU COMPONENTS uc i18n QUIET)
+endif()
 if (FEATHER_ENABLE_OPENMP)
     find_package(OpenMP REQUIRED COMPONENTS CXX)
 endif()
@@ -222,6 +226,7 @@ set(SRC "src/core/memory.cc"
     "src/operator/non_max_suppression_op.cc"
     "src/operator/normalization_ops.cc"
     "src/operator/cached_attention_op.cc"
+    "src/operator/scaled_dot_product_attention_op.cc"
     "src/operator/equal_op.cc"
     "src/operator/sqrt_op.cc"
     "src/operator/sub_op.cc"
@@ -280,6 +285,7 @@ set(SRC "src/core/memory.cc"
     "src/kernel/common/non_max_suppression.cc"
     "src/kernel/common/normalization.cc"
     "src/kernel/common/cached_attention.cc"
+    "src/kernel/common/scaled_dot_product_attention.cc"
     "src/kernel/common/equal.cc"
     "src/kernel/common/shape.cc"
     "src/kernel/common/constant_of_shape.cc"
@@ -352,6 +358,7 @@ set(SRC "src/core/memory.cc"
     "src/demo/qwen_runner.cc"
     "src/demo/qwen_runner_growth.cc"
     "src/demo/qwen_tokenizer.cc"
+    "src/demo/flux2_runner.cc"
     "src/demo/yolo_postprocess.cc"
     "src/demo/yolov5_postprocess.cc"
     "src/demo/yolov5_runner.cc")
@@ -372,6 +379,7 @@ set(CUDA_SRC
     "src/kernel/cuda/non_max_suppression.cu"
     "src/kernel/cuda/normalization.cu"
     "src/kernel/cuda/cached_attention.cu"
+    "src/kernel/cuda/scaled_dot_product_attention.cu"
     "src/demo/yolo_postprocess_cuda.cu"
     "src/kernel/cuda/fc.cu"
     "src/kernel/cuda/int8.cu"
@@ -470,6 +478,13 @@ target_link_libraries(infer_core PUBLIC Threads::Threads)
 target_link_libraries(infer_backend PUBLIC infer_core)
 target_link_libraries(infer_model PUBLIC infer_core)
 target_link_libraries(infer PUBLIC infer_core infer_backend infer_model)
+if (FEATHER_ENABLE_ICU AND ICU_FOUND)
+    target_compile_definitions(infer PUBLIC FEATHER_WITH_ICU)
+    target_link_libraries(infer PUBLIC ICU::uc ICU::i18n)
+    message(STATUS "Qwen tokenizer Unicode normalization: ICU")
+else()
+    message(STATUS "Qwen tokenizer Unicode normalization: disabled (NFC tokenizers require ICU)")
+endif()
 
 if (FEATHER_ENABLE_OPENMP)
     target_compile_definitions(infer_core PUBLIC FEATHER_WITH_OPENMP)
@@ -512,6 +527,10 @@ add_executable(qwen_eval tools/qwen_eval.cc)
 target_include_directories(qwen_eval PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(qwen_eval PRIVATE infer)
 add_executable(fth_layout_convert demo/fth_layout_convert_demo.cc)
+add_executable(flux2_component_probe tools/flux2_component_probe.cc)
+target_link_libraries(flux2_component_probe PRIVATE infer)
+add_executable(flux2_demo demo/flux2_infer_demo.cc)
+target_link_libraries(flux2_demo PRIVATE infer)
 if (FEATHER_ENABLE_X86)
     add_executable(x86_conv_benchmark_demo demo/x86_conv_benchmark_demo.cc)
 endif()
