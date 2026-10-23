@@ -23,6 +23,7 @@ struct StateBinding {
     std::string input_name;
     std::string output_name;
     int cache_axis{-1};
+    bool stable_storage{false};
 };
 
 Status ApplyStateBinding(RuntimeGraph& graph, const StateBinding& binding, DeviceType device);
@@ -32,6 +33,7 @@ class StatefulSession {
  public:
     explicit StatefulSession(RuntimeGraph& graph, DeviceType device = DeviceType::COMMON) : graph_(graph), device_(device) {}
     Status Bind(StateBinding binding);
+    // Validate the complete batch and retain aliased outputs before committing.
     Status Advance();
     Status Reset();
  private:

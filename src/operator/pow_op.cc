@@ -100,6 +100,7 @@ int32_t PowOp::CheckShape() const {
         return -1;
     }
     if (param_.exponent_tensor != nullptr) {
+        // The exponent affects numerical results, not the compiled descriptor.
         float exponent = 0.0f;
         if (!ReadScalarFloatTensor(param_.exponent_tensor, &exponent)) {
             return -1;

@@ -84,6 +84,16 @@ bool MatchQwenMatMulAddPattern(const StaticGraph& graph, const StaticNode& add_n
         if (a == nullptr || b == nullptr || bias == nullptr || a->dims().size() < 2 || b->dims().size() != 2) {
             continue;
         }
+        const auto matmul_result = graph.GetTensor(matmul_output);
+        const auto add_result = graph.GetTensor(add_node.outputs[0]);
+        // CUDA Gemm requires all operands and its output to share a type.
+        // A mixed projection can exist in a legacy graph; preserve its
+        // individual operations instead of introducing an invalid fused Gemm.
+        const auto dtype = a->data_type();
+        if (matmul_result == nullptr || add_result == nullptr || b->data_type() != dtype ||
+            bias->data_type() != dtype || matmul_result->data_type() != dtype || add_result->data_type() != dtype) {
+            continue;
+        }
         const int64_t k = a->dims()[a->dims().size() - 1];
         if (k <= 0 || k != b->dims()[0] || !IsVectorBias(bias.get(), b->dims()[1])) {
             continue;

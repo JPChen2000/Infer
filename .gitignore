@@ -1,7 +1,32 @@
-.conan_local/
-.codex/
-.codegraph/
-build*
+# Local tools and credentials
+/.conan_local/
+/.codex/
+/.codegraph/
+/.agents/
+/.aws/
+/.superpowers/
+
+# CMake build output (anchor build directories to avoid ignoring source tests)
+/build*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+compile_commands.json
+/Makefile
+/.ninja_deps
+/.ninja_log
+/build.ninja
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local models, generated images and existing local documentation policy
 models/
 .clang-format
 *.jpg
+docs/superpowers/*

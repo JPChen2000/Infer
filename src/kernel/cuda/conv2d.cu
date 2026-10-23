@@ -273,7 +273,11 @@ bool RunConv2DWithCudnn(const void* kernel_identity, feather::operators::Conv2dP
     if (!CudnnCheck(cudnnSetConvolutionNdDescriptor(conv_desc.desc, 2, pads, strides, dilations,
                                                     CUDNN_CROSS_CORRELATION, CudnnComputeDataType(dtype))) ||
         !CudnnCheck(cudnnSetConvolutionGroupCount(conv_desc.desc, std::max(1, param->group))) ||
-        !CudnnCheck(cudnnSetConvolutionMathType(conv_desc.desc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION))) {
+        // FP32 models must retain FP32 multiplication precision. Allowing
+        // conversion enables TF32, whose error can change detection rankings.
+        !CudnnCheck(cudnnSetConvolutionMathType(conv_desc.desc, dtype == DataType::FP32
+                                                                 ? CUDNN_FMA_MATH
+                                                                 : CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION))) {
         return false;
     }
 

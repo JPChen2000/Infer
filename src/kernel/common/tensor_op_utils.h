@@ -169,7 +169,7 @@ inline int32_t CopyTensor(const feather::operators::AxesParam* param) {
     if (element_bytes == 0 || param->out->memory_size() < bytes) {
         return -1;
     }
-    std::memcpy(param->out->raw_data(), param->input->raw_data(), bytes);
+    std::memcpy(param->out->mutable_data(param->out->memory_size()), param->input->raw_data(), bytes);
     param->out->set_data_type(param->input->data_type());
     return 0;
 }

@@ -455,12 +455,22 @@ struct SliceParam : ParamBase {
 };
 
 struct ResizeParam : ParamBase {
+    enum class Mode { kNearest, kLinear };
+    enum class CoordinateMode { kAsymmetric, kHalfPixel, kPytorchHalfPixel, kAlignCorners };
+    enum class NearestMode { kFloor, kCeil, kRoundPreferFloor, kRoundPreferCeil };
     std::shared_ptr<Tensor> input;
     std::shared_ptr<Tensor> roi;
     std::shared_ptr<Tensor> scales_tensor;
     std::shared_ptr<Tensor> sizes;
     std::shared_ptr<Tensor> out;
     std::vector<float> scales;
+    // Direct Feather graphs keep the historical YOLO defaults. ONNX import
+    // writes its own defaults explicitly.
+    Mode mode{Mode::kNearest};
+    CoordinateMode coordinate_mode{CoordinateMode::kAsymmetric};
+    NearestMode nearest_mode{NearestMode::kFloor};
+    std::vector<double> effective_scales;
+    bool onnx_nchw_controls{false};
     template <typename Visitor> void VisitTensors(Visitor&& visit) {
         visit(input);
         visit(roi);

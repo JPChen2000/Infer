@@ -72,6 +72,7 @@ int32_t ComputeWhere(feather::operators::WhereParam* param) {
         return -1;
     }
     param->out->set_data_type(dtype);
+    void* output = param->out->mutable_data(param->out->memory_size());
     for (int64_t linear = 0; linear < param->out->numel(); ++linear) {
         common_tensor_detail::LinearToCoords(linear, output_dims, output_strides, &coordinates);
         const int64_t condition_offset =
@@ -81,7 +82,7 @@ int32_t ComputeWhere(feather::operators::WhereParam* param) {
         const Tensor* source = common_tensor_detail::ReadBool(param->condition.get(), condition_offset) ? param->x.get()
                                                                                                          : param->y.get();
         const int64_t source_offset = source == param->x.get() ? x_offset : y_offset;
-        std::memcpy(static_cast<char*>(param->out->raw_data()) + linear * element_bytes,
+        std::memcpy(static_cast<char*>(output) + linear * element_bytes,
                     static_cast<const char*>(source->raw_data()) + source_offset * element_bytes, element_bytes);
     }
     return 0;

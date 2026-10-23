@@ -16,6 +16,7 @@
 #include "pass/resize_concat_fusion_pass.h"
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -91,10 +92,22 @@ bool MatchResizeConcatPattern(const StaticGraph& graph, const StaticNode& concat
         if (resize_model_node == nullptr) {
             continue;
         }
+        const auto compatible_text = [&](const char* key, const char* expected) {
+            const auto it = resize_model_node->attributes.find(key);
+            if (it == resize_model_node->attributes.end()) return true;
+            const auto* text = std::get_if<std::string>(&it->second);
+            return text && *text == expected;
+        };
+        if (!compatible_text("mode", "nearest") ||
+            !compatible_text("coordinate_transformation_mode", "asymmetric") ||
+            !compatible_text("nearest_mode", "floor")) continue;
         const auto* scales = FindFloatVectorAttribute(*resize_model_node, "scales");
         if (scales == nullptr || scales->size() != 4) {
             continue;
         }
+        if (std::any_of(scales->begin(), scales->end(), [](float scale) {
+                return !std::isfinite(scale) || scale < 1 || std::floor(scale) != scale;
+            })) continue;
 
         const auto resize_input = graph.GetTensor(resize_node->inputs[0]);
         const auto passthrough_input = graph.GetTensor(passthrough_input_name);

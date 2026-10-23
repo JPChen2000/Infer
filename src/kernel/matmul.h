@@ -28,15 +28,25 @@ void EnsureCommonMatMulKernelsRegistered();
 void EnsureX86MatMulKernelsRegistered();
 void EnsureMatMulKernelsRegistered();
 
+inline Status MatMulOutputSupport(const operators::MatMulParam* param, DataType dtype) {
+    if (!param || !param->out)
+        return Status::Error(StatusCode::kInvalidArgument, "MatMul requires a bound output");
+    if (param->out->data_type() != dtype)
+        return Status::Error(StatusCode::kUnsupported, "MatMul output dtype is incompatible with this candidate");
+    return Status::Ok();
+}
+
 template <DeviceType dev, DataType dtype>
 class MatMulKernel : public KernelBase {
    public:
+    Status Supports() const override { return MatMulOutputSupport(ParamAs<operators::MatMulParam>(), dtype); }
     int32_t compute() override;
 };
 
 template <>
 class MatMulKernel<DeviceType::X86, DataType::BF16> : public KernelBase {
    public:
+    Status Supports() const override { return MatMulOutputSupport(ParamAs<operators::MatMulParam>(), DataType::BF16); }
     int32_t Prepare() override;
     int32_t compute() override;
 
@@ -48,6 +58,7 @@ class MatMulKernel<DeviceType::X86, DataType::BF16> : public KernelBase {
 template <>
 class MatMulKernel<DeviceType::X86, DataType::FP8E4M3> : public KernelBase {
    public:
+    Status Supports() const override { return MatMulOutputSupport(ParamAs<operators::MatMulParam>(), DataType::FP8E4M3); }
     int32_t Prepare() override;
     int32_t compute() override;
 
@@ -59,6 +70,7 @@ class MatMulKernel<DeviceType::X86, DataType::FP8E4M3> : public KernelBase {
 template <>
 class MatMulKernel<DeviceType::X86, DataType::FP8E5M2> : public KernelBase {
    public:
+    Status Supports() const override { return MatMulOutputSupport(ParamAs<operators::MatMulParam>(), DataType::FP8E5M2); }
     int32_t Prepare() override;
     int32_t compute() override;
 

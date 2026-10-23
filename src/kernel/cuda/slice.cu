@@ -34,6 +34,8 @@ bool g_cuda_slice_kernels_registered = []() {
                               []() { return std::make_unique<SliceKernel<DeviceType::CUDA, DataType::FP32>>(); });
     dispatcher.registerKernel(DeviceType::CUDA, DataType::FP16, "Slice",
                               []() { return std::make_unique<SliceKernel<DeviceType::CUDA, DataType::FP16>>(); });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::BF16, "Slice",
+                              []() { return std::make_unique<SliceKernel<DeviceType::CUDA, DataType::BF16>>(); });
     return true;
 }();
 
@@ -103,6 +105,11 @@ int32_t SliceKernel<DeviceType::CUDA, DataType::FP32>::compute() {
 template <>
 int32_t SliceKernel<DeviceType::CUDA, DataType::FP16>::compute() {
     return RunSlice<DataType::FP16>(ParamAs<feather::operators::SliceParam>(), "CUDA::Slice::FP16");
+}
+
+template <>
+int32_t SliceKernel<DeviceType::CUDA, DataType::BF16>::compute() {
+    return RunSlice<DataType::BF16>(ParamAs<feather::operators::SliceParam>(), "CUDA::Slice::BF16");
 }
 
 void EnsureCudaSliceKernelsRegistered() { (void)g_cuda_slice_kernels_registered; }

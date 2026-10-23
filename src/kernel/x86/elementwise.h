@@ -324,7 +324,7 @@ bool TryComputeLastDimensionBroadcast(operators::BinaryParam* param) {
     param->out->set_data_type(DataType::BF16);
     const auto* lhs = static_cast<const uint16_t*>(param->lhs->raw_data());
     const auto* rhs = static_cast<const uint16_t*>(param->rhs->raw_data());
-    auto* out = static_cast<uint16_t*>(param->out->raw_data());
+    auto* out = static_cast<uint16_t*>(param->out->mutable_data(param->out->memory_size()));
     for (int64_t row = 0; row < rows; ++row) {
         int64_t remaining = row;
         int64_t lhs_offset = 0;

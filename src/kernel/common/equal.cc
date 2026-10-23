@@ -61,7 +61,7 @@ int32_t ComputeEqual(feather::operators::EqualParam* param) {
     const auto lhs_strides = common_tensor_detail::ComputeStrides(lhs_dims);
     const auto rhs_strides = common_tensor_detail::ComputeStrides(rhs_dims);
     std::vector<int64_t> coordinates;
-    auto* output = static_cast<uint8_t*>(param->out->raw_data());
+    auto* output = static_cast<uint8_t*>(param->out->mutable_data(param->out->memory_size()));
     param->out->set_data_type(DataType::BOOL);
     for (int64_t linear = 0; linear < param->out->numel(); ++linear) {
         common_tensor_detail::LinearToCoords(linear, out_dims, out_strides, &coordinates);

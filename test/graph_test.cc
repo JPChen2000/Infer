@@ -340,7 +340,7 @@ TEST(runtime_graph_test, CudaGraphSynchronizesAroundCommonFallbackNode) {
         feather::kernel::cuda_detail::DeferredHostSyncScope deferred_sync;
         ASSERT_EQ(graph.Run(), 0);
         ASSERT_EQ(feather::kernel::cuda_detail::SyncTensorToHost(final.get(), final->numel() * sizeof(float),
-                                                                 final->mutable_data<float>()),
+                                                                 final->raw_data()),
                   0);
     }
 
@@ -493,6 +493,46 @@ TEST(runtime_graph_test, CudaStateAppendRejectsReleasedOutputDeviceStorage) {
         EXPECT_NE(feather::kernel::cuda_detail::AppendTensorStateOnDevice(state.get(), token.get(), 1), 0);
     }
     feather::kernel::cuda_detail::ClearTensorCache();
+#endif
+}
+
+TEST(runtime_graph_test, CudaStateAppendPreservesDeviceHistoryOutsideDeferredSync) {
+#ifndef FEATHER_WITH_CUDA
+    GTEST_SKIP() << "CUDA kernels are not built";
+#else
+    if (!HasCudaDevice()) {
+        GTEST_SKIP() << "CUDA device is not available";
+    }
+
+    namespace cd = feather::kernel::cuda_detail;
+    const auto context = cd::CreateExecutionContext();
+    cd::ExecutionContextScope context_scope(context);
+    ASSERT_FALSE(cd::DeferredHostSyncEnabled());
+    auto state = std::make_shared<Tensor>();
+    state->Assign<float>({1, 11, 2, 12, 3, 13, 21, 31, 22, 32, 23, 33}, {1, 2, 3, 2});
+    auto token = std::make_shared<Tensor>();
+    token->Assign<float>({4, 14, 24, 34}, {1, 2, 1, 2});
+    void* token_device = nullptr;
+    ASSERT_EQ(cd::AcquireTensorDevice(token.get(), 4 * sizeof(float), token->raw_data(), &token_device), 0);
+
+    // The first append uploads the host initialized state. Subsequent appends
+    // must retain device history even while its host copy remains unchanged.
+    ASSERT_EQ(cd::AppendTensorStateOnDevice(state.get(), token.get(), 2), 0);
+    token->Assign<float>({5, 15, 25, 35}, {1, 2, 1, 2});
+    ASSERT_EQ(cd::AcquireTensorDevice(token.get(), 4 * sizeof(float), token->raw_data(), &token_device), 0);
+    ASSERT_EQ(cd::AppendTensorStateOnDevice(state.get(), token.get(), 2), 0);
+    ASSERT_EQ(cd::SyncTensorToHost(state.get(), 12 * sizeof(float), state->raw_data()), 0);
+    const std::vector<float> expected{3, 13, 4, 14, 5, 15, 23, 33, 24, 34, 25, 35};
+    for (size_t i = 0; i < expected.size(); ++i) EXPECT_FLOAT_EQ(state->data<float>()[i], expected[i]);
+
+    // A host reset must still supersede the previous device state.
+    auto* host_state = state->mutable_data<float>();
+    for (size_t i = 0; i < expected.size(); ++i) host_state[i] = 0;
+    ASSERT_EQ(cd::AppendTensorStateOnDevice(state.get(), token.get(), 2), 0);
+    ASSERT_EQ(cd::SyncTensorToHost(state.get(), 12 * sizeof(float), state->raw_data()), 0);
+    const std::vector<float> reset_expected{0, 0, 0, 0, 5, 15, 0, 0, 0, 0, 25, 35};
+    for (size_t i = 0; i < reset_expected.size(); ++i)
+        EXPECT_FLOAT_EQ(state->data<float>()[i], reset_expected[i]);
 #endif
 }
 
@@ -699,7 +739,7 @@ TEST(runtime_graph_test, CudaGraphReleasesDeadTensorCachesIntoPool) {
         feather::kernel::cuda_detail::DeferredHostSyncScope deferred_sync;
         ASSERT_EQ(graph.Run(), 0);
         ASSERT_EQ(feather::kernel::cuda_detail::SyncTensorToHost(output.get(), output->numel() * sizeof(float),
-                                                                 output->mutable_data<float>()),
+                                                                 output->raw_data()),
                   0);
     }
 

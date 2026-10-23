@@ -1518,6 +1518,63 @@ TEST(static_graph_pass_test, QwenMatMulAddFusionPassRewritesSingletonResidual) {
     EXPECT_EQ(fused->inputs, (std::vector<std::string>{"a", "b", "residual"}));
 }
 
+TEST(static_graph_pass_test, QwenMatMulAddFusionPassPreservesMixedPrecisionOperations) {
+    // Legacy BF16 Qwen recurrent projections can carry FP32 activations.
+    // CUDA Gemm requires homogeneous types, so the fusion must skip them.
+    // Check every participating tensor so changing an output or residual type
+    // cannot silently produce an unsupported fused operation either.
+    for (const std::string mixed_value : {"a", "b", "residual", "matmul_out", "output"}) {
+        SCOPED_TRACE(mixed_value);
+        auto model = BuildQwenMatMulAddModelDesc();
+        for (auto& value : model.graph.values) {
+            value.tensor.data_type = value.tensor.name == mixed_value ? DataType::FP32 : DataType::BF16;
+        }
+        StaticGraph graph;
+        ASSERT_EQ(graph.SetModel(model), 0);
+        const auto bind = [&](const std::string& name, const std::vector<float>& values,
+                              const std::vector<int64_t>& dims) {
+            auto tensor = std::make_shared<Tensor>();
+            if (name == mixed_value) {
+                tensor->Assign<float>(values, dims);
+            } else {
+                std::vector<feather::BFloat16> encoded;
+                for (const float value : values) {
+                    encoded.push_back(feather::BFloat16{feather::FloatToBFloat16(value)});
+                }
+                tensor->Assign<feather::BFloat16>(encoded, dims);
+            }
+            ASSERT_EQ(graph.SetTensor(name, tensor), 0);
+        };
+        bind("a", {1, 2, 3}, {1, 1, 3});
+        bind("b", {1, 0, 2, 1, 0, 1, 3, 2, 1, 0, 1, 4}, {3, 4});
+        bind("residual", {0.5f, -1, 1.5f, 0}, {1, 1, 4});
+        const auto build = graph.BuildStatus();
+        if (mixed_value == "a" || mixed_value == "matmul_out" || mixed_value == "output") {
+            // Built-in MatMul and Add produce their candidate dtype. Conflicting
+            // declared outputs cannot be made executable by a skipped fusion.
+            EXPECT_FALSE(build.ok());
+            EXPECT_NE(build.message().find("output dtype"), std::string::npos);
+            continue;
+        }
+        ASSERT_TRUE(build.ok()) << build.message();
+        for (const auto& value : model.graph.values) {
+            ASSERT_NE(graph.GetTensor(value.tensor.name), nullptr);
+            ASSERT_EQ(graph.GetTensor(value.tensor.name)->data_type(), value.tensor.data_type);
+        }
+        auto pass_manager = std::make_shared<PassManager>();
+        pass_manager->AddPass(std::make_unique<QwenMatMulAddFusionPass>());
+        graph.SetPassManager(pass_manager);
+        ASSERT_EQ(graph.ApplyPasses(), 0);
+        EXPECT_EQ(graph.NodeSize(), 2U);
+        const auto* matmul = graph.GetNode("qwen_matmul0");
+        ASSERT_NE(matmul, nullptr);
+        EXPECT_EQ(matmul->op_type, "MatMul");
+        const auto* add = graph.GetNode("qwen_add0");
+        ASSERT_NE(add, nullptr);
+        EXPECT_EQ(add->op_type, "Add");
+    }
+}
+
 TEST(static_graph_pass_test, QwenMatMulAddFusionPassSkipsNonQwenModel) {
     StaticGraph graph;
     ASSERT_EQ(graph.SetModel(BuildMatMulAddModelDesc(false)), 0);

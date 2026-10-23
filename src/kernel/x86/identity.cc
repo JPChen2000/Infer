@@ -40,7 +40,7 @@ int32_t ComputeIdentityFallback(feather::operators::UnaryParam* param) {
         param->input->raw_data() == param->out->raw_data()) {
         return 0;
     }
-    std::memcpy(param->out->raw_data(), param->input->raw_data(), bytes);
+    std::memcpy(param->out->mutable_data(param->out->memory_size()), param->input->raw_data(), bytes);
     return 0;
 }
 

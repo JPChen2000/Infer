@@ -17,12 +17,14 @@
 #define FEATHER_KERNEL_X86_LINEAR_FP8_H
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "src/kernel/x86/linear_fp32.h"
 #include "util/types.h"
 
 namespace feather {
+class Tensor;
 namespace kernel {
 namespace x86 {
 
@@ -45,7 +47,8 @@ class PackedFp8Rhs {
     bool Pack(DataType dtype, const uint8_t* rhs, int64_t k, int64_t n, uint64_t source_version = 0);
     bool Matches(DataType dtype, const uint8_t* rhs, int64_t k, int64_t n,
                  uint64_t source_version = 0) const;
-    const uint16_t* data() const { return data_.data(); }
+    bool Pack(const Tensor& source, int64_t k, int64_t n);
+    const uint16_t* data() const { return data_ ? data_->data() : nullptr; }
 
    private:
     DataType dtype_{DataType::UNKNOWN};
@@ -53,7 +56,7 @@ class PackedFp8Rhs {
     int64_t k_{0};
     int64_t n_{0};
     uint64_t source_version_{0};
-    std::vector<uint16_t> data_;
+    std::shared_ptr<const std::vector<uint16_t>> data_;
 };
 
 // Stores an immutable [N, K] FP8 RHS in [output_block][K][64] order.  The
@@ -65,7 +68,8 @@ class PackedFp8TransposedRhs {
               uint64_t source_version = 0);
     bool Matches(DataType dtype, const uint8_t* rhs_transposed, int64_t k, int64_t n,
                  uint64_t source_version = 0) const;
-    const uint16_t* data() const { return data_.data(); }
+    bool Pack(const Tensor& source, int64_t k, int64_t n);
+    const uint16_t* data() const { return data_ ? data_->data() : nullptr; }
 
    private:
     DataType dtype_{DataType::UNKNOWN};
@@ -73,7 +77,7 @@ class PackedFp8TransposedRhs {
     int64_t k_{0};
     int64_t n_{0};
     uint64_t source_version_{0};
-    std::vector<uint16_t> data_;
+    std::shared_ptr<const std::vector<uint16_t>> data_;
 };
 
 // Computes C = A * B for row-major FP8 tensors. The input and output scales

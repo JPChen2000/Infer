@@ -24,6 +24,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "core/operator_semantics.h"
 #include "core/operator.h"
 #include "core/status.h"
 #include "model/model_format.h"
@@ -37,6 +38,7 @@ struct StaticNode {
     std::vector<std::string> inputs;
     std::vector<std::string> outputs;
     std::shared_ptr<OpBase> op;
+    OperatorSemantics semantics;
     bool removed{false};
 };
 
@@ -58,6 +60,7 @@ class StaticGraph {
     int32_t Check() const;
     Status CheckStatus() const;
     Status ValidateStructureStatus() const;
+    Status ValidateBuildDescriptorsStatus() const;
     int32_t ApplyPasses();
     Status ApplyPassesStatus();
     void SetPassManager(std::shared_ptr<PassManager> pass_manager);
@@ -86,6 +89,7 @@ class StaticGraph {
     const std::unordered_map<std::string, std::shared_ptr<Tensor>>& tensors() const { return tensors_; }
     const std::unordered_set<std::string>& bound_tensor_names() const { return bound_tensor_names_; }
     const std::unordered_set<std::string>& build_time_values() const { return build_time_values_; }
+    const std::unordered_map<std::string, std::vector<uint8_t>>& control_values() const { return control_values_; }
     const std::vector<StaticNode>& nodes() const { return nodes_; }
 
    private:
@@ -93,6 +97,9 @@ class StaticGraph {
     void RegisterValueUse(const std::string& value_name, const std::string& node_name);
     void UnregisterValueUse(const std::string& value_name, const std::string& node_name);
     bool RebuildNode(size_t node_index);
+    Status RecordControlValues();
+    void RecordBuildDescriptors();
+    void RecordBuildDescriptor(const std::string& name);
 
     model::ModelDesc model_;
     std::unordered_map<std::string, std::shared_ptr<Tensor>> tensors_;
@@ -107,6 +114,12 @@ class StaticGraph {
     KernelFallbackPolicy fallback_policy_{KernelFallbackPolicy::kAllowCommon};
     size_t workspace_limit_{static_cast<size_t>(-1)};
     std::unordered_set<std::string> build_time_values_;
+    std::unordered_map<std::string, std::vector<uint8_t>> control_values_;
+    struct BuildDescriptor {
+        model::TensorDesc descriptor;
+        std::shared_ptr<const Tensor> tensor;
+    };
+    std::unordered_map<std::string, BuildDescriptor> build_descriptors_;
     bool built_{false};
 };
 

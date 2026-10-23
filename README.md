@@ -135,9 +135,34 @@ build-cuda/bin/cuda_diagnostics
 | 模型方向 | 示例 / 工具 | 使用范围 |
 | --- | --- | --- |
 | CNN 分类 | `resnet_demo`、`repvgg_demo`、`tools/download_classification_models.py` | 已适配的分类模型导出图 |
-| 目标检测 | `yolov5_demo`、`yolov5_benchmark_demo` | 已适配的 YOLOv5 导出图与检测后处理 |
+| 目标检测 | `yolo_demo`、`yolov5_demo`、`yolov5_benchmark_demo` | YOLOv5 兼容入口及 YOLOv6/v8/v10/11/26 nano 检测图；[导出、输出契约与运行命令](docs/yolo_detection.md) |
 | 视觉 Transformer | `vit_demo`、`tools/export_vit_model.py` | 固定形状导出；部分聚合算子展开为基础算子 |
-| 文本与状态推理 | `qwen_demo`、`tools/export_qwen35_model.py`、`tools/export_transformer_models.py` | 指定导出配置，含通用状态更新与模型专用优化 |
+| 文本与状态推理 | `qwen_demo`、`tools/export_qwen35_optimized.py`、`tools/export_qwen35_model.py`、`tools/export_transformer_models.py` | 指定导出配置，含通用状态更新与模型专用优化 |
+
+Qwen 的 `--fp8-format e4m3|e5m2` 导出使用混合精度：主要线性投影的权重、输入和结果使用 FP8；embedding/共享输出头、深度卷积权重及小型 a/b 循环控制投影保留原始 BF16 权重和接口。残差、MLP 激活与最终 logits 使用 BF16，循环状态更新与归一化规约使用 FP32。此前未保留这些权重的 FP8 模型需要重新导出，例如：
+
+```sh
+python3 tools/export_qwen35_model.py \
+  --model-dir models/llm/qwen3.5-0.8b \
+  --fp8-format e5m2 --default-context 4096
+```
+
+Qwen 新导出的 FTH v4 模型只需导出一次，可在加载时选择上下文容量：
+
+```sh
+./build_new/bin/qwen_demo \
+  --model models/llm/qwen3.5-0.8b/qwen3.5-0.8b_decode_fp8e5m2.fth \
+  --tokenizer models/llm/qwen3.5-0.8b --backend cuda \
+  --context-size 2048 --max-new-tokens 512 --prompt '介绍一下你自己'
+```
+
+`--context-size 0`（默认）从导出默认容量开始，带上下文元数据的模型按需自动扩容，导出器默认起始容量为 4096；正数值设置应用的硬容量上限，`--max-context` 是兼容别名。容量包含 system、历史、当前输入、输出及轮次结束标记，扩容始终受原模型配置上限约束。C++ 的 `QwenRunner::ReserveContext()` 可显式请求容量；扩容通过准备并替换形状计划完成，保留 KV 前缀、卷积及循环状态，失败时保留原会话。旧版固定容量文件仍可加载，改变容量需要重新导出。
+
+`--max-new-tokens` 默认 512，`-1` 表示不限生成预算，仍会在 EOS、上下文耗尽或取消时停止。输出中的 `finish_reason` 区分 `eos`、`length`、`context_limit`、`cancelled`。不提供 `--prompt` 时进入逐行多轮对话，保留 system 和最近的完整轮次；默认自动扩容模式先为历史、新输入、生成预算和结束标记申请容量；达到模型上限或使用显式容量后，空间不足时丢弃最旧完整轮次，重置全部状态并重放保留的精确 token。单条输入自身超过可用上限时明确报错。多轮模式为结束标记预留容量，所以实际可生成 token 数略小于剩余容量。
+
+`tools/export_qwen35_optimized.py` 导出一个 FTH v4 文件，包含一份权重和一个带显式序列维度绑定的图，默认序列长度为 1；`--prefill-chunk` 配置提示块上限，默认 16。runner 从同一图按需缓存 1、2、4、8 等长度的执行计划，余数使用较小计划组合而无需 padding。各计划共享同一组可变状态、只读权重和 CUDA 执行上下文；切换长度无需传递 KV 或循环状态。旧 v1–v5 模型文件保留加载兼容。通用 RMSNorm/LayerNorm、bilinear Resize 与实际精度、性能、显存边界见 [主流模型推理路径](docs/mainstream_inference.md)。
+
+逐 token 困惑度、正常生成延迟、E4M3 范围校准和敏感投影 BF16 保留策略见 [Qwen 评测与校准](docs/qwen_evaluation.md)。文档保留 BF16/FP8 实测对照和数据范围限制。
 
 以上表示仓库已有入口，不表示对应模型家族的任意版本都已支持。分类示例的调用方式为：
 

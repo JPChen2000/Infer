@@ -22,6 +22,8 @@
 #include "core/kernel.h"
 #ifdef FEATHER_WITH_CUDA
 #include "src/kernel/add.h"
+#include <cuda_runtime.h>
+#include "src/kernel/cuda/runtime.h"
 #endif
 #include "core/tensor.h"
 #include "quant/quantization.h"
@@ -120,6 +122,43 @@ TEST(StandardInt8KernelTest, CudaInt8DoesNotUseCommonKernel) {
               typeid(feather::kernel::AddKernel<DeviceType::CUDA, DataType::INT8>));
     EXPECT_NE(typeid(*cuda_kernel),
               typeid(feather::kernel::AddKernel<DeviceType::COMMON, DataType::INT8>));
+}
+
+TEST(StandardInt8KernelTest, DeferredCudaLinearUnaryLinearKeepsDeviceResultsAcrossRuns) {
+    int count = 0;
+    if (cudaGetDeviceCount(&count) != cudaSuccess || count == 0) GTEST_SKIP() << "CUDA device unavailable";
+    namespace cuda = feather::kernel::cuda_detail;
+    auto context = cuda::CreateExecutionContext();
+    cuda::ExecutionContextScope scope(context);
+    auto input = Int8({0, 0}, {1, 2});
+    auto weight = Int8({1, 0, 0, 1}, {2, 2});
+    auto projected = Int8({91, 91}, {1, 2});
+    auto activated = Int8({92, 92}, {1, 2});
+    auto output = Output({1, 2});
+    feather::operators::GemmParam first;
+    first.a = input; first.b = weight; first.out = projected;
+    feather::operators::UnaryParam unary;
+    unary.input = projected; unary.out = activated;
+    feather::operators::GemmParam last;
+    last.a = activated; last.b = weight; last.out = output;
+    auto producer = KernelDispatcher::instance().create(DeviceType::CUDA, DataType::INT8, "Gemm");
+    auto relu = KernelDispatcher::instance().create(DeviceType::CUDA, DataType::INT8, "ReLU");
+    auto consumer = KernelDispatcher::instance().create(DeviceType::CUDA, DataType::INT8, "Gemm");
+    ASSERT_NE(producer, nullptr); ASSERT_NE(relu, nullptr); ASSERT_NE(consumer, nullptr);
+    producer->SetParam(&first); relu->SetParam(&unary); consumer->SetParam(&last);
+    cuda::DeferredHostSyncScope deferred;
+    for (int8_t value : {int8_t{3}, int8_t{7}}) {
+        input->Assign<int8_t>({value, static_cast<int8_t>(-value)}, {1, 2});
+        ASSERT_EQ(producer->compute(), 0);
+        ASSERT_EQ(relu->compute(), 0);
+        ASSERT_EQ(consumer->compute(), 0);
+        ASSERT_EQ(cuda::SyncTensorToHostIfNeeded(output.get(), output->memory_size(), output->raw_data()), 0);
+        EXPECT_EQ(output->data<int8_t>()[0], value);
+        EXPECT_EQ(output->data<int8_t>()[1], 0);
+        // Intermediate host buffers must not be required for the next kernel.
+        EXPECT_EQ(projected->data<int8_t>()[0], 91);
+        EXPECT_EQ(activated->data<int8_t>()[0], 92);
+    }
 }
 #endif
 

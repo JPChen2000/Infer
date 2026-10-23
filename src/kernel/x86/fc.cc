@@ -52,7 +52,7 @@ int32_t ComputeFp8Fc(feather::operators::FcParam* param, x86::PackedFp8Rhs* pack
             : (param->bias->dims().size() == 1 ? x86::LinearBiasType::kVector : x86::LinearBiasType::kMatrix);
     const auto* lhs = static_cast<const uint8_t*>(param->input->raw_data());
     const auto* rhs = static_cast<const uint8_t*>(param->w->raw_data());
-    auto* out = static_cast<uint8_t*>(param->out->raw_data());
+    auto* out = static_cast<uint8_t*>(param->out->mutable_data(param->out->memory_size()));
     const auto* bias = param->bias == nullptr ? nullptr : static_cast<const uint8_t*>(param->bias->raw_data());
     const float bias_scale = param->bias == nullptr ? 1.0f : param->bias->quantization_scale();
     if (ShouldUsePackedFp8Fc<dtype>(param, m, k, n) && packed_rhs != nullptr &&
@@ -76,8 +76,7 @@ int32_t PrepareFp8Fc(feather::operators::FcParam* param, x86::PackedFp8Rhs* pack
         !ShouldUsePackedFp8Fc<dtype>(param, m, k, n) || packed_rhs == nullptr) {
         return 0;
     }
-    (void)packed_rhs->Pack(dtype, static_cast<const uint8_t*>(param->w->raw_data()), k, n,
-                           param->w->mutation_version());
+    (void)packed_rhs->Pack(*param->w, k, n);
     return 0;
 }
 

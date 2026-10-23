@@ -29,6 +29,7 @@
 #include <cstdint>
 #include <string>
 #include <memory>
+#include <vector>
 
 #include "core/tensor.h"
 
@@ -52,6 +53,23 @@ class ExecutionContextScope {
     int previous_device_{-1};
 };
 
+// Records allocator use without changing reuse during stream capture. A
+// retained lease reserves the captured addresses until its graph is destroyed.
+class CaptureAllocationSnapshot;
+class CaptureAllocationScope {
+ public:
+    CaptureAllocationScope();
+    ~CaptureAllocationScope();
+    CaptureAllocationScope(const CaptureAllocationScope&) = delete;
+    CaptureAllocationScope& operator=(const CaptureAllocationScope&) = delete;
+    bool valid() const { return recording_; }
+    std::shared_ptr<void> Retain();
+ private:
+    std::shared_ptr<CudaExecutionContext> context_;
+    std::unique_ptr<CaptureAllocationSnapshot> snapshot_;
+    bool recording_{false};
+};
+
 inline int64_t DivUp(int64_t value, int64_t divisor) {
     if (value <= 0 || divisor <= 0) {
         return 0;
@@ -60,11 +78,15 @@ inline int64_t DivUp(int64_t value, int64_t divisor) {
 }
 
 struct TensorCacheStats {
+    // Counts represent unique Storage/offset/byte-range replicas. Multiple
+    // registered Tensor handles for an equal view share one replica.
     size_t active_tensor_count{0};
     size_t persistent_tensor_count{0};
     size_t free_block_count{0};
     size_t active_bytes{0};
     size_t pooled_bytes{0};
+    size_t fp8_weight_cache_count{0};
+    size_t fp8_weight_cache_bytes{0};
 };
 
 enum class CudaFp8MatmulBackend {
@@ -84,18 +106,33 @@ void InvalidateTensorDevice(const Tensor* tensor);
 void MarkTensorDevicePersistent(const Tensor* tensor, bool persistent);
 bool IsTensorDevicePersistent(const Tensor* tensor);
 void ReleaseTensorDevice(const Tensor* tensor);
+// Tensor addresses are handle registrations only; device state is keyed by
+// stable Storage identity and view byte range. Shared handles remain registered
+// until their final graph/session user unregisters.
+void RegisterTensorDeviceUser(const Tensor* tensor);
+void UnregisterTensorDeviceUsers(const std::vector<const Tensor*>& tensors);
 std::shared_ptr<const Storage> GetTensorDeviceStorage(const Tensor* tensor);
 int AcquireTemporaryDeviceBuffer(size_t bytes, void** device_ptr);
 void SetWorkspaceLimit(size_t bytes);
+// Optional resident BF16 copies of immutable FP8 weights. Zero disables caching.
+void SetFp8WeightCacheLimit(size_t bytes);
+// Returns 0 on a ready cache hit/build, 1 when the caller should use scratch.
+int TryAcquireFp8Bf16Weight(const Tensor* tensor, const void* source, size_t count, float scale,
+                            const void** prepared);
 void ReleaseTemporaryDeviceBuffer(void* device_ptr, size_t bytes);
 TensorCacheStats GetTensorCacheStats();
 void ClearTensorCache();
 int AcquireTensorDevice(const Tensor* tensor, size_t bytes, const void* host_data, void** device_ptr);
+int ShareImmutableTensorDevice(const std::shared_ptr<CudaExecutionContext>& source_context,
+                               const Tensor* source, const Tensor* target);
 int AcquireOutputTensorDevice(Tensor* tensor, size_t bytes, void** device_ptr);
-int SyncTensorToHost(Tensor* tensor, size_t bytes, void* host_data);
-int SyncTensorToHostIfNeeded(Tensor* tensor, size_t bytes, void* host_data);
+// host_data identifies the tensor's current host view. A download acquires a
+// tracked writable view internally, preserving copy-on-write and versions.
+int SyncTensorToHost(Tensor* tensor, size_t bytes, const void* host_data);
+int SyncTensorToHostIfNeeded(Tensor* tensor, size_t bytes, const void* host_data);
 int AliasTensorDeviceStorage(const Tensor* input, Tensor* output, size_t bytes);
 int SwapTensorDeviceStorage(Tensor* input, Tensor* output);
+int CopyTensorStateOnDevice(Tensor* input, const Tensor* output);
 int AppendTensorStateOnDevice(Tensor* input, const Tensor* output, int axis);
 cublasHandle_t CublasHandle();
 #ifdef FEATHER_WITH_CUBLASLT

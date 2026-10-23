@@ -84,15 +84,16 @@ std::shared_ptr<OpBase> BuildCastOp(const model::NodeDesc& node, OperatorRegistr
     std::unique_ptr<KernelBase> kernel;
     const bool floating_cast = param.input != nullptr && tensor_op_detail::IsFloatingPointDataType(param.input->data_type()) &&
                                tensor_op_detail::IsFloatingPointDataType(param.to);
-    const bool cuda_integer_to_float =
+    const bool cuda_integer_cast =
         context.device == DeviceType::CUDA && param.input != nullptr &&
         (param.input->data_type() == DataType::INT32 || param.input->data_type() == DataType::INT64) &&
-        tensor_op_detail::IsFloatingPointDataType(param.to);
+        (tensor_op_detail::IsFloatingPointDataType(param.to) ||
+         param.to == DataType::INT32 || param.to == DataType::INT64);
     if (param.input != nullptr && param.input->data_type() == DataType::INT8) {
         kernel = CreateKernelForTensor(context.device, "Cast", {param.input}, DataType::INT8);
     } else if (floating_cast) {
         kernel = CreateKernelForTensor(context.device, "Cast", {param.input}, param.input->data_type());
-    } else if (cuda_integer_to_float) {
+    } else if (cuda_integer_cast) {
         kernel = CreateKernelForTensor(context.device, "Cast", {param.input}, DataType::FP32);
     } else {
         kernel = CreateKernelForTensor(DeviceType::COMMON, "Cast", {}, DataType::FP32);

@@ -235,9 +235,9 @@ int32_t QwenDepthwiseConvStateKernel<DeviceType::X86, DataType::BF16>::compute()
     const auto* state = static_cast<const uint16_t*>(param->state->raw_data());
     const auto* mixed = static_cast<const uint16_t*>(param->mixed->raw_data());
     const auto* weight = static_cast<const uint16_t*>(param->weight->raw_data());
-    auto* conv_out = static_cast<uint16_t*>(param->conv_out->raw_data());
-    auto* discarded_prefix = static_cast<uint16_t*>(param->discarded_prefix->raw_data());
-    auto* next_state = static_cast<uint16_t*>(param->next_state->raw_data());
+    auto* conv_out = static_cast<uint16_t*>(param->conv_out->mutable_data(param->conv_out->memory_size()));
+    auto* discarded_prefix = static_cast<uint16_t*>(param->discarded_prefix->mutable_data(param->discarded_prefix->memory_size()));
+    auto* next_state = static_cast<uint16_t*>(param->next_state->mutable_data(param->next_state->memory_size()));
 
     const size_t worker_count = WorkerCount(channels);
 #if !defined(FEATHER_WITH_OPENMP)
@@ -268,9 +268,9 @@ int32_t ComputeFp8State(operators::QwenDepthwiseConvStateParam* param) {
     const auto* state = static_cast<const uint16_t*>(param->state->raw_data());
     const auto* mixed = static_cast<const uint16_t*>(param->mixed->raw_data());
     const auto* weight = static_cast<const uint8_t*>(param->weight->raw_data());
-    auto* conv_out = static_cast<uint16_t*>(param->conv_out->raw_data());
-    auto* discarded_prefix = static_cast<uint16_t*>(param->discarded_prefix->raw_data());
-    auto* next_state = static_cast<uint16_t*>(param->next_state->raw_data());
+    auto* conv_out = static_cast<uint16_t*>(param->conv_out->mutable_data(param->conv_out->memory_size()));
+    auto* discarded_prefix = static_cast<uint16_t*>(param->discarded_prefix->mutable_data(param->discarded_prefix->memory_size()));
+    auto* next_state = static_cast<uint16_t*>(param->next_state->mutable_data(param->next_state->memory_size()));
     const auto& table = Fp8DecodeTable<dtype>();
     const float input_scale = param->fp8_input_scale;
     const float weight_scale = param->weight->quantization_scale();

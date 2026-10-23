@@ -60,11 +60,11 @@ bool ValidateQwenRmsNorm(const operators::QwenRmsNormParam* param, int64_t* rows
 
 float ReadValue(const Tensor* tensor, int64_t index) { return common_tensor_detail::ReadFloat(tensor, index); }
 
-void WriteValue(Tensor* tensor, int64_t index, float value) {
-    if (tensor->data_type() == DataType::BF16) {
-        static_cast<BFloat16*>(tensor->raw_data())[index].bits = FloatToBFloat16(value);
+void WriteValue(void* output, DataType dtype, int64_t index, float value) {
+    if (dtype == DataType::BF16) {
+        static_cast<BFloat16*>(output)[index].bits = FloatToBFloat16(value);
     } else {
-        static_cast<float*>(tensor->raw_data())[index] = value;
+        static_cast<float*>(output)[index] = value;
     }
 }
 
@@ -76,6 +76,7 @@ int32_t ComputeQwenRmsNorm(operators::QwenRmsNormParam* param) {
     if (!ValidateQwenRmsNorm(param, &rows, &hidden, &epsilon) || param->input->data_type() != input_dtype) {
         return -1;
     }
+    void* output = param->out->mutable_data(param->out->memory_size());
     for (int64_t row = 0; row < rows; ++row) {
         float sum_square = 0.0f;
         const int64_t row_offset = row * hidden;
@@ -87,7 +88,7 @@ int32_t ComputeQwenRmsNorm(operators::QwenRmsNormParam* param) {
         for (int64_t column = 0; column < hidden; ++column) {
             const float value = ReadValue(param->input.get(), row_offset + column);
             const float scale = ReadValue(param->weight.get(), column) + param->weight_offset;
-            WriteValue(param->out.get(), row_offset + column, value * inverse_rms * scale);
+            WriteValue(output, param->out->data_type(), row_offset + column, value * inverse_rms * scale);
         }
     }
     return 0;

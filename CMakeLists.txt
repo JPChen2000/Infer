@@ -156,6 +156,7 @@ set(SRC "src/core/memory.cc"
     "src/core/tensor.cc"
     "src/quant/static_quantizer.cc"
     "src/core/graph.cc"
+    "src/core/operator_semantics.cc"
     "src/core/graph_lowering.cc"
     "src/core/operator_registry.cc"
     "src/core/static_graph.cc"
@@ -216,6 +217,11 @@ set(SRC "src/core/memory.cc"
     "src/operator/reduce_mean_op.cc"
     "src/operator/reduce_sum_op.cc"
     "src/operator/gather_op.cc"
+    "src/operator/yolo_selection_ops.cc"
+    "src/operator/conv_transpose_op.cc"
+    "src/operator/non_max_suppression_op.cc"
+    "src/operator/normalization_ops.cc"
+    "src/operator/cached_attention_op.cc"
     "src/operator/equal_op.cc"
     "src/operator/sqrt_op.cc"
     "src/operator/sub_op.cc"
@@ -225,6 +231,7 @@ set(SRC "src/core/memory.cc"
     "src/operator/expand_op.cc"
     "src/operator/where_op.cc"
     "src/operator/qwen_gated_delta_op.cc"
+    "src/operator/qwen_gated_delta_sequence_op.cc"
     "src/operator/qwen_gemm_argmax_op.cc"
     "src/operator/qwen_depthwise_conv_op.cc"
     "src/operator/qwen_rms_norm_op.cc"
@@ -268,12 +275,18 @@ set(SRC "src/core/memory.cc"
     "src/kernel/common/reduce_mean.cc"
     "src/kernel/common/reduce_sum.cc"
     "src/kernel/common/gather.cc"
+    "src/kernel/common/yolo_selection.cc"
+    "src/kernel/common/conv_transpose.cc"
+    "src/kernel/common/non_max_suppression.cc"
+    "src/kernel/common/normalization.cc"
+    "src/kernel/common/cached_attention.cc"
     "src/kernel/common/equal.cc"
     "src/kernel/common/shape.cc"
     "src/kernel/common/constant_of_shape.cc"
     "src/kernel/common/expand.cc"
     "src/kernel/common/where.cc"
     "src/kernel/common/qwen_gated_delta.cc"
+    "src/kernel/common/qwen_gated_delta_sequence.cc"
     "src/kernel/common/qwen_gemm_argmax.cc"
     "src/kernel/common/qwen_rms_norm.cc"
     "src/kernel/common/sqrt.cc"
@@ -332,9 +345,14 @@ set(SRC "src/core/memory.cc"
     "src/demo/classification_runner.cc"
     "src/demo/image_io.cc"
     "src/demo/qwen_chat_template.cc"
+    "src/demo/qwen_chat_session.cc"
+    "src/demo/qwen_context.cc"
+    "src/demo/qwen_sequence.cc"
     "src/demo/qwen_demo.cc"
     "src/demo/qwen_runner.cc"
+    "src/demo/qwen_runner_growth.cc"
     "src/demo/qwen_tokenizer.cc"
+    "src/demo/yolo_postprocess.cc"
     "src/demo/yolov5_postprocess.cc"
     "src/demo/yolov5_runner.cc")
 
@@ -350,6 +368,11 @@ set(CUDA_SRC
     "src/kernel/cuda/softplus.cu"
     "src/kernel/cuda/concat.cu"
     "src/kernel/cuda/conv2d.cu"
+    "src/kernel/cuda/conv_transpose.cu"
+    "src/kernel/cuda/non_max_suppression.cu"
+    "src/kernel/cuda/normalization.cu"
+    "src/kernel/cuda/cached_attention.cu"
+    "src/demo/yolo_postprocess_cuda.cu"
     "src/kernel/cuda/fc.cu"
     "src/kernel/cuda/int8.cu"
     "src/kernel/cuda/int8_standard.cu"
@@ -379,6 +402,8 @@ set(CUDA_SRC
     "src/kernel/cuda/reduce_mean.cu"
     "src/kernel/cuda/reduce_sum.cu"
     "src/kernel/cuda/gather.cu"
+    "src/kernel/cuda/yolo_topk.cu"
+    "src/kernel/cuda/yolo_selection.cu"
     "src/kernel/cuda/equal.cu"
     "src/kernel/cuda/expand.cu"
     "src/kernel/cuda/where.cu"
@@ -390,6 +415,7 @@ set(CUDA_SRC
     "src/kernel/cuda/qwen_rms_norm.cu"
     "src/kernel/cuda/qwen_depthwise_conv.cu"
     "src/kernel/cuda/qwen_gated_delta.cu"
+    "src/kernel/cuda/qwen_gated_delta_sequence.cu"
     "src/kernel/cuda/qwen_gemm_argmax.cu"
     "src/kernel/cuda/fp8.cu")
 
@@ -473,6 +499,7 @@ if (FEATHER_WITH_CUDA)
 endif()
 
 add_executable(yolov5_demo demo/yolov5_infer_demo.cc)
+add_executable(yolo_demo demo/yolo_infer_demo.cc)
 add_executable(execution_plan_benchmark tools/execution_plan_benchmark.cc)
 target_link_libraries(execution_plan_benchmark PRIVATE infer)
 add_executable(yolov5_benchmark_demo demo/yolov5_benchmark_demo.cc)
@@ -481,6 +508,9 @@ add_executable(resent_demo demo/resent_infer_demo.cc)
 add_executable(repvgg_demo demo/repvgg_infer_demo.cc)
 add_executable(vit_demo demo/vit_infer_demo.cc)
 add_executable(qwen_demo demo/qwen_infer_demo.cc src/demo/qwen_demo.cc)
+add_executable(qwen_eval tools/qwen_eval.cc)
+target_include_directories(qwen_eval PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(qwen_eval PRIVATE infer)
 add_executable(fth_layout_convert demo/fth_layout_convert_demo.cc)
 if (FEATHER_ENABLE_X86)
     add_executable(x86_conv_benchmark_demo demo/x86_conv_benchmark_demo.cc)
@@ -560,6 +590,8 @@ set_source_files_properties(src/kernel/x86/int8.cc PROPERTIES COMPILE_OPTIONS "-
 target_include_directories(yolov5_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(yolov5_demo infer)
+target_include_directories(yolo_demo PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(yolo_demo infer)
 target_include_directories(resnet_demo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(resnet_demo infer)

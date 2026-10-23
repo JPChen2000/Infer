@@ -147,7 +147,7 @@ int32_t ComputeFp8Gemm(feather::operators::GemmParam* param, x86::PackedFp8Rhs* 
 
     const auto* lhs = static_cast<const uint8_t*>(param->a->raw_data());
     const auto* rhs = static_cast<const uint8_t*>(param->b->raw_data());
-    auto* out = static_cast<uint8_t*>(param->out->raw_data());
+    auto* out = static_cast<uint8_t*>(param->out->mutable_data(param->out->memory_size()));
     if (param->trans_b) {
         if (ShouldUsePackedFp8Rhs(param, m, k, n) && packed_transposed_rhs != nullptr &&
             packed_transposed_rhs->Matches(dtype, rhs, k, n, param->b->mutation_version())) {
@@ -187,13 +187,12 @@ int32_t PrepareFp8Gemm(feather::operators::GemmParam* param, x86::PackedFp8Rhs* 
     if (m <= 0 || k != b_k || !ShouldUsePackedFp8Rhs(param, m, k, n)) {
         return 0;
     }
-    const auto* rhs = static_cast<const uint8_t*>(param->b->raw_data());
     if (param->trans_b) {
         if (packed_transposed_rhs != nullptr) {
-            (void)packed_transposed_rhs->Pack(dtype, rhs, k, n, param->b->mutation_version());
+            (void)packed_transposed_rhs->Pack(*param->b, k, n);
         }
     } else if (packed_rhs != nullptr) {
-        (void)packed_rhs->Pack(dtype, rhs, k, n, param->b->mutation_version());
+        (void)packed_rhs->Pack(*param->b, k, n);
     }
     return 0;
 }
@@ -221,9 +220,9 @@ int32_t GemmKernel<DeviceType::X86, DataType::BF16>::Prepare() {
     // Packing is an optimization. If allocation fails, compute() will use the
     // direct transposed-RHS path instead of making graph finalization fail.
     if (param->trans_b) {
-        (void)packed_transposed_rhs_.Pack(param->b->data<uint16_t>(), k, n, param->b->mutation_version());
+        (void)packed_transposed_rhs_.Pack(*param->b, k, n);
     } else {
-        (void)packed_rhs_.Pack(param->b->data<uint16_t>(), k, n, param->b->mutation_version());
+        (void)packed_rhs_.Pack(*param->b, k, n);
     }
     return 0;
 }
@@ -321,7 +320,7 @@ int32_t GemmKernel<DeviceType::X86, DataType::BF16>::compute() {
     const x86::LinearBiasType bias_type =
         bias == nullptr ? x86::LinearBiasType::kNone
         : (IsVectorBias(param->bias.get(), n) ? x86::LinearBiasType::kVector : x86::LinearBiasType::kMatrix);
-    auto* out = static_cast<uint16_t*>(param->out->raw_data());
+    auto* out = static_cast<uint16_t*>(param->out->mutable_data(param->out->memory_size()));
     if (param->trans_b) {
         if (ShouldUsePackedBf16Rhs(param, m, k, n) &&
             packed_transposed_rhs_.Matches(param->b->data<uint16_t>(), k, n, param->b->mutation_version())) {

@@ -143,7 +143,7 @@ int32_t ComputeBatchedMatMulX86(feather::operators::MatMulParam* param, MatrixCo
     if (shape.singleton_batch && shape.batch_count == 1) {
         const auto* lhs = reinterpret_cast<const T*>(param->a->raw_data());
         const auto* rhs = reinterpret_cast<const T*>(param->b->raw_data());
-        auto* out = reinterpret_cast<T*>(param->out->raw_data());
+        auto* out = reinterpret_cast<T*>(param->out->mutable_data(param->out->memory_size()));
         return matrix_compute(lhs, rhs, m, k, n, out);
     }
 
@@ -157,7 +157,7 @@ int32_t ComputeBatchedMatMulX86(feather::operators::MatMulParam* param, MatrixCo
 
     const auto* lhs = reinterpret_cast<const T*>(param->a->raw_data());
     const auto* rhs = reinterpret_cast<const T*>(param->b->raw_data());
-    auto* out = reinterpret_cast<T*>(param->out->raw_data());
+    auto* out = reinterpret_cast<T*>(param->out->mutable_data(param->out->memory_size()));
     for (int64_t batch = 0; batch < batch_count; ++batch) {
         int64_t remaining = batch;
         int64_t a_batch_offset = 0;
@@ -240,7 +240,7 @@ int32_t ComputeFp8MatMulX86(feather::operators::MatMulParam* param, x86::PackedF
     }
     const auto* lhs = static_cast<const uint8_t*>(param->a->raw_data());
     const auto* rhs = static_cast<const uint8_t*>(param->b->raw_data());
-    auto* out = static_cast<uint8_t*>(param->out->raw_data());
+    auto* out = static_cast<uint8_t*>(param->out->mutable_data(param->out->memory_size()));
     const float lhs_scale = param->a->quantization_scale();
     const float rhs_scale = param->b->quantization_scale();
     const float out_scale = param->out->quantization_scale();
@@ -276,7 +276,7 @@ int32_t ComputeBf16MatMulX86(feather::operators::MatMulParam* param, x86::Bf16Li
         packed_rhs->Matches(rhs, shape.k, shape.n, param->b->mutation_version())) {
         return x86::ComputeLinearRowMajorX86Bf16PackedRhs(
             static_cast<const uint16_t*>(param->a->raw_data()), rhs, *packed_rhs, nullptr, shape.m, shape.k,
-            shape.n, x86::LinearBiasType::kNone, static_cast<uint16_t*>(param->out->raw_data()), workspace,
+            shape.n, x86::LinearBiasType::kNone, static_cast<uint16_t*>(param->out->mutable_data(param->out->memory_size())), workspace,
             param->b->mutation_version());
     }
 
@@ -324,8 +324,7 @@ int32_t PrepareFp8MatMulX86(feather::operators::MatMulParam* param, x86::PackedF
     if (!ValidateBatchedMatMulX86(param, &shape) || !ShouldUsePackedFp8Rhs(param, shape) || packed_rhs == nullptr) {
         return 0;
     }
-    (void)packed_rhs->Pack(dtype, static_cast<const uint8_t*>(param->b->raw_data()), shape.k, shape.n,
-                           param->b->mutation_version());
+    (void)packed_rhs->Pack(*param->b, shape.k, shape.n);
     return 0;
 }
 
@@ -348,8 +347,7 @@ int32_t MatMulKernel<DeviceType::X86, DataType::BF16>::Prepare() {
 
     // Packing preserves the original immutable tensor and is deliberately
     // best-effort: a memory-constrained process falls back to the direct path.
-    (void)packed_rhs_.Pack(static_cast<const uint16_t*>(param->b->raw_data()), shape.k, shape.n,
-                           param->b->mutation_version());
+    (void)packed_rhs_.Pack(*param->b, shape.k, shape.n);
     return 0;
 }
 

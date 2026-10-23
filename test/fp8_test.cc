@@ -17,12 +17,14 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <utility>
 #include <vector>
 
 #include "core/kernel.h"
+#include "core/backend.h"
 #include "core/tensor.h"
 #include "src/operator/params.h"
 #include "util/bf16.h"
@@ -573,7 +575,7 @@ TEST(fp8_test, X86Fp8CastHandlesVectorPayloadsForBothFormats) {
         auto input = std::make_shared<Tensor>(std::vector<int64_t>{32});
         input->set_data_type(dtype);
         input->set_quantization({true, 0.25f});
-        auto* raw = static_cast<uint8_t*>(input->raw_data());
+        auto* raw = static_cast<uint8_t*>(input->mutable_data(input->memory_size()));
         for (int i = 0; i < 32; ++i) {
             const float value = static_cast<float>((i % 9) - 4) * 0.5f;
             raw[i] = dtype == DataType::FP8E4M3 ? feather::FloatToFp8E4M3(value / 0.25f)
@@ -601,7 +603,7 @@ TEST(fp8_test, X86Fp8CastToBf16PreservesEveryEncoding) {
         auto input = std::make_shared<Tensor>(std::vector<int64_t>{256});
         input->set_data_type(dtype);
         input->set_quantization({true, 0.25f});
-        auto* raw = static_cast<uint8_t*>(input->raw_data());
+        auto* raw = static_cast<uint8_t*>(input->mutable_data(input->memory_size()));
         for (int index = 0; index < 256; ++index) {
             raw[index] = static_cast<uint8_t>(index);
         }
@@ -1377,6 +1379,320 @@ TEST(fp8_test, CudaFp8MatMulGemmAndFcUseFp32Accumulation) {
     }
 }
 
+TEST(fp8_test, CudaFp8WeightCacheHonorsBudgetAndRefreshesDataAndScale) {
+    if (!HasCudaFp8TestDevice()) GTEST_SKIP();
+    using namespace feather::kernel::cuda_detail;
+    ExecutionContextScope scope(CreateExecutionContext());
+    SetFp8WeightCacheLimit(8);
+    for (const auto dtype : {DataType::FP8E4M3, DataType::FP8E5M2}) {
+        ClearTensorCache();
+        auto weight = dtype == DataType::FP8E4M3
+            ? MakeFp8Tensor<Fp8E4M3>({1, 2, -4, 8}, {2, 2}, 0.5f)
+            : MakeFp8Tensor<Fp8E5M2>({1, 2, -4, 8}, {2, 2}, 0.5f);
+        weight->set_immutable(true);
+        auto prepare = [&](const std::shared_ptr<Tensor>& tensor, const void** result) {
+            void* device = nullptr;
+            if (AcquireTensorDevice(tensor.get(), 4, tensor->raw_data(), &device) != 0) return -1;
+            return TryAcquireFp8Bf16Weight(tensor.get(), device, 4, tensor->quantization_scale(), result);
+        };
+        auto check = [&](const void* ptr, const std::vector<float>& expected) {
+            feather::BFloat16 values[4];
+            ASSERT_EQ(cudaMemcpy(values, ptr, sizeof(values), cudaMemcpyDeviceToHost), cudaSuccess);
+            for (int i = 0; i < 4; ++i) EXPECT_EQ(feather::BFloat16ToFloat(values[i].bits), expected[i]);
+        };
+        const void* cached = nullptr;
+        ASSERT_EQ(prepare(weight, &cached), 0);
+        check(cached, {1, 2, -4, 8});
+        const void* repeated = nullptr;
+        ASSERT_EQ(prepare(weight, &repeated), 0);
+        EXPECT_EQ(repeated, cached);
+        EXPECT_EQ(GetTensorCacheStats().fp8_weight_cache_bytes, 8);
+        auto alias = std::make_shared<Tensor>(); alias->ShareDataWith(*weight); alias->set_immutable(true);
+        const void* shared = nullptr;
+        ASSERT_EQ(prepare(alias, &shared), 0);
+        EXPECT_EQ(shared, cached);
+        EXPECT_EQ(GetTensorCacheStats().fp8_weight_cache_bytes, 8);
+        // A distinct allocation needs another conversion and must respect the
+        // budget even when its weight values match the existing allocation.
+        auto second = dtype == DataType::FP8E4M3
+            ? MakeFp8Tensor<Fp8E4M3>({1, 2, -4, 8}, {2, 2}, 0.5f)
+            : MakeFp8Tensor<Fp8E5M2>({1, 2, -4, 8}, {2, 2}, 0.5f);
+        second->set_immutable(true);
+        ASSERT_NE(second->storage()->id(), weight->storage()->id());
+        const void* denied = nullptr;
+        EXPECT_EQ(prepare(second, &denied), 1);
+        EXPECT_EQ(denied, nullptr);
+        weight->set_quantization({true, 0.25f});
+        ASSERT_EQ(prepare(weight, &cached), 0);
+        check(cached, {0.5f, 1, -2, 4});
+        // A tracked host write must invalidate the derived device values.
+        auto* bits = static_cast<uint8_t*>(weight->mutable_data(weight->memory_size()));
+        bits[0] = dtype == DataType::FP8E4M3 ? feather::FloatToFp8E4M3(12) : feather::FloatToFp8E5M2(12);
+        ASSERT_EQ(prepare(weight, &cached), 0);
+        check(cached, {3, 1, -2, 4});
+        // Explicit invalidation also covers a caller using an untracked raw write.
+        bits[0] = 0;
+        InvalidateTensorDevice(weight.get());
+        ASSERT_EQ(prepare(weight, &cached), 0);
+        check(cached, {0, 1, -2, 4});
+        SetFp8WeightCacheLimit(0);
+        EXPECT_EQ(GetTensorCacheStats().fp8_weight_cache_bytes, 0);
+        EXPECT_EQ(prepare(weight, &cached), 1);
+        SetFp8WeightCacheLimit(8);
+    }
+}
+
+TEST(fp8_test, CudaFp8WeightCacheSharesCompletedConversionAcrossContexts) {
+    if (!HasCudaFp8TestDevice()) GTEST_SKIP();
+    using namespace feather::kernel::cuda_detail;
+    auto source_context = CreateExecutionContext(), target_context = CreateExecutionContext();
+    auto source = MakeFp8Tensor<Fp8E4M3>({1, 2, -4, 8}, {2, 2}, 0.5f);
+    auto target = std::make_shared<Tensor>(); target->ShareDataWith(*source);
+    source->set_immutable(true); target->set_immutable(true);
+    const void* first = nullptr;
+    {
+        ExecutionContextScope scope(source_context);
+        SetFp8WeightCacheLimit(8);
+        RegisterTensorDeviceUser(source.get());
+        void* device = nullptr;
+        ASSERT_EQ(AcquireTensorDevice(source.get(), 4, source->raw_data(), &device), 0);
+        ASSERT_EQ(TryAcquireFp8Bf16Weight(source.get(), device, 4, 0.5f, &first), 0);
+    }
+    {
+        ExecutionContextScope scope(target_context);
+        SetFp8WeightCacheLimit(8);
+        ASSERT_EQ(ShareImmutableTensorDevice(source_context, source.get(), target.get()), 0);
+        void* device = nullptr; const void* shared = nullptr;
+        ASSERT_EQ(AcquireTensorDevice(target.get(), 4, target->raw_data(), &device), 0);
+        ASSERT_EQ(TryAcquireFp8Bf16Weight(target.get(), device, 4, 0.5f, &shared), 0);
+        EXPECT_EQ(first, shared);
+    }
+    {
+        ExecutionContextScope scope(source_context);
+        UnregisterTensorDeviceUsers({source.get()});
+        EXPECT_EQ(GetTensorCacheStats().fp8_weight_cache_bytes, 0);
+    }
+    source_context.reset(); source.reset();
+    {
+        ExecutionContextScope scope(target_context);
+        void* device = nullptr; const void* shared = nullptr;
+        ASSERT_EQ(AcquireTensorDevice(target.get(), 4, target->raw_data(), &device), 0);
+        ASSERT_EQ(TryAcquireFp8Bf16Weight(target.get(), device, 4, 0.5f, &shared), 0);
+        EXPECT_EQ(first, shared);
+        feather::BFloat16 values[4];
+        ASSERT_EQ(cudaMemcpy(values, shared, sizeof(values), cudaMemcpyDeviceToHost), cudaSuccess);
+        EXPECT_EQ(feather::BFloat16ToFloat(values[3].bits), 8);
+    }
+}
+
+TEST(fp8_test, CudaFp8WeightCacheDoesNotPublishConversionsFromColdCapture) {
+    if (!HasCudaFp8TestDevice()) GTEST_SKIP();
+    using namespace feather::kernel::cuda_detail;
+    ExecutionContextScope scope(CreateExecutionContext());
+    SetFp8WeightCacheLimit(8);
+    auto weight = MakeFp8Tensor<Fp8E4M3>({1, 2, -4, 8}, {2, 2}, 0.5f);
+    weight->set_immutable(true);
+    void* device = nullptr;
+    ASSERT_EQ(AcquireTensorDevice(weight.get(), 4, weight->raw_data(), &device), 0);
+    auto stream = InferenceStream();
+    ASSERT_EQ(SynchronizeInferenceStream(), 0);
+    ASSERT_EQ(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal), cudaSuccess);
+    const void* prepared = nullptr;
+    const int result = TryAcquireFp8Bf16Weight(weight.get(), device, 4, 0.5f, &prepared);
+    cudaGraph_t graph{};
+    const auto captured = cudaStreamEndCapture(stream, &graph);
+    EXPECT_EQ(result, 1);
+    EXPECT_EQ(prepared, nullptr);
+    ASSERT_EQ(captured, cudaSuccess);
+    ASSERT_EQ(cudaGraphDestroy(graph), cudaSuccess);
+    EXPECT_EQ(GetTensorCacheStats().fp8_weight_cache_count, 0);
+    ASSERT_EQ(TryAcquireFp8Bf16Weight(weight.get(), device, 4, 0.5f, &prepared), 0);
+    EXPECT_EQ(GetTensorCacheStats().fp8_weight_cache_count, 1);
+}
+
+TEST(fp8_test, CudaFp8CapturedWeightSurvivesCacheDisableAndSourceRelease) {
+    if (!HasCudaFp8TestDevice()) GTEST_SKIP();
+    using namespace feather::kernel::cuda_detail;
+    auto backend = feather::CreateBackendContext();
+    auto scope = backend->Enter();
+    backend->SetFp8WeightCacheLimit(8);
+    auto weight = MakeFp8Tensor<Fp8E4M3>({1, 2, -4, 8}, {2, 2}, 0.5f);
+    weight->set_immutable(true);
+    auto output = std::make_shared<Tensor>();
+    output->Assign<feather::BFloat16>(std::vector<feather::BFloat16>(4), {4});
+    backend->RegisterTensor(weight); backend->RegisterTensor(output);
+    void* source = nullptr; const void* prepared = nullptr;
+    ASSERT_EQ(AcquireTensorDevice(weight.get(), 4, weight->raw_data(), &source), 0);
+    ASSERT_EQ(TryAcquireFp8Bf16Weight(weight.get(), source, 4, 0.5f, &prepared), 0);
+    void* destination = nullptr;
+    ASSERT_EQ(AcquireOutputTensorDevice(output.get(), 8, &destination), 0);
+    const auto retained_output = GetTensorDeviceStorage(output.get());
+    ASSERT_NE(retained_output, nullptr);
+    std::unique_ptr<feather::ExecutionCapture> capture;
+    ASSERT_TRUE(backend->Capture([&]() -> feather::Status {
+        const void* cached = nullptr; void* out = nullptr;
+        if (TryAcquireFp8Bf16Weight(weight.get(), source, 4, 0.5f, &cached) != 0 ||
+            AcquireOutputTensorDevice(output.get(), 8, &out) != 0 ||
+            cudaMemcpyAsync(out, cached, 8, cudaMemcpyDeviceToDevice, InferenceStream()) != cudaSuccess)
+            return feather::Status::Error(feather::StatusCode::kExecutionFailed, "copy capture failed");
+        return feather::Status::Ok();
+    }, &capture).ok());
+    backend->SetFp8WeightCacheLimit(0);
+    backend->Clear(); weight.reset(); output.reset();
+    EXPECT_EQ(GetTensorCacheStats().fp8_weight_cache_bytes, 0);
+    void* noise = nullptr;
+    ASSERT_EQ(cudaMalloc(&noise, 8), cudaSuccess);
+    ASSERT_EQ(cudaMemset(noise, 0, 8), cudaSuccess);
+    const auto launched = capture->Launch();
+    const auto synchronized = SynchronizeInferenceStream();
+    (void)cudaFree(noise);
+    ASSERT_TRUE(launched.ok()); ASSERT_EQ(synchronized, 0);
+    feather::BFloat16 values[4];
+    ASSERT_EQ(cudaMemcpy(values, retained_output->data(), sizeof(values), cudaMemcpyDeviceToHost), cudaSuccess);
+    EXPECT_EQ(feather::BFloat16ToFloat(values[0].bits), 1);
+    EXPECT_EQ(feather::BFloat16ToFloat(values[1].bits), 2);
+    EXPECT_EQ(feather::BFloat16ToFloat(values[2].bits), -4);
+    EXPECT_EQ(feather::BFloat16ToFloat(values[3].bits), 8);
+}
+
+// A warmed immutable weight must remove one conversion kernel from replay.
+TEST(fp8_test, CudaFp8ImmutableWeightAvoidsRepeatedConversionInCapturedMatMul) {
+    if (!HasCudaFp8TestDevice()) GTEST_SKIP();
+    using namespace feather::kernel::cuda_detail;
+    auto context = CreateExecutionContext();
+    ExecutionContextScope scope(context);
+    SetFp8WeightCacheLimit(1024 * 1024);
+    std::vector<float> weights(256, 0.0f);
+    for (int i = 0; i < 16; ++i) weights[i * 16 + i] = 2.0f;
+    auto a = MakeFp8Tensor<Fp8E4M3>(std::vector<float>(16, 1.0f), {1, 16}, 1.0f);
+    auto b = MakeFp8Tensor<Fp8E4M3>(weights, {16, 16}, 1.0f);
+    auto out = MakeFp8Tensor<Fp8E4M3>(std::vector<float>(16, 0.0f), {1, 16}, 1.0f);
+    auto kernel = feather::KernelDispatcher::instance().create(DeviceType::CUDA, DataType::FP8E4M3, "MatMul");
+    ASSERT_NE(kernel, nullptr);
+    feather::operators::MatMulParam param{};
+    param.a = a; param.b = b; param.out = out;
+    kernel->SetParam(&param);
+    size_t kernel_counts[2]{};
+    for (int immutable = 0; immutable < 2; ++immutable) {
+        b->set_immutable(immutable != 0);
+        ASSERT_EQ(kernel->compute(), 0);
+        if (LastCudaFp8MatmulBackend() != CudaFp8MatmulBackend::kBf16TensorCoreFallback)
+            GTEST_SKIP() << "Requires FP8 BF16 Tensor Core fallback";
+        EXPECT_EQ(ReadFp8Value<Fp8E4M3>(*out, 0), 2.0f);
+        DeferredHostSyncScope deferred;
+        auto stream = InferenceStream();
+        ASSERT_EQ(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal), cudaSuccess);
+        const int status = kernel->compute();
+        cudaGraph_t graph{};
+        const auto captured = cudaStreamEndCapture(stream, &graph);
+        ASSERT_EQ(status, 0);
+        ASSERT_EQ(captured, cudaSuccess);
+        size_t count = 0;
+        ASSERT_EQ(cudaGraphGetNodes(graph, nullptr, &count), cudaSuccess);
+        std::vector<cudaGraphNode_t> nodes(count);
+        ASSERT_EQ(cudaGraphGetNodes(graph, nodes.data(), &count), cudaSuccess);
+        for (const auto node : nodes) {
+            cudaGraphNodeType type;
+            ASSERT_EQ(cudaGraphNodeGetType(node, &type), cudaSuccess);
+            if (type == cudaGraphNodeTypeKernel) ++kernel_counts[immutable];
+        }
+        ASSERT_EQ(cudaGraphDestroy(graph), cudaSuccess);
+    }
+    EXPECT_EQ(kernel_counts[1] + 1, kernel_counts[0]);
+}
+
+TEST(fp8_test, CudaFp8CastPreservesAllBf16EncodingsAndFloatRoundingBoundaries) {
+    if (!HasCudaFp8TestDevice()) GTEST_SKIP();
+    std::vector<feather::BFloat16> bf16_values;
+    for (uint32_t bits = 0; bits <= 0xffff; ++bits)
+        bf16_values.push_back({static_cast<uint16_t>(bits)});
+    auto bf16 = std::make_shared<Tensor>();
+    bf16->Assign<feather::BFloat16>(bf16_values, {65536});
+    for (const auto dtype : {DataType::FP8E4M3, DataType::FP8E5M2}) {
+        const auto encode = [dtype](float value) {
+            return dtype == DataType::FP8E4M3 ? feather::FloatToFp8E4M3(value) : feather::FloatToFp8E5M2(value);
+        };
+        const auto decode = [dtype](uint8_t bits) {
+            return dtype == DataType::FP8E4M3 ? feather::Fp8E4M3ToFloat(bits) : feather::Fp8E5M2ToFloat(bits);
+        };
+        std::vector<float> boundaries{0.0f, -0.0f, std::numeric_limits<float>::max(),
+            -std::numeric_limits<float>::max(), std::numeric_limits<float>::infinity(),
+            -std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN(),
+            -std::numeric_limits<float>::quiet_NaN()};
+        const int maximum = dtype == DataType::FP8E4M3 ? 126 : 123;
+        for (int code = 0; code < maximum; ++code) {
+            const float midpoint = (decode(code) + decode(code + 1)) * 0.5f;
+            for (float value : {std::nextafter(midpoint, 0.0f), midpoint,
+                                std::nextafter(midpoint, std::numeric_limits<float>::infinity())}) {
+                boundaries.push_back(value); boundaries.push_back(-value);
+            }
+        }
+        uint32_t sample_bits = 1234567;
+        for (int i = 0; i < 16384; ++i) {
+            sample_bits = sample_bits * 1664525u + 1013904223u;
+            float value;
+            std::memcpy(&value, &sample_bits, sizeof(value));
+            boundaries.push_back(value);
+        }
+        auto fp32 = std::make_shared<Tensor>();
+        fp32->Assign<float>(boundaries, {static_cast<int64_t>(boundaries.size())});
+        for (float scale : {0.125f, 1.0f, 3.0f}) {
+            for (const auto& input : {bf16, fp32}) {
+                auto out = std::make_shared<Tensor>(input->dims().data());
+                out->set_data_type(dtype); out->set_quantization({true, scale});
+                auto cast = feather::KernelDispatcher::instance().create(DeviceType::CUDA, input->data_type(), "Cast");
+                ASSERT_NE(cast, nullptr);
+                feather::operators::CastParam param{};
+                param.input = input; param.out = out; param.to = dtype;
+                cast->SetParam(&param);
+                ASSERT_EQ(cast->compute(), 0);
+                const auto* encoded = static_cast<const uint8_t*>(out->raw_data());
+                for (int64_t i = 0; i < input->numel(); ++i) {
+                    const float value = input == bf16 ? feather::BFloat16ToFloat(bf16_values[i].bits) : boundaries[i];
+                    // Arithmetic may canonicalize a signaling NaN's sign or
+                    // payload before encoding. Its NaN class must survive.
+                    if (std::isnan(value)) {
+                        ASSERT_TRUE(std::isnan(decode(encoded[i])));
+                        continue;
+                    }
+                    ASSERT_EQ(encoded[i], encode(value / scale))
+                        << "dtype=" << static_cast<int>(dtype) << " scale=" << scale << " index=" << i;
+                }
+            }
+        }
+    }
+}
+
+TEST(fp8_test, CudaFp8DecodePreservesEveryPayloadAndSignedZero) {
+    if (!HasCudaFp8TestDevice()) GTEST_SKIP();
+    for (const auto dtype : {DataType::FP8E4M3, DataType::FP8E5M2}) {
+        for (float scale : {0.125f, 1.0f, 3.0f}) {
+            auto input = std::make_shared<Tensor>(std::vector<int64_t>{256});
+            input->set_data_type(dtype); input->set_quantization({true, scale});
+            auto* payload = static_cast<uint8_t*>(input->mutable_data(input->memory_size()));
+            for (int i = 0; i < 256; ++i) payload[i] = static_cast<uint8_t>(i);
+            auto output = std::make_shared<Tensor>(std::vector<int64_t>{256});
+            output->set_data_type(DataType::FP32);
+            auto cast = feather::KernelDispatcher::instance().create(DeviceType::CUDA, dtype, "Cast");
+            ASSERT_NE(cast, nullptr);
+            feather::operators::CastParam param{};
+            param.input = input; param.out = output; param.to = DataType::FP32;
+            cast->SetParam(&param);
+            ASSERT_EQ(cast->compute(), 0);
+            for (int i = 0; i < 256; ++i) {
+                const float expected = (dtype == DataType::FP8E4M3 ? feather::Fp8E4M3ToFloat(i) :
+                                                                                feather::Fp8E5M2ToFloat(i)) * scale;
+                const float actual = output->data<float>()[i];
+                if (std::isnan(expected)) EXPECT_TRUE(std::isnan(actual));
+                else {
+                    EXPECT_EQ(actual, expected) << "payload=" << i;
+                    EXPECT_EQ(std::signbit(actual), std::signbit(expected)) << "payload=" << i;
+                }
+            }
+        }
+    }
+}
+
 TEST(fp8_test, CudaFp8MatMulUsesCublasLtOnSm89) {
 #if !defined(FEATHER_WITH_CUDA) || !defined(FEATHER_WITH_CUBLASLT)
     GTEST_SKIP() << "CUDA FP8 cuBLASLt kernels are not built";
@@ -1430,8 +1746,19 @@ TEST(fp8_test, CudaFp8MatMulUsesCublasLtOnSm89) {
     feather::kernel::cuda_detail::ResetLastCudaFp8MatmulBackend();
     kernel->SetParam(&param);
     ASSERT_EQ(kernel->compute(), 0);
+    // Ada FP8 support was added in cuBLAS 12.1 Update 1 (12.1.3.1).
+    // Earlier libraries only support native FP8 on Hopper; Ada must still
+    // use the GPU BF16 Tensor Core fallback rather than the scalar path.
+    // https://docs.nvidia.com/cuda/archive/12.1.1/cuda-toolkit-release-notes/index.html#cublas-release-12-1-update-1
+    const size_t cublas_lt_version = cublasLtGetVersion();
+    const bool ada_without_native_fp8 =
+        properties.major == 8 && properties.minor == 9 && cublas_lt_version < 120103;
+    const auto expected_backend = ada_without_native_fp8
+                                      ? feather::kernel::cuda_detail::CudaFp8MatmulBackend::kBf16TensorCoreFallback
+                                      : feather::kernel::cuda_detail::CudaFp8MatmulBackend::kCublasLt;
     EXPECT_EQ(feather::kernel::cuda_detail::LastCudaFp8MatmulBackend(),
-              feather::kernel::cuda_detail::CudaFp8MatmulBackend::kCublasLt);
+              expected_backend)
+        << "SM" << properties.major << properties.minor << ", cuBLASLt version=" << cublas_lt_version;
     EXPECT_EQ(out->data<Fp8E4M3>()[0].bits, 0x00U);
     EXPECT_EQ(out->data<Fp8E4M3>()[1].bits, 0x70U);
     EXPECT_EQ(out->data<Fp8E4M3>()[2].bits, 0xf0U);

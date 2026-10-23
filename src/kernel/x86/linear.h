@@ -18,11 +18,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "src/kernel/x86/linear_fp32.h"
 
 namespace feather {
+class Tensor;
 namespace kernel {
 namespace x86 {
 
@@ -52,15 +54,16 @@ class PackedBf16Rhs {
    public:
     bool Pack(const uint16_t* rhs, int64_t k, int64_t n, uint64_t source_version = 0);
     bool Matches(const uint16_t* rhs, int64_t k, int64_t n, uint64_t source_version = 0) const;
-    const uint16_t* data() const { return data_.data(); }
-    size_t size() const { return data_.size(); }
+    bool Pack(const Tensor& source, int64_t k, int64_t n);
+    const uint16_t* data() const { return data_ ? data_->data() : nullptr; }
+    size_t size() const { return data_ ? data_->size() : 0; }
 
    private:
     const uint16_t* source_{nullptr};
     int64_t k_{0};
     int64_t n_{0};
     uint64_t source_version_{0};
-    std::vector<uint16_t> data_;
+    std::shared_ptr<const std::vector<uint16_t>> data_;
 };
 
 // Stores a read-only BF16 RHS supplied as [N, K] for transposed-B Gemm in
@@ -70,15 +73,16 @@ class PackedBf16TransposedRhs {
    public:
     bool Pack(const uint16_t* rhs_transposed, int64_t k, int64_t n, uint64_t source_version = 0);
     bool Matches(const uint16_t* rhs_transposed, int64_t k, int64_t n, uint64_t source_version = 0) const;
-    const uint16_t* data() const { return data_.data(); }
-    size_t size() const { return data_.size(); }
+    bool Pack(const Tensor& source, int64_t k, int64_t n);
+    const uint16_t* data() const { return data_ ? data_->data() : nullptr; }
+    size_t size() const { return data_ ? data_->size() : 0; }
 
    private:
     const uint16_t* source_{nullptr};
     int64_t k_{0};
     int64_t n_{0};
     uint64_t source_version_{0};
-    std::vector<uint16_t> data_;
+    std::shared_ptr<const std::vector<uint16_t>> data_;
 };
 
 int32_t ComputeLinearRowMajorX86Bf16(const uint16_t* lhs, const uint16_t* rhs, const uint16_t* bias, int64_t m,

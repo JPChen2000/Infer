@@ -64,7 +64,7 @@ int32_t ComputeExpandFallbackBf16(feather::operators::ExpandParam* param) {
     const auto input_strides = common_tensor_detail::ComputeStrides(input_dims);
     std::vector<int64_t> coordinates;
     const auto* input = static_cast<const uint16_t*>(param->input->raw_data());
-    auto* output = static_cast<uint16_t*>(param->out->raw_data());
+    auto* output = static_cast<uint16_t*>(param->out->mutable_data(param->out->memory_size()));
     for (int64_t linear = 0; linear < param->out->numel(); ++linear) {
         common_tensor_detail::LinearToCoords(linear, output_dims, output_strides, &coordinates);
         output[linear] = input[common_tensor_detail::BroadcastOffset(coordinates, input_dims, input_strides)];
@@ -110,7 +110,7 @@ int32_t ComputeExpandBf16(feather::operators::ExpandParam* param) {
     const auto& output_dims = param->out->dims().data();
     param->out->set_data_type(DataType::BF16);
     const auto* input = static_cast<const uint16_t*>(param->input->raw_data());
-    auto* output = static_cast<uint16_t*>(param->out->raw_data());
+    auto* output = static_cast<uint16_t*>(param->out->mutable_data(param->out->memory_size()));
 
     int64_t outer = 0;
     int64_t repeat = 0;

@@ -567,7 +567,7 @@ inline int PrepareFp8WeightColumnMajor(const Tensor* tensor, const T* source, in
 }
 
 template <typename T>
-inline int LaunchFp8Bf16TensorCoreFallback(const T* a, const T* b, const T* bias, T* out, int64_t m, int64_t k,
+inline int LaunchFp8Bf16TensorCoreFallback(const T* a, const T* b, const Tensor* b_tensor, const T* bias, T* out, int64_t m, int64_t k,
                                            int64_t n, int bias_mode, float a_scale, float b_scale, float bias_scale,
                                            float out_scale, float alpha, float beta, bool trans_b) {
     size_t a_bytes = 0;
@@ -580,7 +580,11 @@ inline int LaunchFp8Bf16TensorCoreFallback(const T* a, const T* b, const T* bias
     void* a_raw = nullptr;
     void* b_raw = nullptr;
     void* output_raw = nullptr;
-    if (AcquireTemporaryDeviceBuffer(a_bytes, &a_raw) != 0 || AcquireTemporaryDeviceBuffer(b_bytes, &b_raw) != 0 ||
+    const void* prepared_weight = nullptr;
+    const bool cached = TryAcquireFp8Bf16Weight(b_tensor, b, static_cast<size_t>(k * n), b_scale,
+                                               &prepared_weight) == 0;
+    if (AcquireTemporaryDeviceBuffer(a_bytes, &a_raw) != 0 ||
+        (!cached && AcquireTemporaryDeviceBuffer(b_bytes, &b_raw) != 0) ||
         AcquireTemporaryDeviceBuffer(output_bytes, &output_raw) != 0) {
         if (output_raw != nullptr) ReleaseTemporaryDeviceBuffer(output_raw, output_bytes);
         if (b_raw != nullptr) ReleaseTemporaryDeviceBuffer(b_raw, b_bytes);
@@ -591,11 +595,14 @@ inline int LaunchFp8Bf16TensorCoreFallback(const T* a, const T* b, const T* bias
     const int b_blocks = static_cast<int>(DivUp(k * n, kCudaThreads));
     ConvertFp8ToBf16KernelCuda<T><<<a_blocks, kCudaThreads, 0, InferenceStream()>>>(
         a, static_cast<BFloat16*>(a_raw), m * k, a_scale);
-    ConvertFp8ToBf16KernelCuda<T><<<b_blocks, kCudaThreads, 0, InferenceStream()>>>(
-        b, static_cast<BFloat16*>(b_raw), k * n, b_scale);
+    if (!cached) {
+        ConvertFp8ToBf16KernelCuda<T><<<b_blocks, kCudaThreads, 0, InferenceStream()>>>(
+            b, static_cast<BFloat16*>(b_raw), k * n, b_scale);
+        prepared_weight = b_raw;
+    }
     int status = CudaCheck(cudaGetLastError());
     if (status == 0) {
-        status = LaunchCublasMatMulBf16ToFp32(static_cast<BFloat16*>(a_raw), static_cast<BFloat16*>(b_raw),
+        status = LaunchCublasMatMulBf16ToFp32(static_cast<BFloat16*>(a_raw), static_cast<const BFloat16*>(prepared_weight),
                                               static_cast<float*>(output_raw), m, k, n, trans_b);
     }
     if (status == 0) {
@@ -611,7 +618,7 @@ inline int LaunchFp8Bf16TensorCoreFallback(const T* a, const T* b, const T* bias
 }
 
 template <typename T>
-inline int LaunchFp8Bf16TensorCoreFallbackToBf16(const T* a, const T* b, BFloat16* out, int64_t m, int64_t k,
+inline int LaunchFp8Bf16TensorCoreFallbackToBf16(const T* a, const T* b, const Tensor* b_tensor, BFloat16* out, int64_t m, int64_t k,
                                                  int64_t n, float a_scale, float b_scale, float output_scale) {
     size_t a_bytes = 0;
     size_t b_bytes = 0;
@@ -623,7 +630,11 @@ inline int LaunchFp8Bf16TensorCoreFallbackToBf16(const T* a, const T* b, BFloat1
     void* a_raw = nullptr;
     void* b_raw = nullptr;
     void* output_raw = nullptr;
-    if (AcquireTemporaryDeviceBuffer(a_bytes, &a_raw) != 0 || AcquireTemporaryDeviceBuffer(b_bytes, &b_raw) != 0 ||
+    const void* prepared_weight = nullptr;
+    const bool cached = TryAcquireFp8Bf16Weight(b_tensor, b, static_cast<size_t>(k * n), b_scale,
+                                               &prepared_weight) == 0;
+    if (AcquireTemporaryDeviceBuffer(a_bytes, &a_raw) != 0 ||
+        (!cached && AcquireTemporaryDeviceBuffer(b_bytes, &b_raw) != 0) ||
         AcquireTemporaryDeviceBuffer(output_bytes, &output_raw) != 0) {
         if (output_raw != nullptr) ReleaseTemporaryDeviceBuffer(output_raw, output_bytes);
         if (b_raw != nullptr) ReleaseTemporaryDeviceBuffer(b_raw, b_bytes);
@@ -634,11 +645,14 @@ inline int LaunchFp8Bf16TensorCoreFallbackToBf16(const T* a, const T* b, BFloat1
     const int b_blocks = static_cast<int>(DivUp(k * n, kCudaThreads));
     ConvertFp8ToBf16KernelCuda<T><<<a_blocks, kCudaThreads, 0, InferenceStream()>>>(
         a, static_cast<BFloat16*>(a_raw), m * k, a_scale);
-    ConvertFp8ToBf16KernelCuda<T><<<b_blocks, kCudaThreads, 0, InferenceStream()>>>(
-        b, static_cast<BFloat16*>(b_raw), k * n, b_scale);
+    if (!cached) {
+        ConvertFp8ToBf16KernelCuda<T><<<b_blocks, kCudaThreads, 0, InferenceStream()>>>(
+            b, static_cast<BFloat16*>(b_raw), k * n, b_scale);
+        prepared_weight = b_raw;
+    }
     int status = CudaCheck(cudaGetLastError());
     if (status == 0) {
-        status = LaunchCublasMatMulBf16ToFp32(static_cast<BFloat16*>(a_raw), static_cast<BFloat16*>(b_raw),
+        status = LaunchCublasMatMulBf16ToFp32(static_cast<BFloat16*>(a_raw), static_cast<const BFloat16*>(prepared_weight),
                                               static_cast<float*>(output_raw), m, k, n, false);
     }
     if (status == 0) {
@@ -810,7 +824,7 @@ inline int LaunchFp8MatMulKernelCuda(const T* a, const T* b, const Tensor* b_ten
         SetLastCudaFp8MatmulBackend(CudaFp8MatmulBackend::kCublasLt);
         return 0;
     }
-    if (LaunchFp8Bf16TensorCoreFallback(a, b, bias, out, m, k, n, bias_mode, a_scale, b_scale, bias_scale, out_scale,
+    if (LaunchFp8Bf16TensorCoreFallback(a, b, b_tensor, bias, out, m, k, n, bias_mode, a_scale, b_scale, bias_scale, out_scale,
                                         alpha, beta, trans_b) == 0) {
         SetLastCudaFp8MatmulBackend(CudaFp8MatmulBackend::kBf16TensorCoreFallback);
         return 0;
@@ -834,7 +848,7 @@ inline int LaunchFp8MatMulToBf16KernelCuda(const T* a, const T* b, const Tensor*
         SetLastCudaFp8MatmulBackend(CudaFp8MatmulBackend::kCublasLt);
         return 0;
     }
-    if (LaunchFp8Bf16TensorCoreFallbackToBf16(a, b, out, m, k, n, a_scale, b_scale, output_scale) == 0) {
+    if (LaunchFp8Bf16TensorCoreFallbackToBf16(a, b, b_tensor, out, m, k, n, a_scale, b_scale, output_scale) == 0) {
         SetLastCudaFp8MatmulBackend(CudaFp8MatmulBackend::kBf16TensorCoreFallback);
         return 0;
     }

@@ -628,14 +628,23 @@ TEST(qwen_gemm_argmax_test, QwenPassKeepsCudaFp8LinearAsGenericOps) {
     feather::RuntimeGraph runtime;
     feather::GraphLowering lowering;
     ASSERT_EQ(lowering.Lower(graph, &runtime), 0);
+    auto output = runtime.GetTensor("output_bf16");
+    ASSERT_NE(output, nullptr);
+    // A previous standalone kernel may have left an entry for this Tensor
+    // address in the default context. Reads must use the graph's own backend.
+    std::fill_n(output->mutable_data<feather::BFloat16>(), output->numel(),
+                feather::BFloat16{feather::FloatToBFloat16(42.0f)});
+    void* stale_device = nullptr;
+    ASSERT_EQ(feather::kernel::cuda_detail::AcquireTensorDevice(
+                  output.get(), output->numel() * sizeof(feather::BFloat16), output->raw_data(), &stale_device), 0);
     {
+        auto scope = runtime.Backend().Enter();
         feather::kernel::cuda_detail::DeferredHostSyncScope deferred_host_sync;
         ASSERT_EQ(runtime.Run(), 0);
     }
-    auto output = runtime.GetTensor("output_bf16");
-    ASSERT_NE(output, nullptr);
-    ASSERT_EQ(feather::kernel::cuda_detail::SyncTensorToHost(
-                  output.get(), output->numel() * sizeof(feather::BFloat16), output->raw_data()), 0);
+    const auto read_status = runtime.Backend().ReadHost(*output);
+    ASSERT_TRUE(read_status.ok()) << read_status.message();
+    feather::kernel::cuda_detail::ReleaseTensorDevice(output.get());
     ASSERT_EQ(output->numel(), 3);
     EXPECT_EQ(output->data<feather::BFloat16>()[0].bits, feather::FloatToBFloat16(-3.0f));
     EXPECT_EQ(output->data<feather::BFloat16>()[1].bits, feather::FloatToBFloat16(2.5f));

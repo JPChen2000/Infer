@@ -187,7 +187,7 @@ int32_t ComputeQwenBf16DepthwiseConv2D(const feather::operators::Conv2dParam* pa
     const uint16_t* weight = param->w->data<uint16_t>();
     const uint16_t* bias =
         param->bias != nullptr && param->bias->IsInitialized() ? param->bias->data<uint16_t>() : nullptr;
-    auto* output = static_cast<uint16_t*>(param->out->raw_data());
+    auto* output = static_cast<uint16_t*>(param->out->mutable_data(param->out->memory_size()));
 
     const size_t worker_count = QwenBf16DepthwiseWorkerCount(channels);
 #if !defined(FEATHER_WITH_OPENMP)

@@ -48,7 +48,7 @@ class PassManager {
 
 std::shared_ptr<PassManager> CreateDefaultPassManager();
 std::shared_ptr<PassManager> CreateYoloPassManager();
-std::shared_ptr<PassManager> CreateQwenPassManager();
+std::shared_ptr<PassManager> CreateQwenPassManager(bool fuse_logits_argmax = true);
 
 }  // namespace feather
 

@@ -63,12 +63,19 @@ class Buffer {
         m_malloc = false;
     }
 
-    explicit Buffer(void* data, size_t size, std::shared_ptr<void> owner, bool read_only = false) {
+    explicit Buffer(void* data, size_t size, std::shared_ptr<const void> owner, bool read_only = false) {
         m_read_only = read_only;
         m_data = data;
         m_size = size;
         m_owner = std::move(owner);
         m_malloc = false;
+    }
+
+    // A read-only view retains its mapping or allocation without granting a
+    // mutable owner handle to clients of Storage::buffer().
+    explicit Buffer(const void* data, size_t size, std::shared_ptr<const void> owner, bool read_only = true)
+        : Buffer(const_cast<void*>(data), size, std::move(owner), true) {
+        CHECK(read_only);
     }
 
     explicit Buffer(MemBlock* block) {
@@ -114,7 +121,7 @@ class Buffer {
         }
     }
 
-    void* data() { return m_data; }
+    const void* data() const { return m_data; }
     bool read_only() const { return m_read_only; }
 
     void set_data(void* data, size_t size) {
@@ -126,16 +133,18 @@ class Buffer {
         m_released = false;
     };
 
-    size_t size() { return m_size; }
+    size_t size() const { return m_size; }
 
    private:
+    friend class Storage;
+    void* MutableData() const { return m_data; }
     bool m_read_only{};
     bool m_malloc{};
     bool m_released{};
     void* m_data{};
     size_t m_size{};
     MemBlock* m_block{};
-    std::shared_ptr<void> m_owner;
+    std::shared_ptr<const void> m_owner;
     std::function<void(MemBlock*)> m_releaser;
 };
 

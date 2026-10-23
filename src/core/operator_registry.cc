@@ -32,7 +32,15 @@ OperatorRegistry& OperatorRegistry::instance() {
     return registry;
 }
 
-void OperatorRegistry::Register(const std::string& op_type, Builder builder) { registry_[op_type] = std::move(builder); }
+void OperatorRegistry::Register(const std::string& op_type, Builder builder) {
+    auto replacement = std::make_shared<const Builder>(std::move(builder));
+    {
+        std::lock_guard<std::mutex> lock(registry_mutex_);
+        registry_[op_type].swap(replacement);
+    }
+    // Retire captured resources after unlocking: their destructors can invoke
+    // user code, including another registration.
+}
 
 std::shared_ptr<OpBase> OperatorRegistry::Create(const model::NodeDesc& node, TensorMap& tensors) const {
     return Create(node, tensors, BuildContext{ActiveKernelDevice()});
@@ -40,15 +48,35 @@ std::shared_ptr<OpBase> OperatorRegistry::Create(const model::NodeDesc& node, Te
 
 std::shared_ptr<OpBase> OperatorRegistry::Create(const model::NodeDesc& node, TensorMap& tensors,
                                                  const BuildContext& context) const {
-    auto it = registry_.find(node.op_type);
-    if (it == registry_.end()) {
-        return nullptr;
+    last_create_status_ = Status::Ok();
+    KernelDispatcher::ResetSelectionStatus();
+    std::shared_ptr<const Builder> builder;
+    {
+        std::lock_guard<std::mutex> lock(registry_mutex_);
+        const auto it = registry_.find(node.op_type);
+        if (it == registry_.end()) {
+            last_create_status_ = Status::Error(StatusCode::kNotFound, "unregistered operator: " + node.op_type);
+            return nullptr;
+        }
+        builder = it->second;
     }
     KernelDeviceScope device_scope(context.device);
     KernelSelectionScope selection_scope(context.fallback, &node, context.defer_kernels, context.workspace_limit);
-    auto op = it->second(node, tensors, context);
+    // User builders may register replacements or recursively create operators.
+    // Keep this invocation alive independently and never hold the map lock here.
+    auto op = (*builder)(node, tensors, context);
     if (op != nullptr) {
         op->SetExecutionDevice(context.device);
+        auto provisional = op->DetachKernel();
+        if (provisional) {
+            last_create_status_ = KernelBase::FinalizeSelection(&provisional);
+            if (!last_create_status_.ok()) return nullptr;
+            op->AttachKernel(std::move(provisional));
+        }
+    } else {
+        last_create_status_ = KernelDispatcher::LastSelectionStatus();
+        if (last_create_status_.ok())
+            last_create_status_ = Status::Error(StatusCode::kBuildFailed, "operator construction failed: " + node.op_type);
     }
     return op;
 }

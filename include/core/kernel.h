@@ -27,6 +27,7 @@
 #include <typeindex>
 #include <mutex>
 #include "core/status.h"
+#include "model/model_format.h"
 
 #include "core/tensor.h"
 using feather::Tensor;
@@ -140,6 +141,20 @@ class KernelBase {
     }
     std::unique_ptr<KernelBase> Clone() const;
     ParameterBinder SnapshotParameters() const { return bind_param_; }
+    bool HasSelectionRecipe() const { return static_cast<bool>(select_bound_); }
+    Status SelectBoundCandidate(std::unique_ptr<KernelBase>* selected) const {
+        if (!selected) return Status::Error(StatusCode::kInvalidArgument, "null selected kernel destination");
+        if (!select_bound_) return Status::Error(StatusCode::kUnsupported, "kernel has no candidate recipe");
+        return select_bound_(*this, selected);
+    }
+    static Status FinalizeSelection(std::unique_ptr<KernelBase>* bound) {
+        if (!bound || !*bound) return Status::Error(StatusCode::kInvalidArgument, "null bound kernel");
+        if (!(*bound)->HasSelectionRecipe()) return (*bound)->Supports();
+        std::unique_ptr<KernelBase> selected;
+        const auto status = (*bound)->SelectBoundCandidate(&selected);
+        if (status.ok()) *bound = std::move(selected);
+        return status;
+    }
     virtual Status Supports() const { return Status::Ok(); }
     bool OwnsParam() const { return param_owner_ != nullptr; }
     // Optional one-time preparation hook for immutable weights and other
@@ -173,6 +188,11 @@ class KernelBase {
     DataType data_type_{DataType::UNKNOWN};
     DataLayout layout_{DataLayout::ND};
     std::string op_type_;
+
+   private:
+    friend class KernelDispatcher;
+    using BoundSelection = std::function<Status(const KernelBase&, std::unique_ptr<KernelBase>*)>;
+    BoundSelection select_bound_;
 };
 
 // Static operators retain a parameter recipe. Concrete backend instances are
@@ -221,24 +241,95 @@ class KernelDispatcher {
     void registerKernel(DeviceType dev, DataType dtype, const std::string& op_type, KernelFactory factory) {
         registerKernel(dev, dtype, DataLayout::ND, op_type, std::move(factory));
     }
+    // Returns a provisional handle for parameter attachment. OperatorRegistry
+    // calls FinalizeSelection after binding; low-level callers must do likewise
+    // before taking a factory snapshot or executing with candidate fallback.
     std::unique_ptr<KernelBase> create(const KernelRequest& request, KernelFallbackPolicy policy = KernelFallbackPolicy::kAllowCommon) const {
+        last_selection_status_ = Status::Ok();
         auto dev = request.device;
         if (dev == DeviceType::X86 && !HostSupportsX86Kernels()) {
-            if (policy == KernelFallbackPolicy::kRequireRequested) return nullptr;
+            if (policy == KernelFallbackPolicy::kRequireRequested) {
+                last_selection_status_ = Status::Error(StatusCode::kUnsupported, "requested X86 backend is unavailable");
+                return nullptr;
+            }
             dev = DeviceType::COMMON;
         }
-        if (auto kernel = createExact(dev, request.layout, request)) return kernel;
-        if (request.layout != DataLayout::ND)
-            if (auto kernel = createExact(dev, DataLayout::ND, request)) return kernel;
-        if (policy == KernelFallbackPolicy::kRequireRequested ||
-            (request.device == DeviceType::CUDA && request.dtype == DataType::INT8)) return nullptr;
-        if (dev != DeviceType::COMMON) {
-            if (auto kernel = createExact(DeviceType::COMMON, request.layout, request)) return kernel;
-            if (request.layout != DataLayout::ND)
-                if (auto kernel = createExact(DeviceType::COMMON, DataLayout::ND, request)) return kernel;
+        std::vector<Choice> choices;
+        {
+            std::lock_guard<std::recursive_mutex> lock(registry_mutex_);
+            AppendChoices(dev, request.layout, request, &choices);
+            if (request.layout != DataLayout::ND) AppendChoices(dev, DataLayout::ND, request, &choices);
+            if (policy == KernelFallbackPolicy::kAllowCommon && dev != DeviceType::COMMON &&
+                !(request.device == DeviceType::CUDA && request.dtype == DataType::INT8)) {
+                AppendChoices(DeviceType::COMMON, request.layout, request, &choices);
+                if (request.layout != DataLayout::ND) AppendChoices(DeviceType::COMMON, DataLayout::ND, request, &choices);
+            }
         }
+        // Factories and predicates are captured together. A provisional handle
+        // receives parameters from its operator before final selection; plans
+        // retain only the accepted factory and parameter snapshot afterward.
+        auto node = request.node ? std::make_shared<const model::NodeDesc>(*request.node) : nullptr;
+        auto captured = request; captured.node = node.get();
+        const bool defer = KernelSelectionScope::Defer();
+        std::string rejections;
+        for (const auto& choice : choices) {
+            auto status = PredicateStatus(choice, captured);
+            if (!status.ok()) {
+                RecordRejection(choice, status, &rejections);
+                if (status.code() == StatusCode::kUnsupported) continue;
+                last_selection_status_ = status.WithContext(rejections); return nullptr;
+            }
+            auto provisional = defer ? std::make_unique<DeferredKernel>() : choice.candidate.factory();
+            if (!provisional) {
+                RecordRejection(choice, Status::Error(StatusCode::kUnsupported, "factory returned no kernel"), &rejections);
+                continue;
+            }
+            InstallMetadata(*provisional, choice, captured);
+            provisional->select_bound_ = [choices, captured, node, defer](const KernelBase& bound,
+                                                                      std::unique_ptr<KernelBase>* selected) {
+                std::string rejected;
+                for (const auto& candidate : choices) {
+                    auto checked = PredicateStatus(candidate, captured);
+                    std::unique_ptr<KernelBase> concrete;
+                    if (checked.ok()) {
+                        concrete = candidate.candidate.factory();
+                        if (!concrete) checked = Status::Error(StatusCode::kUnsupported, "factory returned no kernel");
+                        else {
+                            InstallMetadata(*concrete, candidate, captured);
+                            try {
+                                if (bound.clone_param_) bound.clone_param_(*concrete);
+                                else if (bound.param_) concrete->SetParam(bound.param_);
+                                checked = concrete->Supports();
+                            } catch (const std::exception& error) {
+                                checked = Status::Error(StatusCode::kInvalidArgument, error.what());
+                            }
+                        }
+                    }
+                    if (!checked.ok()) {
+                        RecordRejection(candidate, checked, &rejected);
+                        if (checked.code() == StatusCode::kUnsupported) continue;
+                        return checked.WithContext(rejected);
+                    }
+                    if (defer) {
+                        auto recipe = std::make_unique<DeferredKernel>();
+                        InstallMetadata(*recipe, candidate, captured);
+                        if (bound.clone_param_) bound.clone_param_(*recipe);
+                        else if (bound.param_) recipe->SetParam(bound.param_);
+                        *selected = std::move(recipe);
+                    } else *selected = std::move(concrete);
+                    return Status::Ok();
+                }
+                return Status::Error(StatusCode::kUnsupported,
+                    "no supported kernel for op=" + captured.op_type + rejected);
+            };
+            return provisional;
+        }
+        last_selection_status_ = Status::Error(StatusCode::kUnsupported,
+            "no supported kernel for op=" + request.op_type + rejections);
         return nullptr;
     }
+    static const Status& LastSelectionStatus() { return last_selection_status_; }
+    static void ResetSelectionStatus() { last_selection_status_ = Status::Ok(); }
     std::unique_ptr<KernelBase> create(DeviceType dev, DataType dtype, DataLayout layout, const std::string& op_type) const {
         return create(KernelRequest{dev, dtype, layout, op_type, {}, KernelSelectionScope::Node(), KernelSelectionScope::WorkspaceLimit()}, KernelSelectionScope::Policy());
     }
@@ -247,26 +338,27 @@ class KernelDispatcher {
     }
  private:
     struct Candidate { std::string id; KernelFactory factory; SupportPredicate supports; int priority; };
-    std::unique_ptr<KernelBase> createExact(DeviceType dev, DataLayout layout, const KernelRequest& request) const {
-        std::lock_guard<std::recursive_mutex> lock(registry_mutex_);
-        const auto dev_it = registry_.find(dev); if (dev_it == registry_.end()) return nullptr;
-        const auto dtype_it = dev_it->second.find(request.dtype); if (dtype_it == dev_it->second.end()) return nullptr;
-        const auto layout_it = dtype_it->second.find(layout); if (layout_it == dtype_it->second.end()) return nullptr;
-        const auto op_it = layout_it->second.find(request.op_type); if (op_it == layout_it->second.end()) return nullptr;
-        auto actual = request; actual.device = dev;
-        for (const auto& candidate : op_it->second) {
-            if (candidate.supports && !candidate.supports(actual).ok()) continue;
-            std::unique_ptr<KernelBase> kernel;
-            if (KernelSelectionScope::Defer()) kernel = std::make_unique<DeferredKernel>();
-            else kernel = candidate.factory();
-            if (kernel) {
-                kernel->SetMetadata(dev, request.dtype, request.layout, request.op_type);
-                kernel->SetFactory(candidate.factory);
-                return kernel;
-            }
-        }
-        return nullptr;
+    struct Choice { Candidate candidate; DeviceType device; };
+    static Status PredicateStatus(const Choice& choice, const KernelRequest& request) {
+        auto actual = request; actual.device = choice.device;
+        return choice.candidate.supports ? choice.candidate.supports(actual) : Status::Ok();
     }
+    static void InstallMetadata(KernelBase& kernel, const Choice& choice, const KernelRequest& request) {
+        kernel.SetMetadata(choice.device, request.dtype, request.layout, request.op_type);
+        kernel.SetFactory(choice.candidate.factory);
+    }
+    static void RecordRejection(const Choice& choice, const Status& status, std::string* rejected) {
+        *rejected += "; candidate=" + (choice.candidate.id.empty() ? std::string("default") : choice.candidate.id) +
+            " device=" + std::to_string(static_cast<int>(choice.device)) + ": " + status.message();
+    }
+    void AppendChoices(DeviceType dev, DataLayout layout, const KernelRequest& request, std::vector<Choice>* choices) const {
+        const auto dev_it = registry_.find(dev); if (dev_it == registry_.end()) return;
+        const auto dtype_it = dev_it->second.find(request.dtype); if (dtype_it == dev_it->second.end()) return;
+        const auto layout_it = dtype_it->second.find(layout); if (layout_it == dtype_it->second.end()) return;
+        const auto op_it = layout_it->second.find(request.op_type); if (op_it == layout_it->second.end()) return;
+        for (const auto& candidate : op_it->second) choices->push_back({candidate, dev});
+    }
+    inline static thread_local Status last_selection_status_;
     mutable std::recursive_mutex registry_mutex_;
     std::map<DeviceType, std::map<DataType, std::map<DataLayout, std::map<std::string, std::vector<Candidate>>>>> registry_;
 };

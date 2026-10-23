@@ -346,7 +346,7 @@ int32_t ComputeTransposeRaw(feather::operators::TransposeParam* param, DataType 
         return 0;
     }
     const T* input = param->input->data<T>();
-    T* output = static_cast<T*>(param->out->raw_data());
+    T* output = static_cast<T*>(param->out->mutable_data(param->out->memory_size()));
 
     if (IsVitMiddleAxesTranspose(param)) {
         const auto& dims = in_dims;

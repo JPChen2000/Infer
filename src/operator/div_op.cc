@@ -19,6 +19,8 @@
 
 #include "core/operator_registry.h"
 #include "src/operator/elementwise_utils.h"
+#include "src/operator/tensor_op_utils.h"
+#include "src/kernel/yolo_selection.h"
 
 namespace feather {
 namespace operators {
@@ -39,6 +41,7 @@ std::shared_ptr<OpBase> BuildDivOp(const model::NodeDesc& node, OperatorRegistry
         return nullptr;
     }
     kernel::EnsureDivKernelsRegistered();
+    kernel::EnsureYoloSelectionKernelsRegistered();
     auto kernel = CreateKernelForTensor(context.device, "Div", {param.lhs, param.rhs, op->outputs().front()});
     if (kernel == nullptr) {
         return nullptr;
@@ -63,9 +66,23 @@ void DivOp::SyncIO() {
     SetOutputs({param_.out});
 }
 
-int32_t DivOp::CheckShape() const { return elementwise_detail::CheckBinaryParam(param_); }
+int32_t DivOp::CheckShape() const {
+    if (param_.lhs && param_.rhs &&
+        (param_.lhs->data_type() == DataType::INT64 || param_.rhs->data_type() == DataType::INT64) &&
+        param_.lhs->data_type() != param_.rhs->data_type()) return -1;
+    return elementwise_detail::CheckBinaryParam(param_);
+}
 
 int32_t DivOp::InferOutputShapes() {
+    if (param_.lhs && param_.lhs->data_type() == DataType::INT64) {
+        if (CheckShape() != 0) return -1;
+        std::vector<int64_t> shape;
+        if (!YoloSelectionBroadcast(param_.lhs->dims().data(), param_.rhs->dims().data(), &shape)) return -1;
+        param_.out = tensor_op_detail::AllocateOutput(param_.out, shape, DataType::INT64);
+        if (!param_.out) return -1;
+        SyncIO();
+        return 0;
+    }
     const auto status = elementwise_detail::InferBinaryOutput(&param_);
     if (status == 0) {
         SyncIO();

@@ -77,12 +77,12 @@ std::shared_ptr<PassManager> CreateDefaultPassManager() {
     return manager;
 }
 
-std::shared_ptr<PassManager> CreateQwenPassManager() {
+std::shared_ptr<PassManager> CreateQwenPassManager(bool fuse_logits_argmax) {
     auto manager = std::make_shared<PassManager>();
     manager->AddPass(std::make_unique<SigmoidMulFusionPass>());
     manager->AddPass(std::make_unique<MatMulAddFusionPass>());
     manager->AddPass(std::make_unique<QwenMatMulAddFusionPass>());
-    manager->AddPass(std::make_unique<QwenGemmArgmaxFusionPass>());
+    if (fuse_logits_argmax) manager->AddPass(std::make_unique<QwenGemmArgmaxFusionPass>());
     manager->AddPass(std::make_unique<QwenGatedDeltaFusionPass>());
     manager->AddPass(std::make_unique<QwenDepthwiseConvFusionPass>());
     manager->AddPass(std::make_unique<QwenRmsNormFusionPass>());

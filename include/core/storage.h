@@ -17,12 +17,15 @@
 #define FEATHER_CORE_STORAGE_H
 
 #include <atomic>
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <mutex>
 #include "core/memory.h"
 
 namespace feather {
+
+namespace kernel { namespace cuda_detail { class StorageAccess; } }
 
 // Shared allocation identity. Tensor supplies shape and view offset; Storage
 // supplies ownership and mutation tracking for all views of that allocation.
@@ -38,11 +41,11 @@ class DeferredAllocationScope {
 
 class Storage {
  public:
-    explicit Storage(std::shared_ptr<Buffer> buffer, DeviceType device = DeviceType::COMMON, int device_index = 0)
+    explicit Storage(std::shared_ptr<const Buffer> buffer, DeviceType device = DeviceType::COMMON, int device_index = 0)
         : buffer_(std::move(buffer)), capacity_(buffer_ ? buffer_->size() : 0),
           device_(device), device_index_(device_index), materialized_(true) { MarkMutated(); }
     explicit Storage(size_t bytes) : capacity_(bytes), deferred_(true) { MarkMutated(); }
-    void* data() const {
+    const void* data() const {
         if (deferred_) std::call_once(allocation_once_, [this] {
             buffer_ = std::make_shared<Buffer>(capacity_);
             materialized_.store(true, std::memory_order_release);
@@ -55,31 +58,43 @@ class Storage {
     DeviceType device() const { return device_; }
     int device_index() const { return device_index_; }
     bool materialized() const { return materialized_.load(std::memory_order_acquire); }
-    const std::shared_ptr<Buffer>& buffer() const { (void)data(); return buffer_; }
-    void MakeWritable() {
+    std::shared_ptr<const Buffer> buffer() const { (void)data(); return buffer_; }
+    uint64_t id() const { return id_; }
+    uint64_t version() const { return version_.load(std::memory_order_relaxed); }
+
+ private:
+    friend class Tensor;
+    // Defined only in the CUDA implementation for backend-owned allocations.
+    // Tensor host writes still go through its tracked copy-on-write boundary.
+    friend class kernel::cuda_detail::StorageAccess;
+    void* MutableData() const { (void)data(); return buffer_ ? buffer_->MutableData() : nullptr; }
+    void MakeWritable() const {
         (void)data();
         std::lock_guard<std::mutex> lock(writable_mutex_);
         if (!buffer_ || !buffer_->read_only()) return;
         auto copy = std::make_shared<Buffer>(capacity_);
-        if (capacity_) std::memcpy(copy->data(), buffer_->data(), capacity_);
+        if (capacity_) std::memcpy(copy->MutableData(), buffer_->data(), capacity_);
         buffer_ = std::move(copy);
         MarkMutated();
     }
-    uint64_t version() const { return version_.load(std::memory_order_relaxed); }
-    void MarkMutated() {
+    void MarkMutated() const {
         static std::atomic<uint64_t> next{1};
         version_.store(next.fetch_add(1, std::memory_order_relaxed), std::memory_order_relaxed);
     }
- private:
-    mutable std::shared_ptr<Buffer> buffer_;
+    static uint64_t NextIdentity() {
+        static std::atomic<uint64_t> next{1};
+        return next.fetch_add(1, std::memory_order_relaxed);
+    }
+    const uint64_t id_{NextIdentity()};
+    mutable std::shared_ptr<const Buffer> buffer_;
     size_t capacity_{0};
     bool deferred_{false};
     DeviceType device_{DeviceType::COMMON};
     int device_index_{0};
     mutable std::atomic<bool> materialized_{false};
     mutable std::once_flag allocation_once_;
-    std::atomic<uint64_t> version_{0};
-    std::mutex writable_mutex_;
+    mutable std::atomic<uint64_t> version_{0};
+    mutable std::mutex writable_mutex_;
 };
 
 }  // namespace feather

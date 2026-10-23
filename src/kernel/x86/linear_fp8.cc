@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "src/kernel/x86/prepared_weight_cache.h"
 #include "src/kernel/x86/linear_fp8.h"
 
 #include <immintrin.h>
@@ -384,7 +385,7 @@ bool Fp8LinearWorkspace::Resize(size_t count) {
 bool PackedFp8Rhs::Matches(DataType dtype, const uint8_t* rhs, int64_t k, int64_t n,
                            uint64_t source_version) const {
     return (dtype == DataType::FP8E4M3 || dtype == DataType::FP8E5M2) && rhs != nullptr && dtype_ == dtype &&
-           source_ == rhs && k_ == k && n_ == n && source_version_ == source_version && !data_.empty();
+           source_ == rhs && k_ == k && n_ == n && source_version_ == source_version && data_ && !data_->empty();
 }
 
 bool PackedFp8Rhs::Pack(DataType dtype, const uint8_t* rhs, int64_t k, int64_t n, uint64_t source_version) {
@@ -396,7 +397,8 @@ bool PackedFp8Rhs::Pack(DataType dtype, const uint8_t* rhs, int64_t k, int64_t n
     k_ = 0;
     n_ = 0;
     source_version_ = 0;
-    data_.clear();
+    data_.reset();
+    std::vector<uint16_t> values;
     if ((dtype != DataType::FP8E4M3 && dtype != DataType::FP8E5M2) || rhs == nullptr || k <= 0 || n <= 0 ||
         n > std::numeric_limits<int64_t>::max() - (kFp8OutputBlock - 1)) {
         return false;
@@ -411,22 +413,27 @@ bool PackedFp8Rhs::Pack(DataType dtype, const uint8_t* rhs, int64_t k, int64_t n
         return false;
     }
     try {
-        data_.assign(static_cast<size_t>(element_count), 0);
+        values.assign(static_cast<size_t>(element_count), 0);
     } catch (const std::bad_alloc&) {
-        data_.clear();
+        data_.reset();
         return false;
     }
     for (int64_t block = 0; block < block_count; ++block) {
         const int64_t block_begin = block * kFp8OutputBlock;
         const int64_t width = std::min(kFp8OutputBlock, n - block_begin);
         for (int64_t row = 0; row < k; ++row) {
-            uint16_t* destination = data_.data() + (block * k + row) * kFp8OutputBlock;
+            uint16_t* destination = values.data() + (block * k + row) * kFp8OutputBlock;
             for (int64_t lane = 0; lane < width; ++lane) {
                 destination[lane] = DecodeFp8ToBf16(dtype, rhs[row * n + block_begin + lane]);
             }
         }
     }
     dtype_ = dtype;
+    try {
+        data_ = std::make_shared<const std::vector<uint16_t>>(std::move(values));
+    } catch (const std::bad_alloc&) {
+        return false;
+    }
     source_ = rhs;
     k_ = k;
     n_ = n;
@@ -434,11 +441,29 @@ bool PackedFp8Rhs::Pack(DataType dtype, const uint8_t* rhs, int64_t k, int64_t n
     return true;
 }
 
+bool PackedFp8Rhs::Pack(const Tensor& source, int64_t k, int64_t n) {
+    if (!detail::ValidPackedSource(source, k, n, true)) return false;
+    const auto* pointer = static_cast<const uint8_t*>(source.raw_data());
+    if (!source.is_immutable() || !source.storage()->read_only()) return Pack(source.data_type(), pointer, k, n, source.mutation_version());
+    auto packed = detail::AcquirePackedWeight(source, k, n, false, [&] {
+        if (!Pack(source.data_type(), pointer, k, n, source.mutation_version())) return std::shared_ptr<const std::vector<uint16_t>>{};
+        return data_;
+    });
+    if (!packed) return false;
+    data_ = std::move(packed);
+    dtype_ = source.data_type();
+    source_ = pointer;
+    k_ = k;
+    n_ = n;
+    source_version_ = source.mutation_version();
+    return true;
+}
+
 bool PackedFp8TransposedRhs::Matches(DataType dtype, const uint8_t* rhs_transposed, int64_t k, int64_t n,
                                      uint64_t source_version) const {
     return (dtype == DataType::FP8E4M3 || dtype == DataType::FP8E5M2) && rhs_transposed != nullptr &&
            dtype_ == dtype && source_ == rhs_transposed && k_ == k && n_ == n &&
-           source_version_ == source_version && !data_.empty();
+           source_version_ == source_version && data_ && !data_->empty();
 }
 
 bool PackedFp8TransposedRhs::Pack(DataType dtype, const uint8_t* rhs_transposed, int64_t k, int64_t n,
@@ -451,7 +476,8 @@ bool PackedFp8TransposedRhs::Pack(DataType dtype, const uint8_t* rhs_transposed,
     k_ = 0;
     n_ = 0;
     source_version_ = 0;
-    data_.clear();
+    data_.reset();
+    std::vector<uint16_t> values;
     if ((dtype != DataType::FP8E4M3 && dtype != DataType::FP8E5M2) || rhs_transposed == nullptr || k <= 0 || n <= 0 ||
         n > std::numeric_limits<int64_t>::max() - (kFp8OutputBlock - 1)) {
         return false;
@@ -466,26 +492,49 @@ bool PackedFp8TransposedRhs::Pack(DataType dtype, const uint8_t* rhs_transposed,
         return false;
     }
     try {
-        data_.assign(static_cast<size_t>(element_count), 0);
+        values.assign(static_cast<size_t>(element_count), 0);
     } catch (const std::bad_alloc&) {
-        data_.clear();
+        data_.reset();
         return false;
     }
     for (int64_t block = 0; block < block_count; ++block) {
         const int64_t block_begin = block * kFp8OutputBlock;
         const int64_t width = std::min(kFp8OutputBlock, n - block_begin);
         for (int64_t row = 0; row < k; ++row) {
-            uint16_t* destination = data_.data() + (block * k + row) * kFp8OutputBlock;
+            uint16_t* destination = values.data() + (block * k + row) * kFp8OutputBlock;
             for (int64_t lane = 0; lane < width; ++lane) {
                 destination[lane] = DecodeFp8ToBf16(dtype, rhs_transposed[(block_begin + lane) * k + row]);
             }
         }
     }
     dtype_ = dtype;
+    try {
+        data_ = std::make_shared<const std::vector<uint16_t>>(std::move(values));
+    } catch (const std::bad_alloc&) {
+        return false;
+    }
     source_ = rhs_transposed;
     k_ = k;
     n_ = n;
     source_version_ = source_version;
+    return true;
+}
+
+bool PackedFp8TransposedRhs::Pack(const Tensor& source, int64_t k, int64_t n) {
+    if (!detail::ValidPackedSource(source, k, n, true)) return false;
+    const auto* pointer = static_cast<const uint8_t*>(source.raw_data());
+    if (!source.is_immutable() || !source.storage()->read_only()) return Pack(source.data_type(), pointer, k, n, source.mutation_version());
+    auto packed = detail::AcquirePackedWeight(source, k, n, true, [&] {
+        if (!Pack(source.data_type(), pointer, k, n, source.mutation_version())) return std::shared_ptr<const std::vector<uint16_t>>{};
+        return data_;
+    });
+    if (!packed) return false;
+    data_ = std::move(packed);
+    dtype_ = source.data_type();
+    source_ = pointer;
+    k_ = k;
+    n_ = n;
+    source_version_ = source.mutation_version();
     return true;
 }
 

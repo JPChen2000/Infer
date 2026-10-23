@@ -198,7 +198,7 @@ int32_t QwenGatedDeltaStateKernel<DeviceType::X86, DataType::FP32>::compute() {
         p->k->numel() != heads * key || p->v->numel() != heads * value || p->beta->numel() != heads || p->decay->numel() != heads) return -1;
     const float* state = p->state->data<float>(); const float* k = p->k->data<float>(); const float* v = p->v->data<float>();
     const float* beta = p->beta->data<float>(); const float* decay = p->decay->data<float>();
-    float* out = static_cast<float*>(p->out->raw_data()); p->out->set_data_type(DataType::FP32);
+    float* out = static_cast<float*>(p->out->mutable_data(p->out->memory_size())); p->out->set_data_type(DataType::FP32);
     const size_t worker_count = QwenGatedDeltaWorkerCount(heads);
 #if !defined(FEATHER_WITH_OPENMP)
     (void)worker_count;
@@ -233,7 +233,7 @@ int32_t QwenGatedDeltaOutputKernel<DeviceType::X86, DataType::FP32>::compute() {
         p->state->dims().size() != 4 || p->state->dims()[0] != 1) return -1;
     const int64_t heads = p->state->dims()[1], key = p->state->dims()[2], value = p->state->dims()[3];
     if (p->q->numel() != heads * key || p->out->numel() != heads * value) return -1;
-    const float* state = p->state->data<float>(); const float* q = p->q->data<float>(); float* out = static_cast<float*>(p->out->raw_data());
+    const float* state = p->state->data<float>(); const float* q = p->q->data<float>(); float* out = static_cast<float*>(p->out->mutable_data(p->out->memory_size()));
     p->out->set_data_type(DataType::FP32);
     for (int64_t h = 0; h < heads; ++h) for (int64_t j = 0; j < value; j += 8) {
         const int64_t width = std::min<int64_t>(8, value - j);
@@ -270,8 +270,8 @@ int32_t QwenGatedDeltaKernel<DeviceType::X86, DataType::FP32>::compute() {
     const float* beta = p->beta->data<float>();
     const float* decay = p->decay->data<float>();
     const float* q = p->q->data<float>();
-    float* next_state = static_cast<float*>(p->next_state->raw_data());
-    float* out = static_cast<float*>(p->out->raw_data());
+    float* next_state = static_cast<float*>(p->next_state->mutable_data(p->next_state->memory_size()));
+    float* out = static_cast<float*>(p->out->mutable_data(p->out->memory_size()));
     p->next_state->set_data_type(DataType::FP32);
     p->out->set_data_type(DataType::FP32);
     const size_t worker_count = QwenGatedDeltaWorkerCount(heads);

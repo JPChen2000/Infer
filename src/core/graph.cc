@@ -58,8 +58,8 @@ int32_t RuntimeGraph::SetTensor(const std::string& name, std::shared_ptr<Tensor>
         return -1;
     }
     const auto existing = tensors_.find(name);
-    if (finalized_) {
-        if (existing == tensors_.end()) return -1;
+    if (bindings_installed_ && existing != tensors_.end()) {
+        if (!CheckTensorBindings().ok()) return -1;
         for (const auto& node : nodes_) {
             if (std::find(node.outputs.begin(), node.outputs.end(), name) != node.outputs.end()) return -1;
         }
@@ -74,6 +74,8 @@ int32_t RuntimeGraph::SetTensor(const std::string& name, std::shared_ptr<Tensor>
             backend_->HostWritten(*current);
         }
     } else {
+        if (finalized_) return -1;
+        backend_->RegisterTensor(tensor);
         tensors_[name] = std::move(tensor);
     }
     RefreshOutputTensorPointers();
@@ -167,9 +169,14 @@ void RuntimeGraph::Clear() {
     auto context_scope = backend_->Enter();
     backend_->Clear();
     finalized_ = false;
+    bindings_installed_ = false;
     uses_memory_plan_ = false;
     nodes_.clear();
     contracts_.clear();
+    binding_contracts_.clear();
+    effect_nodes_.clear();
+    effect_inputs_.clear();
+    effect_outputs_.clear();
     tensors_.clear();
     node_index_by_name_.clear();
     value_id_by_name_.clear();
@@ -189,12 +196,33 @@ int32_t RuntimeGraph::Check() const {
 }
 
 Status RuntimeGraph::CheckStatus() const {
+    const auto bindings = CheckTensorBindings();
+    if (!bindings.ok()) return bindings;
     for (const auto& value : contracts_) {
-        if (value.tensor->dims() != value.descriptor->dims() ||
-            value.tensor->data_type() != value.descriptor->data_type() || value.tensor->layout() != value.descriptor->layout() ||
-            !value.tensor->IsInitialized() || value.tensor->memory_size() < value.bytes ||
-            (value.fixed_quantization && !HasSameQuantization(value.tensor->quantization(), value.descriptor->quantization())))
+        const auto found = tensors_.find(value.name);
+        if (found == tensors_.end() || found->second != value.tensor)
+            return Status::Error(StatusCode::kInvalidArgument, "compiled tensor binding changed: " + value.name);
+        bool shape_matches = value.tensor->dims() == value.descriptor->dims();
+        if (value.bounded_leading_dimension) {
+            const auto& actual = value.tensor->dims().data();
+            const auto& capacity = value.descriptor->dims().data();
+            shape_matches = actual.size() == capacity.size() && !actual.empty() && actual[0] >= 0 &&
+                            actual[0] <= capacity[0] &&
+                            std::equal(actual.begin() + 1, actual.end(), capacity.begin() + 1);
+        }
+        const bool has_capacity = value.bounded_leading_dimension
+                                      ? value.tensor->storage() &&
+                                            value.tensor->offset() <= value.tensor->storage()->size() &&
+                                            value.bytes <= value.tensor->storage()->size() - value.tensor->offset()
+                                      : value.tensor->memory_size() >= value.bytes;
+        if (!shape_matches || value.tensor->data_type() != value.descriptor->data_type() ||
+            value.tensor->layout() != value.descriptor->layout() || !value.tensor->IsInitialized() || !has_capacity ||
+            (value.fixed_quantization &&
+             !HasSameQuantization(value.tensor->quantization(), value.descriptor->quantization())))
             return Status::Error(StatusCode::kInvalidArgument, "compiled tensor contract changed: " + value.name);
+        if (value.fixed_values && value.bytes &&
+            std::memcmp(value.tensor->raw_data(), value.fixed_values->data(), value.bytes) != 0)
+            return Status::Error(StatusCode::kInvalidArgument, "compiled control values changed: " + value.name);
     }
     for (const auto& node : nodes_) {
         if (node.kernel == nullptr || !node.kernel->OwnsParam()) {
@@ -202,6 +230,38 @@ Status RuntimeGraph::CheckStatus() const {
         }
     }
     return Status::Ok();
+}
+
+Status RuntimeGraph::CheckTensorBindings() const {
+    for (const auto& item : binding_contracts_) {
+        const auto found = tensors_.find(item.first);
+        const auto& expected = item.second;
+        if (found == tensors_.end() || found->second != expected.tensor ||
+            (expected.tensor->storage() ? expected.tensor->storage()->id() : 0) != expected.storage_id ||
+            expected.tensor->offset() != expected.offset)
+            return Status::Error(StatusCode::kInvalidArgument, "runtime storage view changed: " + item.first);
+    }
+    return Status::Ok();
+}
+
+void RuntimeGraph::CaptureTensorBindings() {
+    for (const auto& item : tensors_) {
+        const auto& tensor = item.second;
+        binding_contracts_.try_emplace(item.first, TensorBindingContract{
+            tensor, tensor->storage() ? tensor->storage()->id() : 0, tensor->offset()});
+    }
+    bindings_installed_ = true;
+}
+
+void RuntimeGraph::RecordStateStorageSwap(const Tensor& first, const Tensor& second) {
+    // The state updater validates the complete batch before it can enter this
+    // private boundary. Only the exact swapped Tensor objects change contracts.
+    for (auto& item : binding_contracts_) {
+        auto& binding = item.second;
+        if (binding.tensor.get() != &first && binding.tensor.get() != &second) continue;
+        binding.storage_id = binding.tensor->storage() ? binding.tensor->storage()->id() : 0;
+        binding.offset = binding.tensor->offset();
+    }
 }
 
 int32_t RuntimeGraph::Run() {
@@ -216,6 +276,15 @@ Status RuntimeGraph::RunStatus() {
         if (!check_status.ok()) {
             return check_status;
         }
+        const auto effects = ValidateOperatorBindings(effect_nodes_, tensors_, &effect_inputs_);
+        if (!effects.ok()) return effects.WithContext("execution preflight");
+        for (const auto& node : nodes_)
+            if (node.semantics->validate_runtime) {
+                std::vector<std::shared_ptr<Tensor>> inputs;
+                for (const auto& name : node.inputs) inputs.push_back(GetTensor(name));
+                auto status = node.semantics->validate_runtime(inputs);
+                if (!status.ok()) return status.WithContext("preflight node=" + node.name);
+            }
         ResetPendingDependencies();
         ResetRemainingUses();
         execution_status_ = Status::Ok();
@@ -230,6 +299,8 @@ Status RuntimeGraph::RunStatus() {
 void RuntimeGraph::AddNode(RuntimeNode node) {
     if (structure_locked_) throw std::logic_error("session graph is immutable");
     finalized_ = false;
+    if (node.kernel) bindings_installed_ = true;
+    if (!node.semantics) node.semantics = GetOperatorSemantics(node.op_type);
     if (node.input_ids.empty()) {
         node.input_ids.reserve(node.inputs.size());
         for (const auto& name : node.inputs) {
@@ -273,12 +344,33 @@ Status RuntimeGraph::FinalizeStatus() {
     finalized_ = false;
     try {
         auto context_scope = backend_->Enter();
+        const auto bindings = CheckTensorBindings();
+        if (!bindings.ok()) return bindings;
         const auto status = BuildDependencies();
         if (status != 0) {
             thread_pool_.reset();
             worker_count_ = 1;
             return Status::Error(StatusCode::kBuildFailed, "runtime graph dependency construction failed");
         }
+
+        effect_nodes_.clear();
+        effect_inputs_.clear();
+        effect_outputs_.assign(output_names_.begin(), output_names_.end());
+        std::unordered_set<std::string> produced;
+        for (const auto& node : nodes_) {
+            // Topology-only placeholder nodes are accepted by Finalize for
+            // scheduler setup; CheckStatus rejects them before execution.
+            if (node.kernel) effect_nodes_.push_back({node.name, node.inputs, node.outputs, *node.semantics});
+            produced.insert(node.outputs.begin(), node.outputs.end());
+        }
+        for (const auto& value : tensors_)
+            if (!produced.count(value.first)) effect_inputs_.push_back(value.first);
+        const auto effect_status = ValidateOperatorEffects(effect_nodes_, tensors_, &effect_inputs_, effect_outputs_,
+                                                           thread_mode_ == RuntimeThreadMode::kSerialGraph);
+        if (!effect_status.ok()) return effect_status;
+        for (const auto& node : nodes_) if (node.kernel)
+            for (auto slot : node.semantics->mutable_inputs)
+                backend_->MarkPersistent(*GetTensor(node.inputs.at(slot)), true);
 
         // Prepare immutable-weight kernels before the first timed inference. This
         // keeps one-time packing/reformatting out of decode latency while leaving
@@ -294,6 +386,7 @@ Status RuntimeGraph::FinalizeStatus() {
             }
         }
 
+        CaptureTensorBindings();
         finalized_ = true;
         if (thread_mode_ == RuntimeThreadMode::kSerialGraph) {
             thread_pool_.reset();
@@ -451,6 +544,9 @@ int32_t RuntimeGraph::FinalizeNodeRun(const RuntimeNode& node, int32_t status) {
         auto tensor = GetTensor(name);
         if (tensor) backend_->HostWritten(*tensor);
     }
+    if (node.semantics)
+        for (const auto slot : node.semantics->mutable_inputs)
+            if (auto tensor = GetTensor(node.inputs[slot])) backend_->HostWritten(*tensor);
     return status;
 }
 

@@ -18,6 +18,7 @@
 
 #include <memory>
 #include <functional>
+#include <cstring>
 #include "core/status.h"
 #include "core/tensor.h"
 
@@ -59,13 +60,28 @@ class BackendContext {
     }
     virtual Status Synchronize() { return Status::Ok(); }
     virtual void SetWorkspaceLimit(size_t) {}
+    virtual void SetFp8WeightCacheLimit(size_t) {}
     virtual Status ReadHost(Tensor&) { return Status::Ok(); }
     virtual void HostWritten(Tensor&) {}
     virtual void MarkPersistent(const Tensor&, bool) {}
     virtual bool IsPersistent(const Tensor&) const { return false; }
     virtual void Release(const Tensor&) {}
     virtual std::shared_ptr<const Storage> DeviceStorage(const Tensor&) const { return nullptr; }
+    // Caller verifies equal immutable descriptors and bytes. Implementations
+    // retain allocation ownership independently of the source context.
+    virtual Status ShareImmutableWeight(BackendContext&, const Tensor&, const Tensor&) { return Status::Ok(); }
+    virtual void RegisterTensor(std::shared_ptr<Tensor>) {}
     virtual void Clear() {}
+    virtual Status CopyState(Tensor& input, const Tensor& output) {
+        size_t bytes = 0;
+        if (!CheckedTensorBytes(input.dims().data(), input.data_type(), &bytes) ||
+            input.dims() != output.dims() || input.data_type() != output.data_type() ||
+            input.memory_size() < bytes || output.memory_size() < bytes)
+            return Status::Error(StatusCode::kInvalidArgument, "incompatible state copy");
+        if (bytes) std::memmove(input.mutable_data(input.memory_size()), output.raw_data(), bytes);
+        HostWritten(input);
+        return Status::Ok();
+    }
     // Return Unsupported so model-independent state code can use the host path.
     virtual Status SwapState(Tensor&, Tensor&) { return Status::Error(StatusCode::kUnsupported, "device state swap unavailable"); }
     virtual Status AppendState(Tensor&, const Tensor&, int) { return Status::Error(StatusCode::kUnsupported, "device state append unavailable"); }
@@ -78,6 +94,9 @@ class BackendContext {
 };
 
 std::unique_ptr<BackendContext> CreateBackendContext();
+#ifdef FEATHER_WITH_CUDA
+std::unique_ptr<BackendContext> CreateBackendContext(std::shared_ptr<kernel::cuda_detail::CudaExecutionContext> context);
+#endif
 
 }  // namespace feather
 #endif

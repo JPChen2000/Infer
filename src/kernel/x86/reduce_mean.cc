@@ -86,7 +86,7 @@ bool TryComputeLastAxisMeanFp32(feather::operators::ReduceMeanParam* param) {
     }
 
     const float* input = param->input->data<float>();
-    float* out = static_cast<float*>(param->out->raw_data());
+    float* out = static_cast<float*>(param->out->mutable_data(param->out->memory_size()));
     for (int64_t row = 0; row < rows; ++row) {
         const float* input_row = input + row * columns;
         __m256 sum = _mm256_setzero_ps();

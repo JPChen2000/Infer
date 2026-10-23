@@ -102,7 +102,7 @@ def encode_attribute(value: Any) -> bytes:
         return struct.pack("<I", 2) + encode_string(value)
     if isinstance(value, list):
         if not value:
-            raise ValueError("empty attribute list is not supported")
+            return struct.pack("<I", 3) + encode_vector_int64([])
         if all(isinstance(v, int) for v in value):
             return struct.pack("<I", 3) + encode_vector_int64(value)
         if all(isinstance(v, (int, float)) for v in value):
@@ -110,13 +110,19 @@ def encode_attribute(value: Any) -> bytes:
     raise TypeError(f"unsupported attribute type: {type(value)!r}")
 
 
-def encode_tensor_desc(desc: TensorDesc) -> bytes:
-    return (
+def encode_tensor_desc(desc: TensorDesc, format_version: int = FORMAT_VERSION) -> bytes:
+    payload = (
         encode_string(desc.name)
         + encode_vector_int64(desc.dims)
         + struct.pack("<i", desc.data_type)
         + struct.pack("<i", desc.layout)
     )
+
+    if format_version >= 2:
+        payload += struct.pack("<Bfiqq", 0, 1.0, 0, -1, 0)
+    if format_version >= 3:
+        payload += struct.pack("<iQQ", 0, 0, 0)
+    return payload
 
 
 def encode_weight_location(value: ValueDesc, output_path: str) -> bytes:
@@ -129,8 +135,8 @@ def encode_weight_location(value: ValueDesc, output_path: str) -> bytes:
     )
 
 
-def encode_value_desc(value: ValueDesc, output_path: str) -> bytes:
-    return encode_tensor_desc(value.tensor) + struct.pack("<B", 1 if value.constant else 0) + encode_weight_location(value, output_path)
+def encode_value_desc(value: ValueDesc, output_path: str, format_version: int = FORMAT_VERSION) -> bytes:
+    return encode_tensor_desc(value.tensor, format_version) + struct.pack("<B", 1 if value.constant else 0) + encode_weight_location(value, output_path)
 
 
 def encode_string_vector(values: List[str]) -> bytes:
@@ -151,19 +157,25 @@ def encode_node_desc(node: NodeDesc) -> bytes:
     return payload
 
 
-def encode_graph(name: str, inputs: List[str], outputs: List[str], values: List[ValueDesc], nodes: List[NodeDesc], output_path: str) -> bytes:
+def encode_graph(name: str, inputs: List[str], outputs: List[str], values: List[ValueDesc], nodes: List[NodeDesc], output_path: str, format_version: int = FORMAT_VERSION) -> bytes:
     payload = encode_string(name) + encode_string_vector(inputs) + encode_string_vector(outputs)
     payload += struct.pack("<Q", len(values))
     for value in values:
-        payload += encode_value_desc(value, output_path)
+        payload += encode_value_desc(value, output_path, format_version)
     payload += struct.pack("<Q", len(nodes))
     for node in nodes:
         payload += encode_node_desc(node)
     return payload
 
 
-def encode_model(name: str, version: int, graph_name: str, inputs: List[str], outputs: List[str], values: List[ValueDesc], nodes: List[NodeDesc], output_path: str) -> bytes:
-    return encode_string(name) + struct.pack("<q", version) + encode_graph(graph_name, inputs, outputs, values, nodes, output_path)
+def encode_model(name: str, version: int, graph_name: str, inputs: List[str], outputs: List[str], values: List[ValueDesc], nodes: List[NodeDesc], output_path: str, format_version: int = FORMAT_VERSION, model_metadata=None) -> bytes:
+    payload = encode_string(name) + struct.pack("<q", version) + encode_graph(graph_name, inputs, outputs, values, nodes, output_path, format_version)
+    if format_version >= 4:
+        metadata = model_metadata or {}
+        payload += struct.pack("<Q", len(metadata))
+        for key in sorted(metadata):
+            payload += encode_string(key) + encode_attribute(metadata[key])
+    return payload
 
 
 def tensor_proto_to_array(tensor: onnx.TensorProto) -> np.ndarray:
@@ -299,14 +311,104 @@ def should_mark_nhwc_tensor(name: str, dims: List[int], graph_inputs: List[str],
     return False
 
 
-def convert_model(input_path: str, output_path: str, layout: str = "nchw") -> None:
-    model = onnx.load(input_path)
+def fold_static_control_graph(model):
+    """Evaluate deterministic constant-only ONNX shape/grid expressions exactly.
+
+    This also removes YOLOv6's FP64 coordinate construction before its explicit
+    FP32 Cast, without changing the dtype or arithmetic of any runtime tensor.
+    """
+    from onnx.reference import ReferenceEvaluator
+    foldable = {"Expand", "Unsqueeze", "Squeeze", "Concat", "Cast", "Reshape",
+                "Transpose", "Shape", "Gather", "Slice", "ConstantOfShape",
+                "Equal", "Where", "Add", "Sub", "Mul", "Div", "Neg"}
+    model = shape_inference.infer_shapes(model)
+    static_shapes = {}
+    for value in list(model.graph.input) + list(model.graph.value_info) + list(model.graph.output):
+        shape = value.type.tensor_type.shape
+        if all(dim.HasField("dim_value") and dim.dim_value > 0 for dim in shape.dim):
+            static_shapes[value.name] = [dim.dim_value for dim in shape.dim]
+    constants = {value.name: numpy_helper.to_array(value) for value in model.graph.initializer}
+    remaining = []
+    for node in model.graph.node:
+        if node.domain not in ("", "ai.onnx"):
+            raise NotImplementedError(f"unsupported ONNX operator domain: {node.domain!r}")
+        if node.op_type == "Shape" and node.input[0] in static_shapes:
+            dims = static_shapes[node.input[0]]
+            start = int(get_attr(node, "start", 0))
+            end = int(get_attr(node, "end", len(dims)))
+            constants[node.output[0]] = np.asarray(dims[start:end], dtype=np.int64)
+            continue
+        if node.op_type == "Constant":
+            constants[node.output[0]] = node_constant_to_array(node)
+            continue
+        if node.op_type in foldable and all(not name or name in constants for name in node.input):
+            try:
+                if node.op_type == "Div" and np.issubdtype(constants[node.input[0]].dtype, np.integer):
+                    # The ONNX Python reference uses np.divide then casts back,
+                    # which loses INT64 precision above 2**53. Use Python's
+                    # unbounded integers and truncate toward zero explicitly.
+                    lhs, rhs = (constants[name] for name in node.input)
+                    if lhs.dtype != rhs.dtype:
+                        raise TypeError("integer Div requires matching input dtypes")
+                    limits = np.iinfo(lhs.dtype)
+
+                    def truncate_divide(a, b):
+                        a, b = int(a), int(b)
+                        if b == 0:
+                            raise ValueError("integer Div by zero")
+                        value = abs(a) // abs(b)
+                        if (a < 0) != (b < 0):
+                            value = -value
+                        if not limits.min <= value <= limits.max:
+                            raise ValueError("integer Div overflow")
+                        return value
+
+                    result = [np.asarray(np.frompyfunc(truncate_divide, 2, 1)(lhs, rhs), dtype=lhs.dtype)]
+                else:
+                    evaluator = ReferenceEvaluator(node, opsets={item.domain: item.version for item in model.opset_import})
+                    result = evaluator.run(None, {name: constants[name] for name in node.input if name})
+                constants.update(zip(node.output, result))
+                continue
+            except (ValueError, TypeError, NotImplementedError):
+                pass  # Leave unsupported constant expressions to the normal importer.
+        remaining.append(node)
+    needed = {name for node in remaining for name in node.input if name}
+    needed.update(value.name for value in model.graph.output)
+    del model.graph.node[:]
+    model.graph.node.extend(remaining)
+    del model.graph.initializer[:]
+    model.graph.initializer.extend(numpy_helper.from_array(np.asarray(value), name)
+                                   for name, value in constants.items() if name in needed)
+    # Recompute intermediate shapes, including folded values, from the new graph.
+    del model.graph.value_info[:]
+    return model
+
+
+def convert_model(input_path: str, output_path: str, layout: str = "nchw", model_metadata=None) -> None:
+    layout = layout.lower()
+    if layout not in ("nchw", "nhwc"):
+        raise ValueError(f"unsupported target layout: {layout!r}")
+    if layout != "nchw" and model_metadata and any(key.startswith("yolo.") for key in model_metadata):
+        raise NotImplementedError("YOLO detection family exports currently require NCHW layout")
+    format_version = 4 if model_metadata is not None else FORMAT_VERSION
+    model = fold_static_control_graph(onnx.load(input_path))
     inferred = shape_inference.infer_shapes(model)
     emit_nhwc = layout.lower() == "nhwc"
 
+    nms_nodes = [node for node in inferred.graph.node if node.op_type == "NonMaxSuppression"]
+    nms_outputs = {name for node in nms_nodes for name in node.output if name}
+    for node in inferred.graph.node:
+        for input_name in node.input:
+            if input_name in nms_outputs:
+                raise NotImplementedError(
+                    f"NonMaxSuppression output {input_name!r} is consumed by "
+                    f"{node.name or node.op_type!r}; dynamic NMS descendants are not supported"
+                )
+
     value_infos: Dict[str, Tuple[List[int], int]] = {}
     for value in list(inferred.graph.input) + list(inferred.graph.output):
-        dims, dtype = tensor_type_info(value)
+        # Only NMS supplies a bounded runtime shape for a symbolic graph output.
+        dims, dtype = tensor_type_info(value, allow_unknown_dims=value.name in nms_outputs)
         value_infos[value.name] = (dims, dtype)
     for value in inferred.graph.value_info:
         dims, dtype = tensor_type_info(value, allow_unknown_dims=True)
@@ -324,6 +426,48 @@ def convert_model(input_path: str, output_path: str, layout: str = "nchw") -> No
             const_value = node_constant_to_array(node)
             constants[const_name] = const_value
             value_infos[const_name] = (list(const_value.shape), dtype_from_numpy(np.asarray(const_value).reshape(-1)[:1] if np.asarray(const_value).shape == () else np.asarray(const_value)))
+
+    shape_protos = {
+        value.name: value.type.tensor_type.shape
+        for value in list(inferred.graph.input) + list(inferred.graph.value_info) + list(inferred.graph.output)
+    }
+    for node in nms_nodes:
+        if not 2 <= len(node.input) <= 5 or len(node.output) != 1 or not node.output[0]:
+            raise ValueError("NonMaxSuppression requires two to five inputs and one output")
+        center = get_attr(node, "center_point_box", 0)
+        if not isinstance(center, int) or center not in (0, 1):
+            raise ValueError("NonMaxSuppression center_point_box must be 0 or 1")
+        for input_name in node.input[:2]:
+            if input_name not in value_infos:
+                raise ValueError(f"NonMaxSuppression is missing input shape for {input_name!r}")
+            if input_name not in constants:
+                shape = shape_protos.get(input_name)
+                if shape is None or any(not dim.HasField("dim_value") for dim in shape.dim):
+                    raise ValueError("NonMaxSuppression requires static boxes and scores dimensions")
+        boxes, boxes_type = value_infos[node.input[0]]
+        scores, scores_type = value_infos[node.input[1]]
+        if (boxes_type != 4 or scores_type != 4 or len(boxes) != 3 or len(scores) != 3 or
+                boxes[2] != 4 or boxes[0] != scores[0] or boxes[1] != scores[2] or
+                any(dim < 0 for dim in boxes + scores)):
+            raise ValueError("NonMaxSuppression requires FP32 boxes[B,N,4] and scores[B,C,N]")
+        capacity = boxes[0] * scores[1] * boxes[1]
+        if capacity > (2**63 - 1) // 3 or capacity > (2**64 - 1) // 24:
+            raise ValueError("NonMaxSuppression output capacity is too large")
+        for index, input_name in enumerate(node.input[2:], start=2):
+            if not input_name:
+                continue
+            if input_name not in value_infos:
+                raise ValueError(f"NonMaxSuppression is missing control shape for {input_name!r}")
+            dims, dtype = value_infos[input_name]
+            if dims not in ([], [1]) or dtype != (6 if index == 2 else 4):
+                raise ValueError("NonMaxSuppression controls must be an INT64 maximum and FP32 scalar thresholds")
+            if input_name in constants:
+                value = np.asarray(constants[input_name]).reshape(-1)[0].item()
+                if ((index == 2 and value < 0) or
+                        (index != 2 and not math.isfinite(value)) or
+                        (index == 3 and not 0 <= value <= 1)):
+                    raise ValueError("NonMaxSuppression has an invalid control value")
+        value_infos[node.output[0]] = ([capacity, 3], 6)
 
     op_type_by_output: Dict[str, str] = {}
     for node in inferred.graph.node:
@@ -400,6 +544,21 @@ def convert_model(input_path: str, output_path: str, layout: str = "nchw") -> No
             attrs["dilation_h"] = int(dilations[0])
             attrs["dilation_w"] = int(dilations[1])
             attrs["group"] = int(get_attr(node, "group", 1))
+        elif op_type == "ConvTranspose":
+            for key, default in (("strides", [1, 1]), ("pads", [0, 0, 0, 0]),
+                                 ("dilations", [1, 1]), ("output_padding", [0, 0])):
+                attrs[key] = [int(v) for v in get_attr(node, key, default)]
+                if len(attrs[key]) != len(default):
+                    raise NotImplementedError(f"ConvTranspose supports 2D {key}, got {attrs[key]}")
+            attrs["group"] = int(get_attr(node, "group", 1))
+            weight_dims = value_infos[inputs[1]][0]
+            if len(weight_dims) != 4:
+                raise NotImplementedError("ConvTranspose requires [Cin,Cout/group,kH,kW] weights")
+            if list(get_attr(node, "kernel_shape", weight_dims[2:])) != weight_dims[2:]:
+                raise ValueError("ConvTranspose kernel_shape does not match the weight dimensions")
+            auto_pad = get_attr(node, "auto_pad", b"NOTSET")
+            if auto_pad not in (b"NOTSET", "NOTSET") or get_attr(node, "output_shape", None) is not None:
+                raise NotImplementedError("ConvTranspose requires explicit pads and no output_shape")
         elif op_type == "Concat":
             attrs["axis"] = int(get_attr(node, "axis", 1))
         elif op_type == "MaxPool":
@@ -434,7 +593,53 @@ def convert_model(input_path: str, output_path: str, layout: str = "nchw") -> No
             attrs["transA"] = int(get_attr(node, "transA", 0))
             attrs["transB"] = int(get_attr(node, "transB", 0))
         elif op_type == "Resize":
-            pass
+            def resize_text(key, default):
+                value = get_attr(node, key, default)
+                return value.decode("utf-8") if isinstance(value, bytes) else str(value)
+
+            resize_opset = next((item.version for item in model.opset_import if item.domain in ("", "ai.onnx")), 1)
+            attrs["mode"] = resize_text("mode", "nearest")
+            attrs["coordinate_transformation_mode"] = resize_text(
+                "coordinate_transformation_mode", "asymmetric" if resize_opset <= 10 else "half_pixel")
+            attrs["nearest_mode"] = resize_text("nearest_mode", "floor" if resize_opset <= 10 else "round_prefer_floor")
+            if attrs["mode"] not in ("nearest", "linear"):
+                raise NotImplementedError("Resize supports nearest and rank-four spatial linear interpolation")
+            if attrs["coordinate_transformation_mode"] not in (
+                    "half_pixel", "pytorch_half_pixel", "align_corners", "asymmetric"):
+                raise NotImplementedError("unsupported Resize coordinate_transformation_mode")
+            if attrs["nearest_mode"] not in ("floor", "ceil", "round_prefer_floor", "round_prefer_ceil"):
+                raise NotImplementedError("unsupported Resize nearest_mode")
+            if (get_attr(node, "axes", None) is not None or
+                    int(get_attr(node, "antialias", 0)) != 0 or
+                    int(get_attr(node, "exclude_outside", 0)) != 0 or
+                    resize_text("keep_aspect_ratio_policy", "stretch") != "stretch" or
+                    float(get_attr(node, "extrapolation_value", 0.0)) != 0.0):
+                raise NotImplementedError("Resize axes, antialias, extrapolation and aspect-ratio policies are unsupported")
+            if resize_opset <= 10:
+                if len(inputs) != 2:
+                    raise ValueError("Resize opset 10 requires data and scales")
+                inputs = [inputs[0], "", inputs[1]]
+            elif len(inputs) < 3:
+                raise ValueError("Resize requires scales or sizes")
+            if len(inputs) > 1 and inputs[1]:
+                roi = constants.get(inputs[1])
+                if roi is None or np.asarray(roi).size != 0:
+                    raise NotImplementedError("Resize ROI is unsupported")
+            def resize_control_present(position):
+                if len(inputs) <= position or not inputs[position]:
+                    return False
+                control = constants.get(inputs[position])
+                return control is None or np.asarray(control).size != 0
+
+            if resize_control_present(2) == resize_control_present(3):
+                raise ValueError("Resize requires exactly one nonempty scales or sizes input")
+            input_dims = value_infos[inputs[0]][0]
+            if attrs["mode"] == "linear" and len(input_dims) != 4:
+                raise NotImplementedError("Resize linear interpolation requires rank-four images")
+            if emit_nhwc:
+                # Control vectors retain their ONNX axis order, even when the
+                # image itself is converted to NHWC. Runtime remaps them.
+                attrs["onnx_nchw_controls"] = 1
         elif op_type == "Reshape":
             pass
         elif op_type == "Transpose":
@@ -471,10 +676,34 @@ def convert_model(input_path: str, output_path: str, layout: str = "nchw") -> No
         elif op_type == "ReduceSum":
             attrs["axes"] = [int(v) for v in list(get_attr(node, "axes", []))]
             attrs["keepdims"] = int(get_attr(node, "keepdims", 1))
+        elif op_type == "TopK":
+            attrs["axis"] = int(get_attr(node, "axis", -1))
+            attrs["largest"] = int(get_attr(node, "largest", 1))
+            attrs["sorted"] = int(get_attr(node, "sorted", 1))
+        elif op_type == "NonMaxSuppression":
+            attrs["center_point_box"] = int(get_attr(node, "center_point_box", 0))
+        elif op_type == "GatherElements":
+            attrs["axis"] = int(get_attr(node, "axis", 0))
+        elif op_type == "ReduceMax":
+            axes = [int(v) for v in get_attr(node, "axes", [])]
+            if axes:
+                attrs["axes"] = axes
+            attrs["keepdims"] = int(get_attr(node, "keepdims", 1))
+            attrs["noop_with_empty_axes"] = int(get_attr(node, "noop_with_empty_axes", 0))
+        elif op_type == "Mod":
+            attrs["fmod"] = int(get_attr(node, "fmod", 0))
         elif op_type == "Gather":
             attrs["axis"] = int(get_attr(node, "axis", 0))
         elif op_type == "Softmax":
             attrs["axis"] = int(get_attr(node, "axis", -1))
+        elif op_type in {"LayerNormalization", "RMSNormalization"}:
+            if any(not output for output in node.output):
+                raise NotImplementedError("Normalization optional outputs must be contiguous")
+            attrs["axis"] = int(get_attr(node, "axis", -1))
+            attrs["epsilon"] = float(get_attr(node, "epsilon", 1e-5))
+            attrs["stash_type"] = int(get_attr(node, "stash_type", 1))
+            if attrs["stash_type"] != 1:
+                raise NotImplementedError("Normalization requires FP32 statistics (stash_type=1)")
         elif op_type == "Slice":
             pass
         elif op_type == "Split":
@@ -546,6 +775,8 @@ def convert_model(input_path: str, output_path: str, layout: str = "nchw") -> No
             values=value_list,
             nodes=nodes,
             output_path=output_path,
+            format_version=format_version,
+            model_metadata=model_metadata,
         )
         current_offset = align_up(24 + len(metadata), WEIGHT_ALIGNMENT)
         for value in value_list:
@@ -565,10 +796,12 @@ def convert_model(input_path: str, output_path: str, layout: str = "nchw") -> No
         values=value_list,
         nodes=nodes,
         output_path=output_path,
+        format_version=format_version,
+        model_metadata=model_metadata,
     )
 
     with open(output_path, "wb") as f:
-        header = struct.pack("<8sIIQ", MAGIC, FORMAT_VERSION, 0, len(metadata))
+        header = struct.pack("<8sIIQ", MAGIC, format_version, 0, len(metadata))
         f.write(header)
         f.write(metadata)
         current = len(header) + len(metadata)

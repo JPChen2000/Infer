@@ -16,12 +16,16 @@
 #include "demo/qwen_demo.h"
 
 #include <iostream>
+#include <charconv>
+#include <limits>
 #include <algorithm>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "demo/qwen_chat_template.h"
+#include "demo/qwen_chat_session.h"
 #include "demo/qwen_runner.h"
 #include "demo/qwen_tokenizer.h"
 
@@ -30,7 +34,7 @@ namespace demo {
 
 namespace {
 
-constexpr const char* kDefaultModel = "models/llm/qwen3.5-0.8b/qwen3.5-0.8b_decode_bf16_ctx128.fth";
+constexpr const char* kDefaultModel = "models/llm/qwen3.5-0.8b/qwen3.5-0.8b_decode_bf16.fth";
 constexpr const char* kDefaultTokenizer = "models/llm/qwen3.5-0.8b";
 
 bool IsUtf8ContinuationByte(unsigned char byte) { return byte >= 0x80 && byte <= 0xbf; }
@@ -109,8 +113,13 @@ std::string ConsumeUtf8(std::string* pending, bool flush_incomplete) {
 
 void PrintUsage() {
     std::cerr << "usage: qwen_demo [--model <model.fth>] [--tokenizer <directory>] [--prompt <text>]"
-                 " [--system <text>] [--backend host|common|x86|cuda] [--max-context <tokens>]"
-                 " [--max-new-tokens <tokens>] [--profile]\n";
+                 " [--system <text>] [--backend host|common|x86|cuda] [--context-size <tokens>] [--max-context <tokens>] [--fp8-weight-cache-mb <MiB>]"
+                 " [--max-new-tokens <tokens|-1>] [--profile]\n";
+}
+
+bool ParseInteger(const std::string& text, int64_t* value) {
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), *value);
+    return result.ec == std::errc{} && result.ptr == text.data() + text.size();
 }
 
 void PrintRuntimeProfile(const QwenRunner& runner, size_t limit) {
@@ -161,27 +170,29 @@ void PrintRuntimeProfile(const QwenRunner& runner, size_t limit) {
     }
 }
 
-int RunTurn(const std::string& user_text, bool first_turn, const std::string& system_text, QwenTokenizer* tokenizer,
-            QwenRunner* runner, int max_new_tokens, bool profile, std::vector<QwenChatMessage>* history) {
-    if (tokenizer == nullptr || runner == nullptr || history == nullptr || user_text.empty()) {
+int RunTurn(const std::string& user_text, QwenTokenizer* tokenizer, QwenRunner* runner,
+            QwenChatSession* session, int max_new_tokens, bool profile) {
+    if (tokenizer == nullptr || runner == nullptr || session == nullptr || user_text.empty()) {
         return -1;
     }
-    std::string formatted;
-    if (first_turn && !system_text.empty()) {
-        formatted = RenderQwenChat({{"system", system_text}, {"user", user_text}}, true);
-    } else {
-        formatted = RenderQwenUserTurn(user_text, true);
-    }
-    const auto prompt_tokens = tokenizer->Encode(formatted);
+    const auto prompt_tokens = tokenizer->Encode(RenderQwenUserTurn(user_text, true));
     if (prompt_tokens.empty()) {
         std::cerr << "failed to encode Qwen prompt\n";
         return -1;
     }
-    const std::vector<int64_t> stop_ids = {tokenizer->EndOfTextTokenId(), tokenizer->ImEndTokenId()};
-    std::vector<int64_t> generated;
     QwenUtf8Stream utf8_stream;
+    bool have_prompt_metrics = false;
+    int64_t prompt_tokens_consumed = 0;
+    double prompt_prefill_ms = 0.0;
     bool reset_profile_after_prompt = profile;
     const auto on_token = [&](int64_t token_id) {
+        if (!have_prompt_metrics) {
+            // Turn closure is another Consume call. Retain the actual user
+            // prompt metrics before that call replaces the runner's summary.
+            have_prompt_metrics = true;
+            prompt_tokens_consumed = runner->LastPromptTokensConsumed();
+            prompt_prefill_ms = runner->LastPrefillMilliseconds();
+        }
         if (reset_profile_after_prompt) {
             // Prompt execution performs one-time immutable-weight packing. Keep
             // the report focused on steady-state autoregressive decode.
@@ -189,7 +200,6 @@ int RunTurn(const std::string& user_text, bool first_turn, const std::string& sy
             runner->SetRuntimeProfilingEnabled(true);
             reset_profile_after_prompt = false;
         }
-        generated.push_back(token_id);
         if (token_id == tokenizer->EndOfTextTokenId() || token_id == tokenizer->ImEndTokenId()) {
             return;
         }
@@ -199,34 +209,30 @@ int RunTurn(const std::string& user_text, bool first_turn, const std::string& sy
             std::cout << complete << std::flush;
         }
     };
-    if (runner->GenerateStream(prompt_tokens, max_new_tokens, stop_ids, on_token) != 0) {
-        std::cerr << "Qwen generation failed: " << runner->LastError() << '\n';
+    QwenGenerationOptions options;
+    options.max_new_tokens = max_new_tokens;
+    if (session->GenerateTurn(prompt_tokens, options, on_token) != 0) {
+        std::cerr << "Qwen generation failed: " << session->LastError() << '\n';
         return -1;
-    }
-    const bool ended_with_stop = !generated.empty() &&
-                                 (generated.back() == tokenizer->EndOfTextTokenId() ||
-                                  generated.back() == tokenizer->ImEndTokenId());
-    if (!ended_with_stop && runner->Consume({tokenizer->ImEndTokenId()}) != 0) {
-        std::cerr << "failed to close Qwen assistant turn: " << runner->LastError() << '\n';
-        return -1;
-    }
-    std::vector<int64_t> response_tokens;
-    response_tokens.reserve(generated.size());
-    for (const auto token : generated) {
-        if (token != tokenizer->EndOfTextTokenId() && token != tokenizer->ImEndTokenId()) {
-            response_tokens.push_back(token);
-        }
     }
     const std::string pending = utf8_stream.Finish();
     if (!pending.empty()) {
         std::cout << pending << std::flush;
     }
-    const std::string response = tokenizer->Decode(response_tokens);
     std::cout << '\n';
-    history->push_back({"user", user_text});
-    history->push_back({"assistant", response});
+    if (have_prompt_metrics) {
+        std::cout << "[framework] prompt_tokens=" << prompt_tokens_consumed
+                  << " prompt_prefill_ms=" << prompt_prefill_ms
+                  << " prefill_chunk=" << runner->PrefillChunkSize() << '\n';
+    }
     std::cout << "[framework] " << runner->DescribeLastRun() << " tokens_processed=" << runner->TokensProcessed()
-              << '\n';
+              << " context_capacity=" << runner->MaxContext()
+              << " context_growths=" << runner->ContextGrowthCount()
+              << " finish_reason=" << QwenFinishReasonName(session->LastFinishReason()) << '\n';
+    if (session->LastRebuiltHistory()) {
+        std::cout << "[framework] history_rebuilt=true dropped_turns=" << session->LastDroppedTurns()
+                  << " retained_turns=" << session->History().TurnCount() << '\n';
+    }
     return 0;
 }
 
@@ -247,8 +253,9 @@ int RunQwenDemo(int argc, char** argv) {
     std::string prompt;
     std::string system_text = "You are a helpful assistant.";
     QwenBackend backend = QwenBackend::kX86;
-    int max_new_tokens = 64;
-    int requested_max_context = 0;
+    int max_new_tokens = 512;
+    int64_t requested_context_size = 0;
+    int64_t fp8_weight_cache_mb = 256;
     bool profile = false;
     for (int index = 1; index < argc; ++index) {
         const std::string argument = argv[index];
@@ -266,23 +273,36 @@ int RunQwenDemo(int argc, char** argv) {
                 PrintUsage();
                 return 1;
             }
-        } else if (argument == "--max-context" && index + 1 < argc) {
-            requested_max_context = std::stoi(argv[++index]);
+        } else if ((argument == "--context-size" || argument == "--max-context") && index + 1 < argc) {
+            if (!ParseInteger(argv[++index], &requested_context_size) || requested_context_size < 0) {
+                std::cerr << "invalid " << argument << ": expected a nonnegative token count\n";
+                return 1;
+            }
+        } else if (argument == "--fp8-weight-cache-mb" && index + 1 < argc) {
+            if (!ParseInteger(argv[++index], &fp8_weight_cache_mb) || fp8_weight_cache_mb < 0 ||
+                static_cast<uint64_t>(fp8_weight_cache_mb) > std::numeric_limits<size_t>::max() / (1024 * 1024)) {
+                std::cerr << "invalid --fp8-weight-cache-mb: expected a nonnegative MiB count\n";
+                return 1;
+            }
         } else if (argument == "--max-new-tokens" && index + 1 < argc) {
-            max_new_tokens = std::stoi(argv[++index]);
+            int64_t parsed_budget = 0;
+            if (!ParseInteger(argv[++index], &parsed_budget) ||
+                (parsed_budget <= 0 && parsed_budget != -1) ||
+                parsed_budget > std::numeric_limits<int>::max()) {
+                std::cerr << "invalid --max-new-tokens: expected a positive token count or -1\n";
+                return 1;
+            }
+            max_new_tokens = static_cast<int>(parsed_budget);
         } else if (argument == "--profile") {
             profile = true;
         } else if (argument == "--help") {
             PrintUsage();
             return 0;
         } else {
+            std::cerr << "unknown argument or missing value: " << argument << '\n';
             PrintUsage();
             return 1;
         }
-    }
-    if (max_new_tokens <= 0 || requested_max_context < 0) {
-        PrintUsage();
-        return 1;
     }
 
     QwenTokenizer tokenizer;
@@ -291,38 +311,49 @@ int RunQwenDemo(int argc, char** argv) {
         return 1;
     }
     QwenRunner runner;
-    if (runner.Load(model_path, backend) != 0) {
+    QwenLoadOptions load_options;
+    load_options.context_size = requested_context_size;
+    load_options.fp8_weight_cache_bytes = static_cast<size_t>(fp8_weight_cache_mb) * 1024 * 1024;
+    if (runner.Load(model_path, backend, load_options) != 0) {
         std::cerr << "failed to load Qwen model: " << runner.LastError() << '\n';
         return 1;
     }
     runner.SetRuntimeProfilingEnabled(profile);
-    if (requested_max_context != 0 && requested_max_context != runner.MaxContext()) {
-        std::cerr << "requested max context does not match the fixed FTH graph context " << runner.MaxContext() << '\n';
-        return 1;
-    }
     std::cout << "[framework] " << runner.DescribeLastBuild() << '\n';
 
-    std::vector<QwenChatMessage> history;
+    std::vector<int64_t> system_tokens;
+    if (!system_text.empty()) {
+        system_tokens = tokenizer.Encode(RenderQwenChat({{"system", system_text}}, false));
+        if (system_tokens.empty()) {
+            std::cerr << "failed to encode Qwen system prompt\n";
+            return 1;
+        }
+    }
+    const auto newline_tokens = tokenizer.Encode("\n");
+    if (newline_tokens.empty() || tokenizer.ImEndTokenId() < 0 || tokenizer.EndOfTextTokenId() < 0) {
+        std::cerr << "failed to encode Qwen turn closure\n";
+        return 1;
+    }
+    QwenChatSession session(&runner, std::move(system_tokens), tokenizer.ImEndTokenId(), newline_tokens,
+                            {tokenizer.EndOfTextTokenId(), tokenizer.ImEndTokenId()});
     if (!prompt.empty()) {
-        const int status = RunTurn(prompt, true, system_text, &tokenizer, &runner, max_new_tokens, profile, &history);
+        const int status = RunTurn(prompt, &tokenizer, &runner, &session, max_new_tokens, profile);
         if (status == 0 && profile) {
             PrintRuntimeProfile(runner, 30);
         }
         return status == 0 ? 0 : 1;
     }
     std::string line;
-    bool first_turn = true;
     while (std::getline(std::cin, line)) {
         if (line.empty()) {
             continue;
         }
-        if (RunTurn(line, first_turn, system_text, &tokenizer, &runner, max_new_tokens, profile, &history) != 0) {
+        if (RunTurn(line, &tokenizer, &runner, &session, max_new_tokens, profile) != 0) {
             return 1;
         }
         if (profile) {
             PrintRuntimeProfile(runner, 30);
         }
-        first_turn = false;
     }
     return 0;
 }

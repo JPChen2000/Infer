@@ -20,9 +20,16 @@ The graph represents one token at a time.  Convolution/recurrent states and
 full-attention KV caches are explicit graph values so the C++ runner owns all
 sequence state.  Model-specific modules are expanded into ordinary ONNX
 operators; no Qwen-specific operator is emitted.
+
+FP8 export quantizes bulk linear projections. Original embedding/tied head,
+depthwise convolution and recurrence-control projections retain BF16 weights
+and interfaces. Residuals and nonlinear operations keep BF16 precision; the
+recurrent update and sensitive reductions remain FP32.
 """
 
 import argparse
+import fnmatch
+import hashlib
 import json
 import math
 import struct
@@ -38,7 +45,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL_DIR = ROOT / "models" / "llm" / "qwen3.5-0.8b"
 
 FTH_MAGIC = b"FTHMODL\x00"
-FTH_FORMAT_VERSION = 2
+FTH_FORMAT_VERSION = 4
 FTH_WEIGHT_ALIGNMENT = 64
 FTH_LAYOUT_ND = 2
 FTH_DTYPE_BYTES = {1: 1, 2: 1, 3: 2, 4: 4, 5: 4, 6: 8, 9: 1, 11: 2, 12: 1, 13: 1}
@@ -225,6 +232,8 @@ def fth_encode_tensor(desc):
                     struct.pack("<i", int(desc.quantization_granularity)) +
                     struct.pack("<q", int(desc.quantization_axis)) +
                     struct.pack("<q", int(desc.quantization_block_size)))
+    if FTH_FORMAT_VERSION >= 3:
+        payload += struct.pack("<i", 0) + fth_encode_floats([]) + fth_encode_ints([])
     return payload
 
 
@@ -248,17 +257,23 @@ def fth_encode_node(node):
     return payload
 
 
-def fth_encode_model(name, graph_name, inputs, outputs, values, nodes, output_path):
+def fth_encode_model(name, graph_name, inputs, outputs, values, nodes, output_path, model_metadata=None):
     graph = (fth_encode_string(graph_name) + fth_encode_names(inputs) + fth_encode_names(outputs) +
              struct.pack("<Q", len(values)) +
              b"".join(fth_encode_value(value, output_path) for value in values) +
              struct.pack("<Q", len(nodes)) + b"".join(fth_encode_node(node) for node in nodes))
-    return fth_encode_string(name) + struct.pack("<q", 1) + graph
+    payload = fth_encode_string(name) + struct.pack("<q", 1) + graph
+    if FTH_FORMAT_VERSION >= 4:
+        metadata = model_metadata or {}
+        payload += struct.pack("<Q", len(metadata))
+        for key in sorted(metadata):
+            payload += fth_encode_string(key) + fth_encode_attribute(metadata[key])
+    return payload
 
 
-def write_feather_model(path, name, graph_name, inputs, outputs, values, nodes, payloads):
+def write_feather_model(path, name, graph_name, inputs, outputs, values, nodes, payloads, model_metadata=None):
     for _ in range(4):
-        metadata = fth_encode_model(name, graph_name, inputs, outputs, values, nodes, path)
+        metadata = fth_encode_model(name, graph_name, inputs, outputs, values, nodes, path, model_metadata)
         offset = fth_align_up(24 + len(metadata))
         for value in values:
             if not value.constant:
@@ -269,7 +284,7 @@ def write_feather_model(path, name, graph_name, inputs, outputs, values, nodes, 
             value.checksum = ""
             offset = fth_align_up(offset + payload.byte_size)
 
-    metadata = fth_encode_model(name, graph_name, inputs, outputs, values, nodes, path)
+    metadata = fth_encode_model(name, graph_name, inputs, outputs, values, nodes, path, model_metadata)
     with open(path, "wb") as output:
         output.write(struct.pack("<8sIIQ", FTH_MAGIC, FTH_FORMAT_VERSION, 0, len(metadata)))
         output.write(metadata)
@@ -351,6 +366,47 @@ def feather_attributes(op_type, onnx_attributes):
     return attributes
 
 
+class ContextDimension(int):
+    """Concrete default extent with an explicit context_size + offset binding."""
+
+    def __new__(cls, value, offset=0):
+        result = super().__new__(cls, value)
+        result.offset = int(offset)
+        return result
+
+    def __add__(self, other):
+        if not isinstance(other, int) or isinstance(other, ContextDimension):
+            raise TypeError("context dimensions only support integer offsets")
+        return ContextDimension(int(self) + other, self.offset + other)
+
+    __radd__ = __add__
+
+    def __sub__(self, other):
+        return self + (-other)
+
+
+class SequenceDimension(int):
+    """Concrete default extent with an explicit sequence_length + offset binding."""
+
+    def __new__(cls, value, offset=0):
+        result = super().__new__(cls, value)
+        result.offset = int(offset)
+        return result
+
+    def __add__(self, other):
+        if not isinstance(other, int) or isinstance(other, (ContextDimension, SequenceDimension)):
+            raise TypeError("sequence dimensions only support integer offsets")
+        return SequenceDimension(int(self) + other, self.offset + other)
+
+    __radd__ = __add__
+
+    def __sub__(self, other):
+        if isinstance(other, SequenceDimension):
+            # Equal symbolic coefficients cancel; e.g. (T + 3) - T = 3.
+            return self.offset - other.offset
+        return self + (-other)
+
+
 class AtomicGraph:
     def __init__(self):
         self.nodes = []
@@ -362,7 +418,24 @@ class AtomicGraph:
         self.constant_values = {}
         self.external_constant_loaders = {}
         self.quantization_scales = {}
+        self.metadata = {}
         self.counter = 0
+
+    def bind_context(self, key, values):
+        bindings = [item for index, value in enumerate(values) if isinstance(value, ContextDimension)
+                    for item in (index, value.offset)]
+        if bindings:
+            self.metadata[key] = bindings
+        else:
+            self.metadata.pop(key, None)
+
+    def bind_sequence(self, key, values):
+        bindings = [item for index, value in enumerate(values) if isinstance(value, SequenceDimension)
+                    for item in (index, value.offset)]
+        if bindings:
+            self.metadata[key] = bindings
+        else:
+            self.metadata.pop(key, None)
 
     def fresh(self, stem):
         self.counter += 1
@@ -381,6 +454,8 @@ class AtomicGraph:
                 raise ValueError(f"non-FP8 value {name} must not carry FP8 quantization metadata")
             self.quantization_scales.pop(name, None)
         self.value_info[name] = (list(shape), dtype)
+        self.bind_context("qwen.context.value." + name, shape)
+        self.bind_sequence("qwen.sequence.value." + name, shape)
         return name
 
     def input(self, name, shape, dtype, quantization_scale=None):
@@ -417,7 +492,10 @@ class AtomicGraph:
         return self.const(name, np.asarray([value], dtype=dtype))
 
     def ints(self, name, values):
-        return self.const(name, np.asarray(values, dtype=np.int64))
+        result = self.const(name, np.asarray(values, dtype=np.int64))
+        self.bind_context("qwen.context.constant." + result, values)
+        self.bind_sequence("qwen.sequence.constant." + result, values)
+        return result
 
     def node(self, op_type, inputs, outputs, shapes, dtypes, name=None, quantization_scales=None, **attrs):
         if isinstance(outputs, str):
@@ -434,6 +512,12 @@ class AtomicGraph:
             raise ValueError(f"invalid output metadata for {op_type}")
         if name is None:
             name = self.fresh(op_type.lower())
+        for key, values in feather_attributes(op_type, attrs).items():
+            if isinstance(values, (list, tuple)):
+                self.bind_context(f"qwen.context.attribute.{name}.{key}", values)
+                self.bind_sequence(f"qwen.sequence.attribute.{name}.{key}", values)
+            elif isinstance(values, SequenceDimension):
+                self.bind_sequence(f"qwen.sequence.attribute.{name}.{key}", [values])
         for output, shape, dtype, quantization_scale in zip(outputs, shapes, dtypes, quantization_scales):
             self.register(output, shape, dtype, quantization_scale)
         self.nodes.append(FeatherNodeDesc(
@@ -562,7 +646,7 @@ class AtomicGraph:
         )
         return model
 
-    def write_fth(self, path, model_name):
+    def fth_components(self):
         values = []
         for name, (shape, dtype) in self.value_info.items():
             quantization_scale = self.quantization_scales.get(name)
@@ -607,25 +691,42 @@ class AtomicGraph:
 
             payloads[name] = FeatherWeightPayload(byte_size=byte_size, write=write_external)
 
-        write_feather_model(path, model_name, "qwen35_decode_atomic", self.inputs, self.outputs, values, nodes, payloads)
+        return values, nodes, payloads
+
+    def write_fth(self, path, model_name):
+        values, nodes, payloads = self.fth_components()
+        write_feather_model(path, model_name, "qwen35_decode_atomic", self.inputs, self.outputs, values, nodes,
+                            payloads, self.metadata)
+
+
+QWEN_PRECISION_POLICY = "bf16_embedding_conv_recurrence_controls_v1"
 
 
 class QwenBuilder:
-    def __init__(self, model_dir, max_context, fp8_dtype=None, fp8_activation_amax=96.0):
+    def __init__(self, model_dir, max_context, fp8_dtype=None, fp8_activation_amax=96.0,
+                 fp8_calibration=None, fp8_keep_bf16=()):
         if fp8_dtype is not None and not is_fp8_dtype(fp8_dtype):
             raise ValueError(f"unsupported Qwen FP8 format {fp8_dtype}")
         if fp8_dtype is not None and (
                 not math.isfinite(float(fp8_activation_amax)) or fp8_activation_amax <= 0.0):
             raise ValueError("FP8 activation maximum must be finite and positive")
         self.model_dir = Path(model_dir)
-        self.max_context = max_context
+        self.max_context = ContextDimension(max_context)
         self.fp8_dtype = fp8_dtype
         self.fp8_activation_scale = (
             fp8_scale_for_amax(fp8_dtype, fp8_activation_amax) if fp8_dtype is not None else None
         )
         self.fp8_weight_scales = {}
+        self.fp8_calibration = fp8_calibration
+        self.fp8_keep_bf16 = sorted(set(fp8_keep_bf16) | set((fp8_calibration or {}).get("keep_bf16", [])))
+        if (fp8_calibration or self.fp8_keep_bf16) and fp8_dtype is None:
+            raise ValueError("FP8 calibration/keep policy requires --fp8-format")
+        self.projection_keys = set()
         self.config = json.loads((self.model_dir / "config.json").read_text())
         self.text = self.config["text_config"]
+        context_limit = int(self.text.get("max_position_embeddings", max_context))
+        if max_context < 2 or max_context > context_limit:
+            raise ValueError("default context must be between 2 and max_position_embeddings")
         self.hidden = int(self.text["hidden_size"])
         self.intermediate = int(self.text["intermediate_size"])
         self.layers = int(self.text["num_hidden_layers"])
@@ -641,6 +742,15 @@ class QwenBuilder:
         self.rope_theta = float(self.text["rope_parameters"]["rope_theta"])
         self.eps = float(self.text["rms_norm_eps"])
         self.g = AtomicGraph()
+        self.g.metadata.update({"qwen.context.version": 1,
+                                "qwen.context.default": int(max_context),
+                                "qwen.context.maximum": context_limit,
+                                "qwen.precision.policy": QWEN_PRECISION_POLICY})
+        if fp8_calibration:
+            self.g.metadata["qwen.fp8.calibration.sha256"] = hashlib.sha256(
+                json.dumps(fp8_calibration, sort_keys=True, allow_nan=False).encode()).hexdigest()
+        if self.fp8_keep_bf16:
+            self.g.metadata["qwen.fp8.keep_bf16"] = json.dumps(self.fp8_keep_bf16)
         self.source = None
         self.cast_cache = {}
 
@@ -717,18 +827,9 @@ class QwenBuilder:
             self.cast_cache[key] = self.g.cast(x, shape, dtype, stem, quantization_scale=quantization_scale)
         return self.cast_cache[key]
 
-    def fp8_activation(self, x, stem):
-        """Enter the shared FP8 activation domain when FP8 export is active."""
-        if self.fp8_dtype is None:
-            return x
-        return self.cast(x, self.fp8_dtype, stem, self.fp8_activation_scale)
-
-    def compute_dtype(self):
-        return self.fp8_dtype if self.fp8_dtype is not None else BF16
-
     def rms_norm(self, x, weight_key, stem):
-        # Keep the norm fusion's BF16 interface.  The surrounding compute path
-        # re-enters FP8 once the numerically sensitive reduction has completed.
+        # Keep the norm fusion's BF16 interface. Projections quantize their
+        # inputs after the numerically sensitive reduction has completed.
         if self.fp8_dtype is not None and is_fp8_dtype(self.g.value_info[x][1]):
             x = self.cast(x, BF16, f"{stem}_input_to_bf16")
         shape = self.g.value_info[x][0]
@@ -760,23 +861,50 @@ class QwenBuilder:
         root = self.g.unary("Sqrt", total, sum_shape, FP32, f"{stem}_sqrt")
         return self.g.binary("Div", x32, root, shape, FP32, f"{stem}_normalize")
 
-    def projection(self, x, key, out_size, stem):
+    def projection(self, x, key, out_size, stem, preserve_bf16=False):
+        # The small recurrence controls keep their original BF16 interface;
+        # quantizing a/b changes every subsequent decay and state update.
         x_shape = self.g.value_info[x][0]
         out_shape = list(x_shape)
         out_shape[-1] = out_size
-        if self.fp8_dtype is None:
-            w = self.weight(key, transpose=True)
-            return self.g.node("MatMul", [x, w], self.g.fresh(stem), [out_shape], BF16)
-        fp8_input = self.fp8_activation(x, f"{stem}_to_fp8")
+        if not preserve_bf16:
+            self.projection_keys.add(key)
+        kept = any(fnmatch.fnmatchcase(key, pattern) for pattern in self.fp8_keep_bf16)
+        if self.fp8_dtype is None or preserve_bf16 or kept:
+            # Recurrent math produces FP32 activations; restore the projection
+            # interface explicitly before multiplying BF16 checkpoint weights.
+            x = self.cast(x, BF16, f"{stem}_to_bf16")
+            w = self.weight(key, transpose=True, force_dtype=BF16)
+            result = self.g.node("MatMul", [x, w], self.g.fresh(stem), [out_shape], BF16)
+            if not preserve_bf16:
+                self.g.metadata["qwen.projection.input." + key] = x
+                self.g.metadata["qwen.projection.output." + key] = result
+            return result
+        input_scale = output_scale = self.fp8_activation_scale
+        if self.fp8_calibration:
+            ranges = self.fp8_calibration["projections"].get(key)
+            if ranges is None:
+                raise ValueError(f"calibration missing projection {key}")
+            input_scale = fp8_scale_for_amax(self.fp8_dtype, ranges["input_amax"])
+            output_scale = fp8_scale_for_amax(self.fp8_dtype, ranges["output_amax"])
+        fp8_input = self.cast(x, self.fp8_dtype, f"{stem}_to_fp8", input_scale)
         fp8_weight = self.weight(key, transpose=True, force_dtype=self.fp8_dtype)
-        return self.g.node(
+        projected = self.g.node(
             "MatMul",
             [fp8_input, fp8_weight],
             self.g.fresh(stem),
             [out_shape],
             self.fp8_dtype,
-            quantization_scales=self.fp8_activation_scale,
+            quantization_scales=output_scale,
         )
+        return self.cast(projected, BF16, f"{stem}_to_bf16")
+
+    def validate_precision_policy(self):
+        if self.fp8_calibration and set(self.fp8_calibration["projections"]) != self.projection_keys:
+            raise ValueError("calibration projection coverage does not match model")
+        for pattern in self.fp8_keep_bf16:
+            if not any(fnmatch.fnmatchcase(key, pattern) for key in self.projection_keys):
+                raise ValueError(f"BF16 keep pattern matches no bulk projection: {pattern}")
 
     def silu(self, x, stem):
         shape = self.g.value_info[x][0]
@@ -791,37 +919,23 @@ class QwenBuilder:
         mixed = self.projection(hidden, f"model.language_model.layers.{layer}.linear_attn.in_proj_qkv.weight", self.conv_dim, f"{stem}_qkv_proj")
         mixed_t = self.g.transpose(mixed, [0, 2, 1], [1, self.conv_dim, 1], f"{stem}_qkv_transpose")
         state = f"conv_state_{layer}"
-        # The rolling convolution state remains BF16, so it is one of the
-        # deliberate FP8 boundaries.  Everything following the Conv stays in
-        # FP8 until it enters the recurrent FP32 update below.
+        # Preserve convolution and its rolling state in BF16: quantization
+        # error here is fed into every subsequent recurrent update.
         mixed_t_state = self.cast(mixed_t, BF16, f"{stem}_qkv_to_state_bf16")
         joined = self.g.concat([state, mixed_t_state], 2, [1, self.conv_dim, 4], BF16, f"{stem}_state_join")
         joined_2d = self.g.reshape(joined, [1, self.conv_dim, 1, 4], f"{stem}_conv_input")
         conv_weight = self.g.reshape(
-            self.weight(
-                f"model.language_model.layers.{layer}.linear_attn.conv1d.weight",
-                force_dtype=self.fp8_dtype,
-            ) if self.fp8_dtype is not None else self.weight(
-                f"model.language_model.layers.{layer}.linear_attn.conv1d.weight"
-            ),
+            self.weight(f"model.language_model.layers.{layer}.linear_attn.conv1d.weight", force_dtype=BF16),
             [self.conv_dim, 1, 1, 4],
             f"{stem}_conv_weight",
         )
-        conv_input = joined_2d
-        conv_dtype = BF16
-        conv_quantization_scale = None
-        if self.fp8_dtype is not None:
-            conv_input = self.cast(joined_2d, self.fp8_dtype, f"{stem}_conv_input_to_fp8",
-                                   self.fp8_activation_scale)
-            conv_dtype = self.fp8_dtype
-            conv_quantization_scale = self.fp8_activation_scale
+        conv_weight = self.cast(conv_weight, BF16, f"{stem}_conv_weight_bf16")
         conv = self.g.node(
             "Conv",
-            [conv_input, conv_weight],
+            [joined_2d, conv_weight],
             self.g.fresh(f"{stem}_conv"),
             [[1, self.conv_dim, 1, 1]],
-            conv_dtype,
-            quantization_scales=conv_quantization_scale,
+            BF16,
             strides=[1, 1],
             pads=[0, 0, 0, 0],
             dilations=[1, 1],
@@ -847,9 +961,9 @@ class QwenBuilder:
 
         z = self.projection(hidden, f"model.language_model.layers.{layer}.linear_attn.in_proj_z.weight", self.linear_heads * self.linear_value_dim, f"{stem}_z_proj")
         z = self.g.reshape(z, [1, self.linear_heads, self.linear_value_dim], f"{stem}_z_reshape")
-        b = self.projection(hidden, f"model.language_model.layers.{layer}.linear_attn.in_proj_b.weight", self.linear_heads, f"{stem}_b_proj")
+        b = self.projection(hidden, f"model.language_model.layers.{layer}.linear_attn.in_proj_b.weight", self.linear_heads, f"{stem}_b_proj", preserve_bf16=True)
         b = self.g.reshape(b, [1, self.linear_heads], f"{stem}_b_reshape")
-        a = self.projection(hidden, f"model.language_model.layers.{layer}.linear_attn.in_proj_a.weight", self.linear_heads, f"{stem}_a_proj")
+        a = self.projection(hidden, f"model.language_model.layers.{layer}.linear_attn.in_proj_a.weight", self.linear_heads, f"{stem}_a_proj", preserve_bf16=True)
         a = self.g.reshape(a, [1, self.linear_heads], f"{stem}_a_reshape")
         q32 = self.g.binary(
             "Mul", q, self.g.scalar("qwen_linear_query_scale", 1.0 / (self.linear_key_dim ** 0.5)),
@@ -897,19 +1011,18 @@ class QwenBuilder:
         z32 = self.cast(z, FP32, f"{stem}_gate_to_fp32")
         z_silu = self.silu(z32, f"{stem}_gate_silu")
         gated = self.g.binary("Mul", normalized, z_silu, [1, self.linear_heads, self.linear_value_dim], FP32, f"{stem}_gated")
-        gated = self.fp8_activation(gated, f"{stem}_gated_to_fp8")
         gated = self.g.reshape(gated, [1, 1, self.linear_heads * self.linear_value_dim], f"{stem}_gated_flat")
         mixed_out = self.projection(gated, f"model.language_model.layers.{layer}.linear_attn.out_proj.weight", self.hidden, f"{stem}_out_proj")
-        hidden = self.g.binary("Add", residual, mixed_out, [1, 1, self.hidden], self.compute_dtype(), f"{stem}_residual")
+        hidden = self.g.binary("Add", residual, mixed_out, [1, 1, self.hidden], BF16, f"{stem}_residual")
 
         residual = hidden
         hidden = self.rms_norm(hidden, f"model.language_model.layers.{layer}.post_attention_layernorm.weight", f"{stem}_post_norm")
         gate = self.projection(hidden, f"model.language_model.layers.{layer}.mlp.gate_proj.weight", self.intermediate, f"{stem}_mlp_gate")
         up = self.projection(hidden, f"model.language_model.layers.{layer}.mlp.up_proj.weight", self.intermediate, f"{stem}_mlp_up")
         gate = self.silu(gate, f"{stem}_mlp_silu")
-        product = self.g.binary("Mul", gate, up, [1, 1, self.intermediate], self.compute_dtype(), f"{stem}_mlp_product")
+        product = self.g.binary("Mul", gate, up, [1, 1, self.intermediate], BF16, f"{stem}_mlp_product")
         down = self.projection(product, f"model.language_model.layers.{layer}.mlp.down_proj.weight", self.hidden, f"{stem}_mlp_down")
-        hidden = self.g.binary("Add", residual, down, [1, 1, self.hidden], self.compute_dtype(), f"{stem}_mlp_residual")
+        hidden = self.g.binary("Add", residual, down, [1, 1, self.hidden], BF16, f"{stem}_mlp_residual")
         return hidden, next_conv_state, next_state
 
     def rope(self, x, position, stem):
@@ -998,21 +1111,20 @@ class QwenBuilder:
         attended = self.g.node("MatMul", [probs, v_cache], self.g.fresh(f"{stem}_attended"), [[1, self.full_heads, 1, self.head_dim]], BF16)
         attended = self.g.transpose(attended, [0, 2, 1, 3], [1, 1, self.full_heads, self.head_dim], f"{stem}_attended_transpose")
         attended = self.g.reshape(attended, [1, 1, self.full_heads * self.head_dim], f"{stem}_attended_reshape")
-        attended = self.fp8_activation(attended, f"{stem}_attended_to_fp8")
         gate = self.g.unary(
-            "Sigmoid", gate, [1, 1, self.full_heads * self.head_dim], self.compute_dtype(), f"{stem}_gate_sigmoid"
+            "Sigmoid", gate, [1, 1, self.full_heads * self.head_dim], BF16, f"{stem}_gate_sigmoid"
         )
-        attended = self.g.binary("Mul", attended, gate, [1, 1, self.full_heads * self.head_dim], self.compute_dtype(), f"{stem}_gate_mul")
+        attended = self.g.binary("Mul", attended, gate, [1, 1, self.full_heads * self.head_dim], BF16, f"{stem}_gate_mul")
         attended = self.projection(attended, f"model.language_model.layers.{layer}.self_attn.o_proj.weight", self.hidden, f"{stem}_out_proj")
-        hidden = self.g.binary("Add", residual, attended, [1, 1, self.hidden], self.compute_dtype(), f"{stem}_residual")
+        hidden = self.g.binary("Add", residual, attended, [1, 1, self.hidden], BF16, f"{stem}_residual")
 
         residual = hidden
         hidden = self.rms_norm(hidden, f"model.language_model.layers.{layer}.post_attention_layernorm.weight", f"{stem}_post_norm")
         gate = self.silu(self.projection(hidden, f"model.language_model.layers.{layer}.mlp.gate_proj.weight", self.intermediate, f"{stem}_mlp_gate"), f"{stem}_mlp_silu")
         up = self.projection(hidden, f"model.language_model.layers.{layer}.mlp.up_proj.weight", self.intermediate, f"{stem}_mlp_up")
-        product = self.g.binary("Mul", gate, up, [1, 1, self.intermediate], self.compute_dtype(), f"{stem}_mlp_product")
+        product = self.g.binary("Mul", gate, up, [1, 1, self.intermediate], BF16, f"{stem}_mlp_product")
         down = self.projection(product, f"model.language_model.layers.{layer}.mlp.down_proj.weight", self.hidden, f"{stem}_mlp_down")
-        hidden = self.g.binary("Add", residual, down, [1, 1, self.hidden], self.compute_dtype(), f"{stem}_mlp_residual")
+        hidden = self.g.binary("Add", residual, down, [1, 1, self.hidden], BF16, f"{stem}_mlp_residual")
         return hidden, current_k, current_v
 
     def build(self):
@@ -1027,18 +1139,16 @@ class QwenBuilder:
             else:
                 g.input(f"k_cache_{layer}", [1, self.kv_heads, self.max_context - 1, self.head_dim], BF16)
                 g.input(f"v_cache_{layer}", [1, self.kv_heads, self.max_context - 1, self.head_dim], BF16)
-        embedding = self.weight(
-            "model.language_model.embed_tokens.weight", force_dtype=self.fp8_dtype
-        ) if self.fp8_dtype is not None else self.weight("model.language_model.embed_tokens.weight")
+        embedding = self.weight("model.language_model.embed_tokens.weight", force_dtype=BF16)
         hidden = g.node(
             "Gather",
             [embedding, token_ids],
             g.fresh("embedding"),
             [[1, 1, self.hidden]],
-            self.fp8_dtype if self.fp8_dtype is not None else BF16,
-            quantization_scales=self.fp8_activation_scale if self.fp8_dtype is not None else None,
+            BF16,
             axis=0,
         )
+        hidden = self.cast(hidden, BF16, "embedding_to_bf16")
         for layer in range(self.layers):
             if self.text["layer_types"][layer] == "linear_attention":
                 hidden, next_conv, next_state = self.build_linear_layer(layer, hidden)
@@ -1058,42 +1168,20 @@ class QwenBuilder:
                 g.output(current_v, [1, self.kv_heads, 1, self.head_dim], BF16)
         hidden = self.rms_norm(hidden, "model.language_model.norm.weight", "final_norm")
         hidden = g.reshape(hidden, [1, self.hidden], "lm_head_input")
-        if self.fp8_dtype is None:
-            embedding_logits = self.weight("model.language_model.embed_tokens.weight")
-            logits = g.node(
-                "Gemm",
-                [hidden, embedding_logits],
-                "logits",
-                [[1, self.vocab]],
-                BF16,
-                alpha=1.0,
-                beta=1.0,
-                transA=0,
-                transB=1,
-            )
-        else:
-            hidden = self.cast(hidden, self.fp8_dtype, "lm_head_input_to_fp8", self.fp8_activation_scale)
-            embedding_logits = self.weight("model.language_model.embed_tokens.weight", force_dtype=self.fp8_dtype)
-            fp8_logits = g.node(
-                "Gemm",
-                [hidden, embedding_logits],
-                g.fresh("logits_fp8"),
-                [[1, self.vocab]],
-                self.fp8_dtype,
-                quantization_scales=self.fp8_activation_scale,
-                alpha=1.0,
-                beta=1.0,
-                transA=0,
-                transB=1,
-            )
-            logits = g.node(
-                "Cast",
-                [fp8_logits],
-                "logits",
-                [[1, self.vocab]],
-                BF16,
-                to=FTH_TO_ONNX_DTYPE[BF16],
-            )
+        embedding_logits = embedding
+        # Casting FP8 logits back to BF16 cannot recover score differences
+        # lost before argmax. Compute the token scores directly in BF16.
+        logits = g.node(
+            "Gemm",
+            [hidden, embedding_logits],
+            "logits",
+            [[1, self.vocab]],
+            BF16,
+            alpha=1.0,
+            beta=1.0,
+            transA=0,
+            transB=1,
+        )
         g.output(logits, [1, self.vocab], BF16)
         return g
 
@@ -1101,6 +1189,7 @@ class QwenBuilder:
         return self.g.make_model(self.max_context)
 
     def write_fth(self, path):
+        self.validate_precision_policy()
         precision = "bf16" if self.fp8_dtype is None else fp8_format_name(self.fp8_dtype)
         self.g.write_fth(path, f"qwen3.5-0.8b_decode_{precision}")
 
@@ -1122,11 +1211,14 @@ def resolve_shard(model_dir):
 def main():
     parser = argparse.ArgumentParser(description="Export Qwen3.5-0.8B safetensors directly to atomic Feather FTH")
     parser.add_argument("--model-dir", type=Path, default=DEFAULT_MODEL_DIR)
-    parser.add_argument("--max-context", type=int, default=128)
+    parser.add_argument("--default-context", "--max-context", dest="max_context", type=int, default=4096,
+                        help="Default session capacity; the same FTH can specialize to another capacity at load.")
     parser.add_argument("--fp8-format", choices=("e4m3", "e5m2"),
-                        help="Export FP8 compute islands with the selected format.")
+                        help="Quantize bulk projections; preserve BF16 embedding/head, convolution, recurrence controls and residuals.")
     parser.add_argument("--fp8-activation-amax", type=float, default=96.0,
                         help="Static finite activation bound used to derive per-tensor FP8 scales.")
+    parser.add_argument("--fp8-calibration", type=Path)
+    parser.add_argument("--fp8-keep-bf16", action="append", default=[], metavar="CHECKPOINT_KEY_GLOB")
     parser.add_argument("--output-fth", type=Path)
     parser.add_argument("--output-onnx", type=Path,
                         help="Optional debug ONNX path. This is not used by FTH export.")
@@ -1139,16 +1231,24 @@ def main():
     model_dir = args.model_dir.resolve()
     fp8_dtype = {"e4m3": FP8E4M3, "e5m2": FP8E5M2}.get(args.fp8_format)
     precision = "bf16" if fp8_dtype is None else fp8_format_name(fp8_dtype)
-    output_fth = args.output_fth or model_dir / f"qwen3.5-0.8b_decode_{precision}_ctx{args.max_context}.fth"
+    output_fth = args.output_fth or model_dir / f"qwen3.5-0.8b_decode_{precision}.fth"
     output_fth.parent.mkdir(parents=True, exist_ok=True)
     if args.output_onnx is not None:
         args.output_onnx.parent.mkdir(parents=True, exist_ok=True)
     shard = resolve_shard(model_dir)
+    from qwen_fp8_calibration import load_calibration, file_sha256
+    calibration = load_calibration(args.fp8_calibration, model_dir, args.fp8_format)
+    checkpoint_sha256 = file_sha256(shard)
+    if calibration and calibration["checkpoint_sha256"] != checkpoint_sha256:
+        parser.error("calibration checkpoint hash does not match")
     builder = QwenBuilder(model_dir, args.max_context, fp8_dtype=fp8_dtype,
-                          fp8_activation_amax=args.fp8_activation_amax)
+                          fp8_activation_amax=args.fp8_activation_amax,
+                          fp8_calibration=calibration, fp8_keep_bf16=args.fp8_keep_bf16)
     with safe_open(shard, framework="pt", device="cpu") as source:
         builder.source = source
         graph = builder.build()
+        graph.metadata["qwen.source.checkpoint_sha256"] = checkpoint_sha256
+        graph.metadata["qwen.source.config_sha256"] = file_sha256(model_dir / "config.json")
         builder.write_fth(output_fth)
         if args.output_onnx is not None:
             import onnx

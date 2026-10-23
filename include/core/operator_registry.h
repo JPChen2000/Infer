@@ -50,9 +50,12 @@ class OperatorRegistry {
     void Register(const std::string& op_type, Builder builder);
     std::shared_ptr<OpBase> Create(const model::NodeDesc& node, TensorMap& tensors) const;
     std::shared_ptr<OpBase> Create(const model::NodeDesc& node, TensorMap& tensors, const BuildContext& context) const;
+    const Status& LastCreateStatus() const { return last_create_status_; }
 
    private:
-    std::unordered_map<std::string, Builder> registry_;
+    mutable std::mutex registry_mutex_;
+    inline static thread_local Status last_create_status_;
+    std::unordered_map<std::string, std::shared_ptr<const Builder>> registry_;
 };
 
 inline DeviceType NormalizeKernelDevice(DeviceType device) {

@@ -16,11 +16,13 @@
 #include "core/static_graph.h"
 
 #include <algorithm>
+#include <cstring>
 #include <queue>
 #include <unordered_set>
 #include <utility>
 
 #include "core/operator_registry.h"
+#include "src/operator/control_tensor.h"
 
 namespace feather {
 
@@ -117,25 +119,22 @@ const model::ValueDesc* FindValueDesc(const model::ModelDesc& model, const std::
     return nullptr;
 }
 
-void RestoreDeclaredTensorMetadata(const model::ModelDesc& model, const std::string& name,
+Status RestoreDeclaredTensorMetadata(const model::ModelDesc& model, const std::string& name,
                                    const std::shared_ptr<Tensor>& tensor) {
     const auto* value = FindValueDesc(model, name);
     if (value == nullptr || tensor == nullptr) {
-        return;
+        return Status::Ok();
     }
     if (value->tensor.data_type != DataType::UNKNOWN) {
+        if (tensor->data_type() != DataType::UNKNOWN && tensor->data_type() != value->tensor.data_type)
+            return Status::Error(StatusCode::kInvalidArgument, "declared output dtype conflicts with inference: " + name);
         tensor->set_data_type(value->tensor.data_type);
     }
     if (value->tensor.layout != DataLayout::ND) {
         tensor->set_layout(value->tensor.layout);
     }
     tensor->set_quantization(value->tensor.quantization);
-}
-
-bool IsBuildTimeEvaluableControlOp(const std::string& op_type) {
-    return op_type == "Shape" || op_type == "Unsqueeze" || op_type == "Squeeze" || op_type == "Concat" ||
-           op_type == "Cast" || op_type == "ConstantOfShape" || op_type == "Slice" || op_type == "Mul" ||
-           op_type == "Equal" || op_type == "Where";
+    return Status::Ok();
 }
 
 bool HasOnlyStaticInputs(const model::NodeDesc& node, const std::unordered_set<std::string>& static_values) {
@@ -167,6 +166,13 @@ int32_t EvaluateBuildTimeControlOp(const std::shared_ptr<OpBase>& op) {
     }
 
     op->AttachKernel(std::move(control_kernel));
+    auto bound = op->DetachKernel();
+    const auto selection = KernelBase::FinalizeSelection(&bound);
+    if (!selection.ok()) {
+        op->AttachKernel(std::move(runtime_kernel));
+        return -1;
+    }
+    op->AttachKernel(std::move(bound));
     const int32_t status = op->Run();
     (void)op->DetachKernel();
     op->AttachKernel(std::move(runtime_kernel));
@@ -269,14 +275,17 @@ Status StaticGraph::BuildStatus() {
         auto op = OperatorRegistry::instance().Create(node, tensors_, OperatorRegistry::BuildContext{kernel_device_, fallback_policy_, DataType::UNKNOWN, DataLayout::ND, true, workspace_limit_});
         if (op == nullptr) {
             std::cerr << "StaticGraph::Build failed to create node=" << node.name << " op=" << node.op_type << '\n';
-            return fail("failed to create operator " + node.op_type + " for node " + node.name);
+            auto status = OperatorRegistry::instance().LastCreateStatus();
+            return status.ok() ? fail("failed to create operator " + node.op_type + " for node " + node.name)
+                               : status.WithContext("build node=" + node.name);
         }
         // Evaluate static control values early so downstream shape inference can
         // consume them. The original node and its input edges remain in the
         // static graph and are executed again by the runtime graph.
-        const bool is_shape_node = node.op_type == "Shape";
+        const auto semantics = GetOperatorSemantics(node.op_type);
+        const bool is_shape_node = semantics.descriptor_only_evaluation;
         const bool can_evaluate_at_build =
-            is_shape_node || (IsBuildTimeEvaluableControlOp(node.op_type) && HasOnlyStaticInputs(node, static_values));
+            is_shape_node || (semantics.build_time_evaluable && HasOnlyStaticInputs(node, static_values));
         if (can_evaluate_at_build && EvaluateBuildTimeControlOp(op) != 0) {
             std::cerr << "StaticGraph::Build control evaluation failed node=" << node.name << " op=" << node.op_type << '\n';
             return fail("failed to evaluate control node: " + node.name);
@@ -289,7 +298,8 @@ Status StaticGraph::BuildStatus() {
             if (outputs[i] == nullptr) {
                 return fail("null operator output for node: " + node.name);
             }
-            RestoreDeclaredTensorMetadata(model_, node.outputs[i], outputs[i]);
+            const auto metadata = RestoreDeclaredTensorMetadata(model_, node.outputs[i], outputs[i]);
+            if (!metadata.ok()) return metadata.WithContext("build node=" + node.name);
             tensors_[node.outputs[i]] = outputs[i];
             producer_by_value_[node.outputs[i]] = node.name;
             if (can_evaluate_at_build) {
@@ -307,12 +317,16 @@ Status StaticGraph::BuildStatus() {
         static_node.inputs = node.inputs;
         static_node.outputs = node.outputs;
         static_node.op = op;
+        static_node.semantics = semantics;
         node_index_by_name_[static_node.name] = nodes_.size();
         nodes_.push_back(std::move(static_node));
     }
 
     build_time_values_ = std::move(static_values);
+    const auto control_status = RecordControlValues();
+    if (!control_status.ok()) return control_status;
     built_ = true;
+    RecordBuildDescriptors();
     return CheckStatus();
 }
 
@@ -356,11 +370,44 @@ Status StaticGraph::ValidateStructureStatus() const {
     return ValidateAndOrderGraph(&active, bound_tensor_names_, &order);
 }
 
+void StaticGraph::RecordBuildDescriptors() {
+    build_descriptors_.clear();
+    for (const auto& item : tensors_) RecordBuildDescriptor(item.first);
+}
+
+void StaticGraph::RecordBuildDescriptor(const std::string& name) {
+    const auto tensor = GetTensor(name);
+    if (!tensor) return;
+    model::TensorDesc descriptor;
+    descriptor.name = name; descriptor.dims = tensor->dims().data();
+    descriptor.data_type = tensor->data_type(); descriptor.layout = tensor->layout();
+    descriptor.quantization = tensor->quantization();
+    build_descriptors_[name] = BuildDescriptor{std::move(descriptor), tensor};
+}
+
+Status StaticGraph::ValidateBuildDescriptorsStatus() const {
+    if (!built_ || build_descriptors_.size() != tensors_.size())
+        return Status::Error(StatusCode::kBuildFailed, "static graph descriptors require rebuilding");
+    for (const auto& item : build_descriptors_) {
+        const auto tensor = GetTensor(item.first); const auto& descriptor = item.second.descriptor;
+        if (!tensor || tensor != item.second.tensor || tensor->dims().data() != descriptor.dims || tensor->data_type() != descriptor.data_type ||
+            tensor->layout() != descriptor.layout || !HasSameQuantization(tensor->quantization(), descriptor.quantization))
+            return Status::Error(StatusCode::kInvalidArgument, "tensor descriptor changed since build: " + item.first);
+    }
+    return Status::Ok();
+}
+
 int32_t StaticGraph::ApplyPasses() { return ApplyPassesStatus().ok() ? 0 : -1; }
 
 Status StaticGraph::ApplyPassesStatus() {
+    const auto descriptors = ValidateBuildDescriptorsStatus();
+    if (!descriptors.ok()) return descriptors;
     DeferredAllocationScope allocation_scope;
-    return pass_manager_ ? pass_manager_->RunStatus(this) : CheckStatus();
+    const auto status = pass_manager_ ? pass_manager_->RunStatus(this) : CheckStatus();
+    if (!status.ok()) return status;
+    const auto controls = RecordControlValues();
+    if (controls.ok()) RecordBuildDescriptors();
+    return controls;
 }
 
 void StaticGraph::SetPassManager(std::shared_ptr<PassManager> pass_manager) { pass_manager_ = std::move(pass_manager); }
@@ -500,6 +547,7 @@ bool StaticGraph::RemoveNodeWithOutputAlias(const std::string& node_name) {
     users_by_value_.erase(output_name);
     node.removed = true;
     node.op.reset();
+    RecordBuildDescriptor(output_name);
     return true;
 }
 
@@ -580,11 +628,12 @@ bool StaticGraph::ReplaceNodeDesc(const model::NodeDesc& desc) {
     static_node.op_type = desc.op_type;
     static_node.inputs = desc.inputs;
     static_node.op = op;
+    static_node.semantics = GetOperatorSemantics(static_node.op_type);
     for (const auto& input : static_node.inputs) {
         RegisterValueUse(input, desc.name);
     }
     for (size_t i = 0; i < static_node.outputs.size(); ++i) {
-        RestoreDeclaredTensorMetadata(model_, static_node.outputs[i], op->outputs()[i]);
+        if (!RestoreDeclaredTensorMetadata(model_, static_node.outputs[i], op->outputs()[i]).ok()) return false;
         tensors_[static_node.outputs[i]] = op->outputs()[i];
         producer_by_value_[static_node.outputs[i]] = static_node.name;
     }
@@ -594,6 +643,7 @@ bool StaticGraph::ReplaceNodeDesc(const model::NodeDesc& desc) {
             break;
         }
     }
+    for (const auto& output : static_node.outputs) RecordBuildDescriptor(output);
     return true;
 }
 
@@ -650,11 +700,12 @@ bool StaticGraph::ReplaceNodeDescAndAbsorbNode(const model::NodeDesc& desc,
     target.inputs = desc.inputs;
     target.outputs = desc.outputs;
     target.op = std::move(op);
+    target.semantics = GetOperatorSemantics(desc.op_type);
     for (const auto& input_name : target.inputs) {
         RegisterValueUse(input_name, desc.name);
     }
     for (size_t index = 0; index < target.outputs.size(); ++index) {
-        RestoreDeclaredTensorMetadata(model_, target.outputs[index], target.op->outputs()[index]);
+        if (!RestoreDeclaredTensorMetadata(model_, target.outputs[index], target.op->outputs()[index]).ok()) return false;
         tensors_[target.outputs[index]] = target.op->outputs()[index];
         producer_by_value_[target.outputs[index]] = target.name;
     }
@@ -665,17 +716,60 @@ bool StaticGraph::ReplaceNodeDescAndAbsorbNode(const model::NodeDesc& desc,
     }
     absorbed.removed = true;
     absorbed.op.reset();
+    for (const auto& output : target.outputs) RecordBuildDescriptor(output);
     return true;
 }
 
 void StaticGraph::ClearGraphState() {
     built_ = false;
     build_time_values_.clear();
+    control_values_.clear();
+    build_descriptors_.clear();
     nodes_.clear();
     node_index_by_name_.clear();
     producer_by_value_.clear();
     users_by_value_.clear();
     output_aliases_.clear();
+}
+
+Status StaticGraph::RecordControlValues() {
+    std::unordered_set<std::string> dependencies;
+    std::vector<std::string> pending;
+    for (const auto& control : control_values_)
+        if (dependencies.insert(control.first).second) pending.push_back(control.first);
+    for (const auto& node : nodes_)
+        if (!node.removed)
+            for (auto slot : node.semantics.shape_value_inputs)
+                if (slot < node.inputs.size() && !node.inputs[slot].empty() &&
+                    dependencies.insert(node.inputs[slot]).second)
+                    pending.push_back(node.inputs[slot]);
+    while (!pending.empty()) {
+        const auto name = pending.back();
+        pending.pop_back();
+        const auto tensor = GetTensor(name);
+        size_t bytes = 0;
+        if (!tensor || !CheckedTensorBytes(tensor->dims().data(), tensor->data_type(), &bytes) ||
+            !tensor->IsInitialized() || tensor->memory_size() < bytes)
+            return Status::Error(StatusCode::kBuildFailed, "unavailable build control: " + name);
+        const auto existing = control_values_.find(name);
+        if (existing != control_values_.end()) {
+            if (existing->second.size() != bytes ||
+                (bytes && std::memcmp(existing->second.data(), tensor->raw_data(), bytes) != 0))
+                return Status::Error(StatusCode::kBuildFailed, "build control values changed: " + name);
+        } else {
+            auto& frozen = control_values_[name];
+            frozen.resize(bytes);
+            if (bytes) std::memcpy(frozen.data(), tensor->raw_data(), bytes);
+        }
+        const auto* producer = GetNode(GetProducer(name));
+        // A derived control can otherwise change during the first execution,
+        // after the pre-run check has already inspected its old seeded value.
+        // Shape observes descriptors only; its input payload remains mutable.
+        if (!producer || producer->semantics.descriptor_only_evaluation || !build_time_values_.count(name)) continue;
+        for (const auto& input : producer->inputs)
+            if (!input.empty() && dependencies.insert(input).second) pending.push_back(input);
+    }
+    return Status::Ok();
 }
 
 void StaticGraph::RegisterValueUse(const std::string& value_name, const std::string& node_name) {
@@ -726,15 +820,17 @@ bool StaticGraph::RebuildNode(size_t node_index) {
         return false;
     }
     static_node.op = op;
+    static_node.semantics = GetOperatorSemantics(static_node.op_type);
     for (size_t i = 0; i < static_node.outputs.size(); ++i) {
         const auto& outputs = op->outputs();
         if (i >= outputs.size() || outputs[i] == nullptr) {
             return false;
         }
-        RestoreDeclaredTensorMetadata(model_, static_node.outputs[i], outputs[i]);
+        if (!RestoreDeclaredTensorMetadata(model_, static_node.outputs[i], outputs[i]).ok()) return false;
         tensors_[static_node.outputs[i]] = outputs[i];
         producer_by_value_[static_node.outputs[i]] = static_node.name;
     }
+    for (const auto& output : static_node.outputs) RecordBuildDescriptor(output);
     return true;
 }
 

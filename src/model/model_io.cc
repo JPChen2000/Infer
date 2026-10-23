@@ -22,6 +22,8 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -30,7 +32,7 @@ namespace model {
 namespace {
 
 constexpr char kMagic[8] = {'F', 'T', 'H', 'M', 'O', 'D', 'L', '\0'};
-constexpr uint32_t kFormatVersion = 3;
+constexpr uint32_t kFormatVersion = 5;
 constexpr uint64_t kWeightAlignment = 64;
 
 struct FileHeader {
@@ -401,20 +403,59 @@ bool ReadGraphDesc(BinaryReader* reader, GraphDesc* graph, bool include_quantiza
     return true;
 }
 
+void WriteMetadata(BinaryWriter* writer, const std::unordered_map<std::string, AttributeValue>& metadata) {
+    writer->WritePod(static_cast<uint64_t>(metadata.size()));
+    std::vector<std::string> keys;
+    for (const auto& entry : metadata) keys.push_back(entry.first);
+    std::sort(keys.begin(), keys.end());
+    for (const auto& key : keys) { writer->WriteString(key); WriteAttribute(writer, metadata.at(key)); }
+}
+
+bool ReadMetadata(BinaryReader* reader, std::unordered_map<std::string, AttributeValue>* metadata) {
+    uint64_t count = 0;
+    if (!reader->ReadPod(&count) || !reader->CanReadCollection(count, 12)) return false;
+    for (uint64_t i = 0; i < count; ++i) {
+        std::string key; AttributeValue value;
+        if (!reader->ReadString(&key) || !ReadAttribute(reader, &value) ||
+            !metadata->emplace(std::move(key), std::move(value)).second) return false;
+    }
+    return true;
+}
+
 std::vector<char> SerializeModel(const ModelDesc& model, bool include_quantization,
                                  bool include_vector_quantization) {
     BinaryWriter writer;
-    writer.WriteString(model.name);
-    writer.WritePod(model.version);
+    writer.WriteString(model.name); writer.WritePod(model.version);
     WriteGraphDesc(&writer, model.graph, include_quantization, include_vector_quantization);
+    WriteMetadata(&writer, model.metadata);
+    writer.WritePod(static_cast<uint64_t>(model.variants.size()));
+    for (const auto& variant : model.variants) {
+        writer.WriteString(variant.name);
+        WriteGraphDesc(&writer, variant.graph, include_quantization, include_vector_quantization);
+        WriteMetadata(&writer, variant.metadata);
+    }
     return writer.data();
 }
 
 bool DeserializeModel(const char* data, size_t size, ModelDesc* model, bool include_quantization,
-                      bool include_vector_quantization) {
+                      bool include_vector_quantization, bool include_metadata, bool include_variants) {
     BinaryReader reader(data, size);
-    return reader.ReadString(&model->name) && reader.ReadPod(&model->version) &&
-           ReadGraphDesc(&reader, &model->graph, include_quantization, include_vector_quantization) && reader.Finished();
+    if (!reader.ReadString(&model->name) || !reader.ReadPod(&model->version) ||
+        !ReadGraphDesc(&reader, &model->graph, include_quantization, include_vector_quantization) ||
+        (include_metadata && !ReadMetadata(&reader, &model->metadata))) return false;
+    if (include_variants) {
+        uint64_t count = 0;
+        if (!reader.ReadPod(&count) || !reader.CanReadCollection(count, 48)) return false;
+        std::unordered_set<std::string> names;
+        for (uint64_t i = 0; i < count; ++i) {
+            ModelDesc::Variant variant;
+            if (!reader.ReadString(&variant.name) || variant.name.empty() || !names.insert(variant.name).second ||
+                !ReadGraphDesc(&reader, &variant.graph, include_quantization, include_vector_quantization) ||
+                !ReadMetadata(&reader, &variant.metadata)) return false;
+            model->variants.push_back(std::move(variant));
+        }
+    }
+    return reader.Finished();
 }
 
 }  // namespace
@@ -422,67 +463,65 @@ bool DeserializeModel(const char* data, size_t size, ModelDesc* model, bool incl
 bool ModelWriter::Save(const std::string& path, const ModelDesc& model,
                        const std::unordered_map<std::string, std::shared_ptr<Tensor>>& weights) {
     ModelDesc output = model;
+    struct Payload { ValueDesc* value; std::shared_ptr<Tensor> tensor; };
+    std::vector<Payload> payloads;
+    const auto collect = [&](GraphDesc& graph, const std::string& prefix) {
+        for (auto& value : graph.values) if (value.constant) {
+            auto it = weights.find(prefix + value.tensor.name);
+            if (it == weights.end() && !prefix.empty()) it = weights.find(value.tensor.name);
+            size_t bytes = 0;
+            if (it == weights.end() || !it->second || !it->second->IsInitialized() ||
+                !CheckedTensorBytes(value.tensor.dims, value.tensor.data_type, &bytes) ||
+                it->second->memory_size() != bytes || it->second->dims().data() != value.tensor.dims ||
+                it->second->data_type() != value.tensor.data_type) return false;
+            payloads.push_back({&value, it->second});
+        }
+        return true;
+    };
+    if (!collect(output.graph, "")) return false;
+    std::unordered_set<std::string> names;
+    for (auto& variant : output.variants)
+        if (variant.name.empty() || !names.insert(variant.name).second ||
+            !collect(variant.graph, variant.name + "::")) return false;
     std::vector<char> metadata;
     for (int pass = 0; pass < 4; ++pass) {
         metadata = SerializeModel(output, true, true);
-        auto weight_offset = AlignUp(sizeof(FileHeader) + metadata.size(), kWeightAlignment);
-
-        for (auto& value : output.graph.values) {
-            if (!value.constant) {
-                continue;
+        auto offset = AlignUp(sizeof(FileHeader) + metadata.size(), kWeightAlignment);
+        std::map<std::pair<uintptr_t, size_t>, uint64_t> locations;
+        for (auto& payload : payloads) {
+            auto& weight = payload.value->weight;
+            weight.tensor_name = payload.value->tensor.name; weight.shard_path = path;
+            weight.byte_size = payload.tensor->memory_size();
+            const auto key = std::make_pair(reinterpret_cast<uintptr_t>(payload.tensor->raw_data()), payload.tensor->memory_size());
+            auto found = locations.emplace(key, offset);
+            weight.offset = found.first->second;
+            if (found.second) {
+                if (offset > std::numeric_limits<uint64_t>::max() - kWeightAlignment ||
+                    weight.byte_size > std::numeric_limits<uint64_t>::max() - offset - kWeightAlignment) return false;
+                offset = AlignUp(offset + weight.byte_size, kWeightAlignment);
             }
-            auto it = weights.find(value.tensor.name);
-            if (it == weights.end() || it->second == nullptr || !it->second->IsInitialized()) {
-                return false;
-            }
-            size_t expected_size = 0;
-            if (!CheckedTensorBytes(value.tensor.dims, value.tensor.data_type, &expected_size)) return false;
-            auto actual_size = static_cast<uint64_t>(it->second->memory_size());
-            if (expected_size != actual_size) {
-                return false;
-            }
-            value.weight.tensor_name = value.tensor.name;
-            value.weight.shard_path = path;
-            value.weight.offset = weight_offset;
-            value.weight.byte_size = actual_size;
-            weight_offset = AlignUp(weight_offset + actual_size, kWeightAlignment);
         }
-
-        auto updated_metadata = SerializeModel(output, true, true);
-        if (updated_metadata.size() == metadata.size()) {
-            metadata = std::move(updated_metadata);
-            break;
-        }
-        metadata = std::move(updated_metadata);
     }
-
+    metadata = SerializeModel(output, true, true);
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out.good()) {
-        return false;
-    }
-
+    if (!out.good()) return false;
     FileHeader header {};
     std::copy(std::begin(kMagic), std::end(kMagic), std::begin(header.magic));
-    header.version = kFormatVersion;
-    header.metadata_size = metadata.size();
+    header.version = kFormatVersion; header.metadata_size = metadata.size();
     out.write(reinterpret_cast<const char*>(&header), sizeof(header));
     out.write(metadata.data(), metadata.size());
-
     uint64_t current = sizeof(header) + metadata.size();
-    for (const auto& value : output.graph.values) {
-        if (!value.constant) {
-            continue;
-        }
-        while (current < value.weight.offset) {
-            char zero = 0;
-            out.write(&zero, 1);
-            ++current;
-        }
-        auto it = weights.find(value.tensor.name);
-        out.write(static_cast<const char*>(it->second->raw_data()), it->second->memory_size());
-        current += it->second->memory_size();
+    std::unordered_set<uint64_t> written;
+    for (const auto& payload : payloads) {
+        const auto& weight = payload.value->weight;
+        if (!weight.byte_size && current >= weight.offset) continue;
+        if (weight.byte_size && !written.insert(weight.offset).second) continue;
+        if (current > weight.offset) return false;
+        std::vector<char> padding(static_cast<size_t>(weight.offset - current), 0);
+        out.write(padding.data(), padding.size());
+        out.write(static_cast<const char*>(payload.tensor->raw_data()), weight.byte_size);
+        current = weight.offset + weight.byte_size;
     }
-
     return out.good();
 }
 
@@ -504,15 +543,20 @@ bool ModelLoader::Load(const std::string& path) {
         in.read(metadata.data(), metadata.size());
         ModelDesc parsed;
         if (!in.good() || !DeserializeModel(metadata.data(), metadata.size(), &parsed,
-                                            header.version >= 2, header.version >= 3)) return false;
+                                            header.version >= 2, header.version >= 3,
+                                            header.version >= 4, header.version >= 5)) return false;
         WeightStore new_store;
         if (!new_store.AddShard(path)) return false;
-        for (auto& value : parsed.graph.values) {
-            if (!value.constant) continue;
-            value.weight.shard_path = path;
-            if (value.weight.offset < sizeof(header) + header.metadata_size ||
-                new_store.CreateTensorView(value.tensor, value.weight) == nullptr) return false;
-        }
+        const auto validate_weights = [&](GraphDesc& graph) {
+            for (auto& value : graph.values) if (value.constant) {
+                value.weight.shard_path = path;
+                if (value.weight.offset < sizeof(header) + header.metadata_size ||
+                    new_store.CreateTensorView(value.tensor, value.weight) == nullptr) return false;
+            }
+            return true;
+        };
+        if (!validate_weights(parsed.graph)) return false;
+        for (auto& variant : parsed.variants) if (!validate_weights(variant.graph)) return false;
         path_ = path;
         model_ = std::move(parsed);
         weight_store_ = std::move(new_store);
@@ -522,6 +566,19 @@ bool ModelLoader::Load(const std::string& path) {
     } catch (const std::length_error&) {
         return false;
     }
+}
+
+bool ModelLoader::SelectVariant(const std::string& name, ModelLoader* destination) const {
+    if (!destination || destination == this) return false;
+    for (const auto& variant : model_.variants) if (variant.name == name) {
+        ModelDesc selected;
+        selected.name = model_.name + ":" + name; selected.version = model_.version;
+        selected.graph = variant.graph; selected.metadata = variant.metadata;
+        destination->path_ = path_; destination->model_ = std::move(selected);
+        destination->weight_store_ = weight_store_;
+        return true;
+    }
+    return false;
 }
 
 std::shared_ptr<Tensor> ModelLoader::CreateWeightTensor(const std::string& tensor_name) {

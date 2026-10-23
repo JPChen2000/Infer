@@ -138,7 +138,7 @@ int32_t ComputeQwenFp8DepthwiseConv2D(operators::Conv2dParam* param) {
     const auto* input = static_cast<const uint8_t*>(param->input->raw_data());
     const auto* weight = static_cast<const uint8_t*>(param->w->raw_data());
     const auto* bias = param->bias == nullptr ? nullptr : static_cast<const uint8_t*>(param->bias->raw_data());
-    auto* output = static_cast<uint8_t*>(param->out->raw_data());
+    auto* output = static_cast<uint8_t*>(param->out->mutable_data(param->out->memory_size()));
     const float input_scale = param->input->quantization_scale();
     const float weight_scale = param->w->quantization_scale();
     const float bias_scale = bias == nullptr ? 1.0f : param->bias->quantization_scale();

@@ -27,6 +27,7 @@
 #include "src/kernel/softplus.h"
 #include "src/kernel/concat.h"
 #include "src/kernel/conv2d.h"
+#include "src/kernel/conv_transpose.h"
 #include "src/kernel/fc.h"
 #include "src/kernel/global_average_pool.h"
 #include "src/kernel/flatten.h"
@@ -61,6 +62,7 @@
 #include "src/kernel/expand.h"
 #include "src/kernel/where.h"
 #include "src/kernel/qwen_gated_delta.h"
+#include "src/kernel/qwen_gated_delta_sequence.h"
 #include "src/kernel/qwen_gemm_argmax.h"
 #include "src/kernel/qwen_depthwise_conv.h"
 #include "src/kernel/qwen_rms_norm.h"
@@ -75,12 +77,21 @@ void EnsureCommonFp8KernelsRegistered();
 void EnsureX86Fp8KernelsRegistered();
 void EnsureStandardCommonInt8KernelsRegistered();
 void EnsureStandardX86Int8KernelsRegistered();
+void EnsureYoloSelectionKernelsRegistered();
+void EnsureCommonNonMaxSuppressionKernelsRegistered();
+void EnsureCommonNormalizationKernelsRegistered();
+void EnsureCachedAttentionKernelsRegistered();
 
 #ifdef FEATHER_WITH_CUDA
 void EnsureCudaKernelsRegistered();
 #endif
 
 void RegisterBuiltinKernels() {
+    EnsureCommonConvTransposeKernelsRegistered();
+    EnsureCommonNonMaxSuppressionKernelsRegistered();
+    EnsureCommonNormalizationKernelsRegistered();
+    EnsureCachedAttentionKernelsRegistered();
+    EnsureYoloSelectionKernelsRegistered();
     EnsureStandardCommonInt8KernelsRegistered();
     EnsureStandardX86Int8KernelsRegistered();
     EnsureCommonFp8KernelsRegistered();
@@ -132,6 +143,7 @@ void RegisterBuiltinKernels() {
     EnsureExpandKernelsRegistered();
     EnsureWhereKernelsRegistered();
     EnsureQwenGatedDeltaKernelsRegistered();
+    EnsureQwenGatedDeltaSequenceKernelsRegistered();
     EnsureQwenGemmArgmaxKernelsRegistered();
     EnsureQwenDepthwiseConvStateKernelsRegistered();
     EnsureQwenRmsNormKernelsRegistered();

@@ -90,7 +90,7 @@ int32_t ComputeReduceSumFallback(feather::operators::ReduceSumParam* param,
         }
         sums[static_cast<size_t>(out_offset)] += input[linear];
     }
-    std::copy(sums.begin(), sums.end(), static_cast<float*>(param->out->raw_data()));
+    std::copy(sums.begin(), sums.end(), static_cast<float*>(param->out->mutable_data(param->out->memory_size())));
     return 0;
 }
 
@@ -115,7 +115,7 @@ int32_t ComputeReduceSumFp32(feather::operators::ReduceSumParam* param) {
 
     param->out->set_data_type(DataType::FP32);
     const float* input = param->input->data<float>();
-    float* out = static_cast<float*>(param->out->raw_data());
+    float* out = static_cast<float*>(param->out->mutable_data(param->out->memory_size()));
     if (axes.size() == input_dims.size()) {
         if (param->out->numel() != 1) return -1;
         __m256 acc = _mm256_setzero_ps();

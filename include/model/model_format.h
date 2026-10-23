@@ -73,6 +73,14 @@ struct ModelDesc {
     std::string name;
     int64_t version{};
     GraphDesc graph;
+    std::unordered_map<std::string, AttributeValue> metadata;
+    // Shape-specialized graphs share the checkpoint's weight payloads.
+    struct Variant {
+        std::string name;
+        GraphDesc graph;
+        std::unordered_map<std::string, AttributeValue> metadata;
+    };
+    std::vector<Variant> variants;
 };
 
 }  // namespace model

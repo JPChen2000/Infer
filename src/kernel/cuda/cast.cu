@@ -92,6 +92,31 @@ int32_t RunFloatingCast(feather::operators::CastParam* param, const char* timer_
     return cuda_detail::CopyDeviceToTensor(&output, param->out.get());
 }
 
+template <typename InputT, typename OutputT>
+__global__ void CastIntegerKernelCuda(const InputT* input, OutputT* output, int64_t numel) {
+    const int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (index < numel) output[index] = static_cast<OutputT>(input[index]);
+}
+
+template <DataType input_dtype, DataType output_dtype>
+int32_t RunIntegerCast(feather::operators::CastParam* param) {
+    using InputT = cuda_detail::StorageT<input_dtype>;
+    using OutputT = cuda_detail::StorageT<output_dtype>;
+    if (!param || !param->input || !param->out || param->to != output_dtype ||
+        !cuda_detail::IsTensorReady<input_dtype>(param->input.get()) ||
+        !cuda_detail::IsOutputReady<output_dtype>(param->out.get(), &param->input->dims().data())) return -1;
+    cuda_detail::DeviceBuffer<InputT> input;
+    cuda_detail::DeviceBuffer<OutputT> output;
+    if (cuda_detail::CopyTensorToDevice(param->input.get(), &input) != 0 ||
+        cuda_detail::AllocateTensorOnDevice(param->out.get(), &output) != 0) return -1;
+    const int64_t numel = param->input->numel();
+    CastIntegerKernelCuda<<<static_cast<int>(cuda_detail::DivUp(numel, cuda_detail::kCudaThreads)),
+                            cuda_detail::kCudaThreads, 0, cuda_detail::InferenceStream()>>>(
+        input.get(), output.get(), numel);
+    if (cuda_detail::CudaCheck(cudaGetLastError()) != 0) return -1;
+    return cuda_detail::CopyDeviceToTensor(&output, param->out.get());
+}
+
 }  // namespace
 
 template <>
@@ -172,6 +197,8 @@ int32_t CastKernel<DeviceType::CUDA, DataType::INT32>::compute() {
     if (param == nullptr) {
         return -1;
     }
+    if (param->to == DataType::INT32) return RunIntegerCast<DataType::INT32, DataType::INT32>(param);
+    if (param->to == DataType::INT64) return RunIntegerCast<DataType::INT32, DataType::INT64>(param);
     if (param->to == DataType::FP32) {
         return RunFloatingCast<DataType::INT32, DataType::FP32>(param, "CUDA::Cast::INT32ToFP32");
     }
@@ -196,6 +223,8 @@ int32_t CastKernel<DeviceType::CUDA, DataType::INT64>::compute() {
     if (param == nullptr) {
         return -1;
     }
+    if (param->to == DataType::INT32) return RunIntegerCast<DataType::INT64, DataType::INT32>(param);
+    if (param->to == DataType::INT64) return RunIntegerCast<DataType::INT64, DataType::INT64>(param);
     if (param->to == DataType::FP32) {
         return RunFloatingCast<DataType::INT64, DataType::FP32>(param, "CUDA::Cast::INT64ToFP32");
     }

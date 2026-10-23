@@ -353,8 +353,22 @@ void RunDistilBertSst2AgainstOnnxRuntime(const std::filesystem::path& onnx_path)
     feather::model::ModelLoader loader;
     ASSERT_TRUE(loader.Load(fth_path.string()));
     EXPECT_EQ(CountNodes(loader.model(), "Equal"), 1U);
-    EXPECT_EQ(CountNodes(loader.model(), "Shape"), 6U);
+    // Static attention score shapes are folded by the importer. Verify the
+    // replacement values as well as the end-to-end masked logits below.
+    EXPECT_EQ(CountNodes(loader.model(), "Shape"), 0U);
     EXPECT_EQ(CountNodes(loader.model(), "Expand"), 6U);
+    for (const auto& node : loader.model().graph.nodes) {
+        if (node.op_type != "Expand") {
+            continue;
+        }
+        ASSERT_EQ(node.inputs.size(), 2U);
+        const auto shape = loader.CreateWeightTensor(node.inputs[1]);
+        ASSERT_NE(shape, nullptr) << node.name;
+        ASSERT_EQ(shape->data_type(), feather::DataType::INT64);
+        ASSERT_EQ(shape->numel(), 4);
+        EXPECT_EQ(std::vector<int64_t>(shape->data<int64_t>(), shape->data<int64_t>() + 4),
+                  std::vector<int64_t>({1, 12, 8, 8})) << node.name;
+    }
     EXPECT_EQ(CountNodes(loader.model(), "Cast"), 6U);
     EXPECT_EQ(CountNodes(loader.model(), "Where"), 6U);
     EXPECT_EQ(CountNodes(loader.model(), "LayerNormalization"), 0U);

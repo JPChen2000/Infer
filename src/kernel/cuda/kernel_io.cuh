@@ -17,6 +17,9 @@
 #define FEATHER_KERNEL_CUDA_KERNEL_IO_CUH
 
 #include <cuda_fp16.h>
+#ifdef FEATHER_WITH_CUBLASLT
+#include <cuda_fp8.h>
+#endif
 #include <cuda_runtime.h>
 
 #include <algorithm>
@@ -330,11 +333,10 @@ int CopyDeviceToTensor(DeviceBuffer<T>* device, Tensor* tensor) {
     if (DeferredHostSyncEnabled()) {
         return 0;
     }
-    T* host = tensor->mutable_data<T>();
     if (device->count() == 0) {
         return 0;
     }
-    return SyncTensorToHost(tensor, required_bytes, host);
+    return SyncTensorToHost(tensor, required_bytes, tensor->raw_data());
 }
 
 template <typename T>
@@ -407,12 +409,32 @@ __device__ inline float ReadDevice(const BFloat16* data, int64_t idx) {
     return __uint_as_float(static_cast<uint32_t>(data[idx].bits) << 16);
 }
 
+// CUDA 11.8 uses software SDK conversion on SM89 and native conversion on
+// SM90. Prefer its optimized codecs while retaining the reference fallback.
 __device__ inline float ReadDevice(const Fp8E4M3* data, int64_t idx, float scale) {
+#if defined(FEATHER_WITH_CUBLASLT) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 890
+    const uint8_t bits = data[idx].bits;
+    // Keep the reference codec's canonical NaN; native conversions can retain
+    // a different sign/payload. Finite values include signed zero/subnormals.
+    if ((bits & 0x7fu) == 0x7fu) return fp8_detail::QuietNaN() * scale;
+    __nv_fp8_e4m3 value;
+    value.__x = bits;
+    return static_cast<float>(value) * scale;
+#else
     return Fp8E4M3ToFloat(data[idx].bits) * scale;
+#endif
 }
 
 __device__ inline float ReadDevice(const Fp8E5M2* data, int64_t idx, float scale) {
+#if defined(FEATHER_WITH_CUBLASLT) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 890
+    const uint8_t bits = data[idx].bits;
+    if ((bits & 0x7cu) == 0x7cu && (bits & 0x03u) != 0) return fp8_detail::QuietNaN() * scale;
+    __nv_fp8_e5m2 value;
+    value.__x = bits;
+    return static_cast<float>(value) * scale;
+#else
     return Fp8E5M2ToFloat(data[idx].bits) * scale;
+#endif
 }
 
 __device__ inline float ReadDevice(const int32_t* data, int64_t idx) {
@@ -444,11 +466,27 @@ __device__ inline void WriteDevice(BFloat16* data, int64_t idx, float value) {
 }
 
 __device__ inline void WriteDevice(Fp8E4M3* data, int64_t idx, float value, float scale) {
-    data[idx].bits = FloatToFp8E4M3(value / scale);
+    const float scaled = value / scale;
+#if defined(FEATHER_WITH_CUBLASLT) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 890
+    if (isfinite(scaled)) {
+        data[idx].bits = __nv_cvt_float_to_fp8(scaled, __NV_SATFINITE, __NV_E4M3);
+        return;
+    }
+#endif
+    data[idx].bits = FloatToFp8E4M3(scaled);
 }
 
 __device__ inline void WriteDevice(Fp8E5M2* data, int64_t idx, float value, float scale) {
-    data[idx].bits = FloatToFp8E5M2(value / scale);
+    const float scaled = value / scale;
+#if defined(FEATHER_WITH_CUBLASLT) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 890
+    // Finite overflow saturates, while the reference E5M2 codec preserves
+    // actual infinities and its NaN payload. Handle those in the codec below.
+    if (isfinite(scaled)) {
+        data[idx].bits = __nv_cvt_float_to_fp8(scaled, __NV_SATFINITE, __NV_E5M2);
+        return;
+    }
+#endif
+    data[idx].bits = FloatToFp8E5M2(scaled);
 }
 
 template <typename T>

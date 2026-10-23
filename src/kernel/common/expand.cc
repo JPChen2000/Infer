@@ -85,10 +85,11 @@ int32_t ComputeExpand(feather::operators::ExpandParam* param) {
         return -1;
     }
     param->out->set_data_type(dtype);
+    void* output = param->out->mutable_data(param->out->memory_size());
     for (int64_t linear = 0; linear < param->out->numel(); ++linear) {
         common_tensor_detail::LinearToCoords(linear, output_dims, output_strides, &coordinates);
         const int64_t input_offset = common_tensor_detail::BroadcastOffset(coordinates, input_dims, input_strides);
-        std::memcpy(static_cast<char*>(param->out->raw_data()) + linear * element_bytes,
+        std::memcpy(static_cast<char*>(output) + linear * element_bytes,
                     static_cast<const char*>(param->input->raw_data()) + input_offset * element_bytes, element_bytes);
     }
     return 0;

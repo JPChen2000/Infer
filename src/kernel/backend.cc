@@ -14,6 +14,7 @@
 // limitations under the License.
 
 #include "core/backend.h"
+#include <unordered_map>
 #ifdef FEATHER_WITH_CUDA
 #include "src/kernel/cuda/runtime.h"
 #endif
@@ -21,15 +22,22 @@
 namespace feather {
 #ifdef FEATHER_WITH_CUDA
 namespace {
+struct CudaGraphExecOwner {
+    cudaGraphExec_t executable{nullptr};
+    ~CudaGraphExecOwner() { if (executable) (void)cudaGraphExecDestroy(executable); }
+};
+
 class CudaCapture final : public ExecutionCapture {
  public:
-    CudaCapture(std::shared_ptr<kernel::cuda_detail::CudaExecutionContext> context, cudaGraphExec_t executable)
-        : context_(std::move(context)), executable_(executable) {}
+    CudaCapture(std::shared_ptr<kernel::cuda_detail::CudaExecutionContext> context, cudaGraphExec_t executable,
+                std::shared_ptr<void> allocations)
+        : context_(std::move(context)), executable_(executable), allocations_(std::move(allocations)) {}
     ~CudaCapture() override {
         kernel::cuda_detail::ExecutionContextScope scope(context_);
         (void)kernel::cuda_detail::SynchronizeInferenceStream();
         (void)cudaGraphExecDestroy(executable_);
     }
+    void RetainAllocations(std::shared_ptr<void> allocations) noexcept { allocations_ = std::move(allocations); }
     Status Launch() override {
         kernel::cuda_detail::ExecutionContextScope scope(context_);
         const auto stream = kernel::cuda_detail::InferenceStream();
@@ -39,6 +47,7 @@ class CudaCapture final : public ExecutionCapture {
  private:
     std::shared_ptr<kernel::cuda_detail::CudaExecutionContext> context_;
     cudaGraphExec_t executable_{nullptr};
+    std::shared_ptr<void> allocations_;
 };
 class CudaBackendContext final : public BackendContext {
     using CudaScope = kernel::cuda_detail::ExecutionContextScope;
@@ -48,6 +57,14 @@ class CudaBackendContext final : public BackendContext {
     };
  public:
     CudaBackendContext() : context_(kernel::cuda_detail::CreateExecutionContext()) {}
+    explicit CudaBackendContext(std::shared_ptr<kernel::cuda_detail::CudaExecutionContext> context)
+        : context_(context ? std::move(context) : kernel::cuda_detail::CreateExecutionContext()) {}
+    ~CudaBackendContext() override { Clear(); }
+    void RegisterTensor(std::shared_ptr<Tensor> tensor) override {
+        auto scope = Enter();
+        if (tensor && registered_.emplace(tensor.get(), tensor).second)
+            kernel::cuda_detail::RegisterTensorDeviceUser(tensor.get());
+    }
     BackendCapabilities Capabilities(DeviceType device) const override {
         return device == DeviceType::CUDA ? BackendCapabilities{true, false, false, false}
                                          : BackendContext::Capabilities(device);
@@ -58,7 +75,10 @@ class CudaBackendContext final : public BackendContext {
         if (!result || !run) return Status::Error(StatusCode::kInvalidArgument, "invalid capture destination or callback");
         auto scope = Enter();
         const auto stream = kernel::cuda_detail::InferenceStream();
-        if (!stream || cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal) != cudaSuccess) {
+        if (!stream) return Status::Error(StatusCode::kUnsupported, "CUDA stream unavailable");
+        kernel::cuda_detail::CaptureAllocationScope allocations;
+        if (!allocations.valid()) return Status::Error(StatusCode::kUnsupported, "nested CUDA allocation capture unavailable");
+        if (cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal) != cudaSuccess) {
             (void)cudaGetLastError();
             return Status::Error(StatusCode::kUnsupported, "CUDA stream capture unavailable");
         }
@@ -81,7 +101,13 @@ class CudaBackendContext final : public BackendContext {
             (void)cudaGetLastError();
             return Status::Error(StatusCode::kUnsupported, "CUDA graph instantiation failed");
         }
-        *result = std::make_unique<CudaCapture>(context_, executable);
+        CudaGraphExecOwner owner{executable};
+        auto capture = std::make_unique<CudaCapture>(context_, executable, nullptr);
+        owner.executable = nullptr;
+        // Allocate the executable owner before committing cache metadata. Any
+        // allocation failure still leaves the scope able to roll back capture.
+        capture->RetainAllocations(allocations.Retain());
+        *result = std::move(capture);
         return Status::Ok();
     }
     Status Synchronize() override {
@@ -90,6 +116,9 @@ class CudaBackendContext final : public BackendContext {
     }
     void SetWorkspaceLimit(size_t bytes) override {
         auto scope = Enter(); kernel::cuda_detail::SetWorkspaceLimit(bytes);
+    }
+    void SetFp8WeightCacheLimit(size_t bytes) override {
+        auto scope = Enter(); kernel::cuda_detail::SetFp8WeightCacheLimit(bytes);
     }
     Status ReadHost(Tensor& tensor) override {
         auto scope = Enter();
@@ -112,7 +141,25 @@ class CudaBackendContext final : public BackendContext {
     std::shared_ptr<const Storage> DeviceStorage(const Tensor& tensor) const override {
         CudaScope scope(context_); return kernel::cuda_detail::GetTensorDeviceStorage(&tensor);
     }
-    void Clear() override { auto scope = Enter(); kernel::cuda_detail::ClearTensorCache(); }
+    Status ShareImmutableWeight(BackendContext& source, const Tensor& from, const Tensor& to) override {
+        if (!source.CudaContext()) return Status::Ok();
+        auto scope = Enter();
+        return Result(kernel::cuda_detail::ShareImmutableTensorDevice(source.CudaContext(), &from, &to),
+                      "CUDA immutable weight sharing failed");
+    }
+    void Clear() override {
+        auto scope = Enter();
+        // Only this graph's registrations are removed; the shared context and
+        // every surviving graph retain their tensor/device identities.
+        std::vector<const Tensor*> tensors;
+        tensors.reserve(registered_.size());
+        for (const auto& tensor : registered_) tensors.push_back(tensor.first);
+        kernel::cuda_detail::UnregisterTensorDeviceUsers(tensors);
+        registered_.clear();
+    }
+    Status CopyState(Tensor& input, const Tensor& output) override {
+        auto scope = Enter(); return Result(kernel::cuda_detail::CopyTensorStateOnDevice(&input, &output), "CUDA state copy failed");
+    }
     Status SwapState(Tensor& input, Tensor& output) override {
         auto scope = Enter(); return Result(kernel::cuda_detail::SwapTensorDeviceStorage(&input, &output), "CUDA state swap failed");
     }
@@ -125,7 +172,11 @@ class CudaBackendContext final : public BackendContext {
             std::string(message) + ": " + kernel::cuda_detail::CudaLastErrorMessage());
     }
     std::shared_ptr<kernel::cuda_detail::CudaExecutionContext> context_;
+    std::unordered_map<const Tensor*, std::shared_ptr<Tensor>> registered_;
 };
+}
+std::unique_ptr<BackendContext> CreateBackendContext(std::shared_ptr<kernel::cuda_detail::CudaExecutionContext> context) {
+    return std::make_unique<CudaBackendContext>(std::move(context));
 }
 std::unique_ptr<BackendContext> CreateBackendContext() { return std::make_unique<CudaBackendContext>(); }
 #else

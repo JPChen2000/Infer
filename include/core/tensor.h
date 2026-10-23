@@ -85,7 +85,7 @@ class Tensor {
         size_t bytes = 0;
         CHECK(CheckedByteCount(m_dims.data(), sizeof(T), &bytes));
         CHECK(HasCapacity(bytes));
-        return reinterpret_cast<const T *>(static_cast<char *>(m_storage->data()) + m_offset);
+        return reinterpret_cast<const T *>(static_cast<const char *>(m_storage->data()) + m_offset);
     }
 
     void Resize(const DDim &dim) { m_dims = dim; }
@@ -118,7 +118,7 @@ class Tensor {
         EnsureWritable();
         m_memory_size = bytes;
         MarkStorageMutated();
-        return reinterpret_cast<T *>(static_cast<char *>(m_storage->data()) + m_offset);
+        return reinterpret_cast<T *>(static_cast<char *>(m_storage->MutableData()) + m_offset);
     }
 
     template <typename T>
@@ -128,14 +128,14 @@ class Tensor {
         EnsureWritable();
         m_memory_size = memory_size;
         MarkStorageMutated();
-        return reinterpret_cast<T *>(static_cast<char *>(m_storage->data()) + m_offset);
+        return reinterpret_cast<T *>(static_cast<char *>(m_storage->MutableData()) + m_offset);
     }
 
     void *mutable_data(size_t memory_size);
 
-    const void *raw_data() const { return static_cast<char *>((static_cast<char *>(m_storage->data()) + m_offset)); }
-
-    void *raw_data() { return static_cast<char *>((static_cast<char *>(m_storage->data()) + m_offset)); }
+    // Reads never detach shared weights or mark storage as mutated. Writers
+    // must use mutable_data(), which enforces copy-on-write and versioning.
+    const void *raw_data() const { return static_cast<const char *>(m_storage->data()) + m_offset; }
 
     void clear() {
         m_storage.reset();
@@ -158,8 +158,8 @@ class Tensor {
     // semantic metadata. Callers must ensure the tensors are shape-compatible.
     void SwapStorage(Tensor& other);
 
-    const std::shared_ptr<Storage>& storage() const { return m_storage; }
-    void ResetStorage(std::shared_ptr<Storage> storage, size_t memory_size, size_t offset = 0);
+    std::shared_ptr<const Storage> storage() const { return m_storage; }
+    void ResetStorage(std::shared_ptr<const Storage> storage, size_t memory_size, size_t offset = 0);
 
     void ResetBuffer(std::shared_ptr<Buffer> buffer, size_t memory_size);
     void ResetBuffer(std::shared_ptr<Buffer> buffer, size_t memory_size, size_t offset);
@@ -207,7 +207,7 @@ class Tensor {
     DDim m_dims;
     DataType m_data_type{DataType::UNKNOWN};
     DataLayout m_layout{DataLayout::ND};
-    std::shared_ptr<Storage> m_storage;
+    std::shared_ptr<const Storage> m_storage;
     size_t m_memory_size{};
     size_t m_offset{};
     bool m_immutable{false};

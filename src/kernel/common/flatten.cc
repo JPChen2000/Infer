@@ -43,7 +43,7 @@ int32_t ComputeFlattenKernel(feather::operators::FlattenParam* param) {
 
     const size_t bytes = static_cast<size_t>(param->input->numel()) * DataTypeBytes(dtype);
     param->out->set_data_type(dtype);
-    std::memcpy(param->out->raw_data(), param->input->raw_data(), bytes);
+    std::memcpy(param->out->mutable_data(param->out->memory_size()), param->input->raw_data(), bytes);
     return 0;
 }
 

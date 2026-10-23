@@ -295,10 +295,22 @@ TEST(yolov5_demo_test, CudaLoadPrimesPersistentTensorDevices) {
     feather::demo::Yolov5Runner runner;
     ASSERT_EQ(runner.Load(model_path.string(), feather::demo::Yolov5Backend::kCuda), 0);
 
+    const auto& summary = runner.DescribeLastBuild();
+    const auto persistent_tensors = ExtractMetricValue(summary, "cuda_persistent_tensors");
+    const auto active_tensors = ExtractMetricValue(summary, "cuda_active_tensors");
+    const auto active_bytes = ExtractMetricValue(summary, "cuda_active_bytes");
+    ASSERT_TRUE(persistent_tensors.has_value()) << summary;
+    ASSERT_TRUE(active_tensors.has_value()) << summary;
+    ASSERT_TRUE(active_bytes.has_value()) << summary;
+    EXPECT_GT(*persistent_tensors, 0.0);
+    EXPECT_GT(*active_tensors, 0.0);
+    EXPECT_GT(*active_bytes, 0.0);
+
+    // Loading primes the runner's session without populating the default CUDA context.
     const auto stats = feather::kernel::cuda_detail::GetTensorCacheStats();
-    EXPECT_GT(stats.persistent_tensor_count, 0U);
-    EXPECT_GT(stats.active_tensor_count, 0U);
-    EXPECT_GT(stats.active_bytes, 0U);
+    EXPECT_EQ(stats.persistent_tensor_count, 0U);
+    EXPECT_EQ(stats.active_tensor_count, 0U);
+    EXPECT_EQ(stats.active_bytes, 0U);
 
     feather::kernel::cuda_detail::ClearTensorCache();
 #endif

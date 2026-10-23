@@ -35,6 +35,7 @@
 #include "src/kernel/constant_of_shape.h"
 #include "src/kernel/cos.h"
 #include "src/kernel/div.h"
+#include "src/kernel/cuda/runtime.h"
 #include "src/kernel/equal.h"
 #include "src/kernel/erf.h"
 #include "src/kernel/expand.h"
@@ -97,12 +98,22 @@ class DeviceBytes {
     bool allocate(size_t bytes) {
         reset();
         if (bytes == 0) return false;
-        return cudaMalloc(reinterpret_cast<void**>(&data_), bytes) == cudaSuccess;
+        void* pointer = nullptr;
+        if (cuda_detail::AcquireTemporaryDeviceBuffer(bytes, &pointer) != 0) return false;
+        data_ = static_cast<uint8_t*>(pointer);
+        bytes_ = bytes;
+        return true;
     }
 
     void reset() {
-        if (data_ != nullptr) cudaFree(data_);
+        if (data_ != nullptr && bytes_) cuda_detail::ReleaseTemporaryDeviceBuffer(data_, bytes_);
         data_ = nullptr;
+        bytes_ = 0;
+    }
+
+    void attach(void* pointer) {
+        reset();
+        data_ = static_cast<uint8_t*>(pointer);
     }
 
     template <typename T>
@@ -117,6 +128,7 @@ class DeviceBytes {
 
    private:
     uint8_t* data_{nullptr};
+    size_t bytes_{0};
 };
 
 inline int Blocks(int64_t count) {
@@ -149,19 +161,37 @@ inline bool BuildInt8OutputView(const Tensor* tensor, const std::vector<int64_t>
 inline bool CopyToDevice(const Tensor* tensor, DeviceBytes* device) {
     if (tensor == nullptr || device == nullptr || !tensor->IsInitialized() || tensor->numel() <= 0) return false;
     const size_t bytes = static_cast<size_t>(tensor->numel()) * DataTypeBytes(tensor->data_type());
-    return device->allocate(bytes) && cudaMemcpy(device->as<uint8_t>(), tensor->raw_data(), bytes, cudaMemcpyHostToDevice) == cudaSuccess;
+    if (tensor->memory_size() < bytes) return false;
+    void* pointer = nullptr;
+    if (cuda_detail::AcquireTensorDevice(tensor, bytes, tensor->raw_data(), &pointer) != 0) return false;
+    device->attach(pointer);
+    return true;
 }
 
 inline bool CopyFromDevice(const DeviceBytes& device, Tensor* tensor) {
     if (tensor == nullptr || tensor->numel() <= 0) return false;
     const size_t bytes = static_cast<size_t>(tensor->numel()) * DataTypeBytes(tensor->data_type());
-    return tensor->memory_size() >= bytes && cudaMemcpy(tensor->raw_data(), device.as<uint8_t>(), bytes, cudaMemcpyDeviceToHost) == cudaSuccess;
+    if (tensor->memory_size() < bytes) return false;
+    void* destination = nullptr;
+    if (cuda_detail::AcquireOutputTensorDevice(tensor, bytes, &destination) != 0 ||
+        cudaMemcpyAsync(destination, device.as<uint8_t>(), bytes, cudaMemcpyDeviceToDevice,
+                        cuda_detail::InferenceStream()) != cudaSuccess) return false;
+    return cuda_detail::DeferredHostSyncEnabled() ||
+        cuda_detail::SyncTensorToHost(tensor, bytes, tensor->raw_data()) == 0;
 }
 
 template <typename T>
 inline bool UploadVector(const std::vector<T>& values, DeviceBytes* device) {
     if (device == nullptr || values.empty() || !device->allocate(values.size() * sizeof(T))) return false;
-    return cudaMemcpy(device->as<uint8_t>(), values.data(), values.size() * sizeof(T), cudaMemcpyHostToDevice) == cudaSuccess;
+    // This host-derived metadata is local to this call. Finish its upload before
+    // the vector dies; it cannot provide a stable host address for graph replay.
+    const auto stream = cuda_detail::InferenceStream();
+    cudaStreamCaptureStatus capture_status;
+    if (cudaStreamIsCapturing(stream, &capture_status) != cudaSuccess ||
+        capture_status != cudaStreamCaptureStatusNone) return false;
+    return cudaMemcpyAsync(device->as<uint8_t>(), values.data(), values.size() * sizeof(T),
+                           cudaMemcpyHostToDevice, stream) == cudaSuccess &&
+           cuda_detail::SynchronizeInferenceStream() == 0;
 }
 
 inline bool LaunchSucceeded() {
@@ -208,6 +238,7 @@ inline bool InferBroadcastShape(const std::vector<int64_t>& lhs, const std::vect
 
 inline bool ReadHostInt64(const Tensor* tensor, std::vector<int64_t>* values) {
     if (tensor == nullptr || values == nullptr || !tensor->IsInitialized() || tensor->numel() <= 0) return false;
+    if (cuda_detail::SyncTensorToHostIfNeeded(const_cast<Tensor*>(tensor), tensor->memory_size(), tensor->raw_data()) != 0) return false;
     values->resize(static_cast<size_t>(tensor->numel()));
     switch (tensor->data_type()) {
         case DataType::INT64:
@@ -230,6 +261,7 @@ inline bool ReadHostInt64(const Tensor* tensor, std::vector<int64_t>* values) {
 
 inline bool ReadHostFloat(const Tensor* tensor, int64_t index, float* value) {
     if (tensor == nullptr || value == nullptr || index < 0 || index >= tensor->numel() || !tensor->IsInitialized()) return false;
+    if (cuda_detail::SyncTensorToHostIfNeeded(const_cast<Tensor*>(tensor), tensor->memory_size(), tensor->raw_data()) != 0) return false;
     switch (tensor->data_type()) {
         case DataType::FP32:
         case DataType::FP16:
@@ -663,7 +695,7 @@ inline int32_t RunUnary(operators::UnaryParam* param, int op, const char* name) 
         !BuildInt8OutputView(param->out.get(), param->input->dims().data(), &output_view)) return -1;
     DeviceBytes input, output;
     if (!CopyToDevice(param->input.get(), &input) || !output.allocate(static_cast<size_t>(param->out->numel()))) return -1;
-    UnaryQKernel<<<Blocks(param->out->numel()), kCudaThreads>>>(input.as<int8_t>(), output.as<int8_t>(), param->out->numel(), input_view, output_view, op);
+    UnaryQKernel<<<Blocks(param->out->numel()), kCudaThreads, 0, cuda_detail::InferenceStream()>>>(input.as<int8_t>(), output.as<int8_t>(), param->out->numel(), input_view, output_view, op);
     return LaunchSucceeded() && CopyFromDevice(output, param->out.get()) ? 0 : -1;
 }
 
@@ -682,7 +714,7 @@ inline int32_t RunBinary(operators::BinaryParam* param, int op, const char* name
     DeviceBytes lhs, rhs, output;
     if (!CopyToDevice(param->lhs.get(), &lhs) || !CopyToDevice(param->rhs.get(), &rhs) ||
         !output.allocate(static_cast<size_t>(param->out->numel()))) return -1;
-    BinaryQKernel<<<Blocks(param->out->numel()), kCudaThreads>>>(lhs.as<int8_t>(), rhs.as<int8_t>(), output.as<int8_t>(), param->out->numel(), output_shape, lhs_shape, rhs_shape, lhs_view, rhs_view, output_view, op);
+    BinaryQKernel<<<Blocks(param->out->numel()), kCudaThreads, 0, cuda_detail::InferenceStream()>>>(lhs.as<int8_t>(), rhs.as<int8_t>(), output.as<int8_t>(), param->out->numel(), output_shape, lhs_shape, rhs_shape, lhs_view, rhs_view, output_view, op);
     return LaunchSucceeded() && CopyFromDevice(output, param->out.get()) ? 0 : -1;
 }
 
@@ -693,7 +725,7 @@ inline int32_t RunCopy(const Tensor* input_tensor, Tensor* output_tensor, const 
     if (!BuildInt8View(input_tensor, &input_view) || !BuildInt8View(output_tensor, &output_view)) return -1;
     DeviceBytes input, output;
     if (!CopyToDevice(input_tensor, &input) || !output.allocate(static_cast<size_t>(output_tensor->numel()))) return -1;
-    CopyQKernel<<<Blocks(output_tensor->numel()), kCudaThreads>>>(input.as<int8_t>(), output.as<int8_t>(), output_tensor->numel(), input_view, output_view);
+    CopyQKernel<<<Blocks(output_tensor->numel()), kCudaThreads, 0, cuda_detail::InferenceStream()>>>(input.as<int8_t>(), output.as<int8_t>(), output_tensor->numel(), input_view, output_view);
     return LaunchSucceeded() && CopyFromDevice(output, output_tensor) ? 0 : -1;
 }
 
@@ -707,7 +739,7 @@ inline int32_t RunPow(operators::PowParam* param) {
     if (param->exponent_tensor != nullptr && !ReadHostScalar(param->exponent_tensor.get(), &exponent)) return -1;
     DeviceBytes input, output;
     if (!CopyToDevice(param->input.get(), &input) || !output.allocate(static_cast<size_t>(param->out->numel()))) return -1;
-    PowQKernel<<<Blocks(param->out->numel()), kCudaThreads>>>(input.as<int8_t>(), output.as<int8_t>(), param->out->numel(), input_view, output_view, exponent);
+    PowQKernel<<<Blocks(param->out->numel()), kCudaThreads, 0, cuda_detail::InferenceStream()>>>(input.as<int8_t>(), output.as<int8_t>(), param->out->numel(), input_view, output_view, exponent);
     return LaunchSucceeded() && CopyFromDevice(output, param->out.get()) ? 0 : -1;
 }
 
@@ -733,7 +765,7 @@ inline int32_t RunTranspose(operators::TransposeParam* param) {
     DeviceBytes input, output, perm_device;
     if (!CopyToDevice(param->input.get(), &input) || !UploadVector(perm, &perm_device) ||
         !output.allocate(static_cast<size_t>(param->out->numel()))) return -1;
-    TransposeQKernel<<<Blocks(param->out->numel()), kCudaThreads>>>(input.as<int8_t>(), output.as<int8_t>(), param->out->numel(), input_shape, output_shape, perm_device.as<int>(), input_view, output_view);
+    TransposeQKernel<<<Blocks(param->out->numel()), kCudaThreads, 0, cuda_detail::InferenceStream()>>>(input.as<int8_t>(), output.as<int8_t>(), param->out->numel(), input_shape, output_shape, perm_device.as<int>(), input_view, output_view);
     return LaunchSucceeded() && CopyFromDevice(output, param->out.get()) ? 0 : -1;
 }
 
@@ -798,7 +830,7 @@ inline int32_t RunSlice(operators::SliceParam* param) {
     DeviceBytes input, output, starts_device, steps_device;
     if (!CopyToDevice(param->input.get(), &input) || !UploadVector(starts, &starts_device) || !UploadVector(steps, &steps_device) ||
         !output.allocate(static_cast<size_t>(param->out->numel()))) return -1;
-    SliceQKernel<<<Blocks(param->out->numel()), kCudaThreads>>>(input.as<int8_t>(), output.as<int8_t>(), param->out->numel(), input_shape, output_shape, starts_device.as<int64_t>(), steps_device.as<int64_t>(), input_view, output_view);
+    SliceQKernel<<<Blocks(param->out->numel()), kCudaThreads, 0, cuda_detail::InferenceStream()>>>(input.as<int8_t>(), output.as<int8_t>(), param->out->numel(), input_shape, output_shape, starts_device.as<int64_t>(), steps_device.as<int64_t>(), input_view, output_view);
     return LaunchSucceeded() && CopyFromDevice(output, param->out.get()) ? 0 : -1;
 }
 
@@ -815,7 +847,7 @@ inline int32_t RunExpand(operators::ExpandParam* param) {
     if (!BuildInt8View(param->input.get(), &input_view) || !BuildInt8View(param->out.get(), &output_view)) return -1;
     DeviceBytes input, output;
     if (!CopyToDevice(param->input.get(), &input) || !output.allocate(static_cast<size_t>(param->out->numel()))) return -1;
-    ExpandQKernel<<<Blocks(param->out->numel()), kCudaThreads>>>(input.as<int8_t>(), output.as<int8_t>(), param->out->numel(), input_shape, output_shape, input_view, output_view);
+    ExpandQKernel<<<Blocks(param->out->numel()), kCudaThreads, 0, cuda_detail::InferenceStream()>>>(input.as<int8_t>(), output.as<int8_t>(), param->out->numel(), input_shape, output_shape, input_view, output_view);
     return LaunchSucceeded() && CopyFromDevice(output, param->out.get()) ? 0 : -1;
 }
 
@@ -834,7 +866,7 @@ inline int32_t RunWhere(operators::WhereParam* param) {
     DeviceBytes condition, x, y, output;
     if (!CopyToDevice(param->condition.get(), &condition) || !CopyToDevice(param->x.get(), &x) || !CopyToDevice(param->y.get(), &y) ||
         !output.allocate(static_cast<size_t>(param->out->numel()))) return -1;
-    WhereQKernel<<<Blocks(param->out->numel()), kCudaThreads>>>(condition.as<uint8_t>(), x.as<int8_t>(), y.as<int8_t>(), output.as<int8_t>(), param->out->numel(), output_shape, condition_shape, x_shape, y_shape, x_view, y_view, output_view);
+    WhereQKernel<<<Blocks(param->out->numel()), kCudaThreads, 0, cuda_detail::InferenceStream()>>>(condition.as<uint8_t>(), x.as<int8_t>(), y.as<int8_t>(), output.as<int8_t>(), param->out->numel(), output_shape, condition_shape, x_shape, y_shape, x_view, y_view, output_view);
     return LaunchSucceeded() && CopyFromDevice(output, param->out.get()) ? 0 : -1;
 }
 
@@ -858,7 +890,7 @@ inline int32_t RunGather(operators::GatherParam* param) {
     if (!BuildInt8View(param->data.get(), &input_view) || !BuildInt8View(param->out.get(), &output_view)) return -1;
     DeviceBytes input, index_device, output;
     if (!CopyToDevice(param->data.get(), &input) || !UploadVector(indices, &index_device) || !output.allocate(static_cast<size_t>(param->out->numel()))) return -1;
-    GatherQKernel<<<Blocks(param->out->numel()), kCudaThreads>>>(input.as<int8_t>(), index_device.as<int64_t>(), output.as<int8_t>(), param->out->numel(), input_shape, indices_shape, output_shape, axis, input_view, output_view);
+    GatherQKernel<<<Blocks(param->out->numel()), kCudaThreads, 0, cuda_detail::InferenceStream()>>>(input.as<int8_t>(), index_device.as<int64_t>(), output.as<int8_t>(), param->out->numel(), input_shape, indices_shape, output_shape, axis, input_view, output_view);
     return LaunchSucceeded() && CopyFromDevice(output, param->out.get()) ? 0 : -1;
 }
 
@@ -871,7 +903,7 @@ inline int32_t RunResize(operators::ResizeParam* param) {
     if (!BuildInt8View(param->input.get(), &input_view) || !BuildInt8View(param->out.get(), &output_view)) return -1;
     DeviceBytes input, output;
     if (!CopyToDevice(param->input.get(), &input) || !output.allocate(static_cast<size_t>(param->out->numel()))) return -1;
-    ResizeQKernel<<<Blocks(param->out->numel()), kCudaThreads>>>(input.as<int8_t>(), output.as<int8_t>(), param->out->numel(), input_shape, output_shape, input_view, output_view);
+    ResizeQKernel<<<Blocks(param->out->numel()), kCudaThreads, 0, cuda_detail::InferenceStream()>>>(input.as<int8_t>(), output.as<int8_t>(), param->out->numel(), input_shape, output_shape, input_view, output_view);
     return LaunchSucceeded() && CopyFromDevice(output, param->out.get()) ? 0 : -1;
 }
 
@@ -901,7 +933,7 @@ inline int32_t RunConcat(operators::ConcatParam* param) {
         if (!MakeShape(tensor->dims().data(), &input_shape) || !BuildInt8View(tensor.get(), &input_view)) return -1;
         DeviceBytes input;
         if (!CopyToDevice(tensor.get(), &input)) return -1;
-        ConcatQKernel<<<Blocks(tensor->numel()), kCudaThreads>>>(input.as<int8_t>(), output.as<int8_t>(), tensor->numel(), input_shape, output_shape, axis, axis_offset, input_view, output_view);
+        ConcatQKernel<<<Blocks(tensor->numel()), kCudaThreads, 0, cuda_detail::InferenceStream()>>>(input.as<int8_t>(), output.as<int8_t>(), tensor->numel(), input_shape, output_shape, axis, axis_offset, input_view, output_view);
         if (!LaunchSucceeded()) return -1;
         axis_offset += tensor->dims()[static_cast<size_t>(axis)];
     }
@@ -928,7 +960,7 @@ inline int32_t RunSplit(operators::SplitParam* param) {
         if (!MakeShape(tensor->dims().data(), &output_shape) || !BuildInt8View(tensor.get(), &output_view)) return -1;
         DeviceBytes output;
         if (!output.allocate(static_cast<size_t>(tensor->numel()))) return -1;
-        SplitQKernel<<<Blocks(tensor->numel()), kCudaThreads>>>(input.as<int8_t>(), output.as<int8_t>(), tensor->numel(), input_shape, output_shape, axis, axis_offset, input_view, output_view);
+        SplitQKernel<<<Blocks(tensor->numel()), kCudaThreads, 0, cuda_detail::InferenceStream()>>>(input.as<int8_t>(), output.as<int8_t>(), tensor->numel(), input_shape, output_shape, axis, axis_offset, input_view, output_view);
         if (!LaunchSucceeded() || !CopyFromDevice(output, tensor.get())) return -1;
         axis_offset += tensor->dims()[static_cast<size_t>(axis)];
     }
@@ -964,7 +996,7 @@ inline int32_t RunReduce(const Tensor* input_tensor, Tensor* output_tensor, cons
         !BuildInt8View(input_tensor, &input_view) || !BuildInt8View(output_tensor, &output_view)) return -1;
     DeviceBytes input, output;
     if (!CopyToDevice(input_tensor, &input) || !output.allocate(static_cast<size_t>(output_tensor->numel()))) return -1;
-    ReduceQKernel<<<Blocks(output_tensor->numel()), kCudaThreads>>>(input.as<int8_t>(), output.as<int8_t>(), output_tensor->numel(), input_shape, output_shape, axis_mask, mean, reduce_count, input_view, output_view);
+    ReduceQKernel<<<Blocks(output_tensor->numel()), kCudaThreads, 0, cuda_detail::InferenceStream()>>>(input.as<int8_t>(), output.as<int8_t>(), output_tensor->numel(), input_shape, output_shape, axis_mask, mean, reduce_count, input_view, output_view);
     return LaunchSucceeded() && CopyFromDevice(output, output_tensor) ? 0 : -1;
 }
 
@@ -982,7 +1014,7 @@ inline int32_t RunSoftmax(operators::SoftmaxParam* param) {
     if (!BuildInt8View(param->input.get(), &input_view) || !BuildInt8View(param->out.get(), &output_view)) return -1;
     DeviceBytes input, output;
     if (!CopyToDevice(param->input.get(), &input) || !output.allocate(static_cast<size_t>(param->out->numel()))) return -1;
-    SoftmaxQKernel<<<Blocks(outer * inner), kCudaThreads>>>(input.as<int8_t>(), output.as<int8_t>(), outer * inner, axis_dim, inner, input_view, output_view);
+    SoftmaxQKernel<<<Blocks(outer * inner), kCudaThreads, 0, cuda_detail::InferenceStream()>>>(input.as<int8_t>(), output.as<int8_t>(), outer * inner, axis_dim, inner, input_view, output_view);
     return LaunchSucceeded() && CopyFromDevice(output, param->out.get()) ? 0 : -1;
 }
 
@@ -998,7 +1030,7 @@ inline int32_t RunPool(operators::PoolParam* param, bool maximum, const char* na
     if (!BuildInt8View(param->input.get(), &input_view) || !BuildInt8View(param->out.get(), &output_view)) return -1;
     DeviceBytes input, output;
     if (!CopyToDevice(param->input.get(), &input) || !output.allocate(static_cast<size_t>(param->out->numel()))) return -1;
-    PoolQKernel<<<Blocks(param->out->numel()), kCudaThreads>>>(input.as<int8_t>(), output.as<int8_t>(), param->out->numel(), in_c, in_h, in_w, out_h, out_w, param->kernel_h, param->kernel_w, param->stride_h, param->stride_w, param->pad_h, param->pad_w, in_n, channel_last, maximum, input_view, output_view);
+    PoolQKernel<<<Blocks(param->out->numel()), kCudaThreads, 0, cuda_detail::InferenceStream()>>>(input.as<int8_t>(), output.as<int8_t>(), param->out->numel(), in_c, in_h, in_w, out_h, out_w, param->kernel_h, param->kernel_w, param->stride_h, param->stride_w, param->pad_h, param->pad_w, in_n, channel_last, maximum, input_view, output_view);
     return LaunchSucceeded() && CopyFromDevice(output, param->out.get()) ? 0 : -1;
 }
 
@@ -1014,7 +1046,7 @@ inline int32_t RunGlobalAveragePool(operators::GlobalAveragePoolParam* param) {
     if (!BuildInt8View(param->input.get(), &input_view) || !BuildInt8View(param->out.get(), &output_view)) return -1;
     DeviceBytes input, output;
     if (!CopyToDevice(param->input.get(), &input) || !output.allocate(static_cast<size_t>(param->out->numel()))) return -1;
-    GlobalAveragePoolQKernel<<<Blocks(param->out->numel()), kCudaThreads>>>(input.as<int8_t>(), output.as<int8_t>(), param->out->numel(), in_c, in_h, in_w, in_n, channel_last, input_view, output_view);
+    GlobalAveragePoolQKernel<<<Blocks(param->out->numel()), kCudaThreads, 0, cuda_detail::InferenceStream()>>>(input.as<int8_t>(), output.as<int8_t>(), param->out->numel(), in_c, in_h, in_w, in_n, channel_last, input_view, output_view);
     return LaunchSucceeded() && CopyFromDevice(output, param->out.get()) ? 0 : -1;
 }
 
@@ -1040,7 +1072,7 @@ inline int32_t RunBatchNorm(operators::BatchNormParam* param) {
     DeviceBytes input, output, scale_device, bias_device, mean_device, variance_device;
     if (!CopyToDevice(param->input.get(), &input) || !UploadVector(scale, &scale_device) || !UploadVector(bias, &bias_device) ||
         !UploadVector(mean, &mean_device) || !UploadVector(variance, &variance_device) || !output.allocate(static_cast<size_t>(param->out->numel()))) return -1;
-    BatchNormQKernel<<<Blocks(param->out->numel()), kCudaThreads>>>(input.as<int8_t>(), scale_device.as<float>(), bias_device.as<float>(), mean_device.as<float>(), variance_device.as<float>(), output.as<int8_t>(), param->out->numel(), c, h, w, n, channel_last, param->epsilon, input_view, output_view);
+    BatchNormQKernel<<<Blocks(param->out->numel()), kCudaThreads, 0, cuda_detail::InferenceStream()>>>(input.as<int8_t>(), scale_device.as<float>(), bias_device.as<float>(), mean_device.as<float>(), variance_device.as<float>(), output.as<int8_t>(), param->out->numel(), c, h, w, n, channel_last, param->epsilon, input_view, output_view);
     return LaunchSucceeded() && CopyFromDevice(output, param->out.get()) ? 0 : -1;
 }
 
@@ -1056,7 +1088,7 @@ inline int32_t RunEqual(operators::EqualParam* param) {
     if (!BuildInt8View(param->lhs.get(), &lhs_view) || !BuildInt8View(param->rhs.get(), &rhs_view)) return -1;
     DeviceBytes lhs, rhs, output;
     if (!CopyToDevice(param->lhs.get(), &lhs) || !CopyToDevice(param->rhs.get(), &rhs) || !output.allocate(static_cast<size_t>(param->out->numel()))) return -1;
-    EqualQKernel<<<Blocks(param->out->numel()), kCudaThreads>>>(lhs.as<int8_t>(), rhs.as<int8_t>(), output.as<uint8_t>(), param->out->numel(), output_shape, lhs_shape, rhs_shape, lhs_view, rhs_view);
+    EqualQKernel<<<Blocks(param->out->numel()), kCudaThreads, 0, cuda_detail::InferenceStream()>>>(lhs.as<int8_t>(), rhs.as<int8_t>(), output.as<uint8_t>(), param->out->numel(), output_shape, lhs_shape, rhs_shape, lhs_view, rhs_view);
     return LaunchSucceeded() && CopyFromDevice(output, param->out.get()) ? 0 : -1;
 }
 
@@ -1073,14 +1105,14 @@ inline int32_t RunCast(operators::CastParam* param) {
         !output.allocate(static_cast<size_t>(param->out->numel()) * DataTypeBytes(param->to))) return -1;
     const int blocks = Blocks(param->out->numel());
     switch (param->to) {
-        case DataType::FP32: CastToFloatKernel<<<blocks, kCudaThreads>>>(input.as<int8_t>(), output.as<float>(), param->out->numel(), input_view); break;
-        case DataType::FP16: CastToHalfKernel<<<blocks, kCudaThreads>>>(input.as<int8_t>(), output.as<uint16_t>(), param->out->numel(), input_view); break;
-        case DataType::BF16: CastToBFloat16Kernel<<<blocks, kCudaThreads>>>(input.as<int8_t>(), output.as<BFloat16>(), param->out->numel(), input_view); break;
-        case DataType::INT8: CastToInt8Kernel<<<blocks, kCudaThreads>>>(input.as<int8_t>(), output.as<int8_t>(), param->out->numel(), input_view, output_view); break;
-        case DataType::INT32: CastToInt32Kernel<<<blocks, kCudaThreads>>>(input.as<int8_t>(), output.as<int32_t>(), param->out->numel(), input_view); break;
-        case DataType::INT64: CastToInt64Kernel<<<blocks, kCudaThreads>>>(input.as<int8_t>(), output.as<int64_t>(), param->out->numel(), input_view); break;
-        case DataType::UINT8: CastToUInt8Kernel<<<blocks, kCudaThreads>>>(input.as<int8_t>(), output.as<uint8_t>(), param->out->numel(), input_view); break;
-        case DataType::BOOL: CastToBoolKernel<<<blocks, kCudaThreads>>>(input.as<int8_t>(), output.as<uint8_t>(), param->out->numel(), input_view); break;
+        case DataType::FP32: CastToFloatKernel<<<blocks, kCudaThreads, 0, cuda_detail::InferenceStream()>>>(input.as<int8_t>(), output.as<float>(), param->out->numel(), input_view); break;
+        case DataType::FP16: CastToHalfKernel<<<blocks, kCudaThreads, 0, cuda_detail::InferenceStream()>>>(input.as<int8_t>(), output.as<uint16_t>(), param->out->numel(), input_view); break;
+        case DataType::BF16: CastToBFloat16Kernel<<<blocks, kCudaThreads, 0, cuda_detail::InferenceStream()>>>(input.as<int8_t>(), output.as<BFloat16>(), param->out->numel(), input_view); break;
+        case DataType::INT8: CastToInt8Kernel<<<blocks, kCudaThreads, 0, cuda_detail::InferenceStream()>>>(input.as<int8_t>(), output.as<int8_t>(), param->out->numel(), input_view, output_view); break;
+        case DataType::INT32: CastToInt32Kernel<<<blocks, kCudaThreads, 0, cuda_detail::InferenceStream()>>>(input.as<int8_t>(), output.as<int32_t>(), param->out->numel(), input_view); break;
+        case DataType::INT64: CastToInt64Kernel<<<blocks, kCudaThreads, 0, cuda_detail::InferenceStream()>>>(input.as<int8_t>(), output.as<int64_t>(), param->out->numel(), input_view); break;
+        case DataType::UINT8: CastToUInt8Kernel<<<blocks, kCudaThreads, 0, cuda_detail::InferenceStream()>>>(input.as<int8_t>(), output.as<uint8_t>(), param->out->numel(), input_view); break;
+        case DataType::BOOL: CastToBoolKernel<<<blocks, kCudaThreads, 0, cuda_detail::InferenceStream()>>>(input.as<int8_t>(), output.as<uint8_t>(), param->out->numel(), input_view); break;
         default: return -1;
     }
     return LaunchSucceeded() && CopyFromDevice(output, param->out.get()) ? 0 : -1;
@@ -1096,7 +1128,7 @@ inline int32_t RunConstantOfShape(operators::ConstantOfShapeParam* param) {
     const float value = param->use_float_value ? param->float_value : static_cast<float>(param->int_value);
     DeviceBytes output;
     if (!output.allocate(static_cast<size_t>(param->out->numel()))) return -1;
-    FillQKernel<<<Blocks(param->out->numel()), kCudaThreads>>>(output.as<int8_t>(), param->out->numel(), value, output_view);
+    FillQKernel<<<Blocks(param->out->numel()), kCudaThreads, 0, cuda_detail::InferenceStream()>>>(output.as<int8_t>(), param->out->numel(), value, output_view);
     return LaunchSucceeded() && CopyFromDevice(output, param->out.get()) ? 0 : -1;
 }
 

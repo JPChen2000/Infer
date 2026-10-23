@@ -47,7 +47,7 @@ TEST(x86_cast_test, Bf16ToFp32UsesRegisteredKernel) {
                                          -16.0f, 0.75f, 2.0f, -4.0f, 5.5f, 8.0f, -11.0f, 1.5f, 6.25f};
     auto input = MakeTensor(sizeof(uint16_t) * kCount, {kCount}, DataType::BF16);
     auto output = MakeTensor(sizeof(float) * kCount, {kCount}, DataType::FP32);
-    auto* input_data = static_cast<uint16_t*>(input->raw_data());
+    auto* input_data = static_cast<uint16_t*>(input->mutable_data(input->memory_size()));
     for (int64_t i = 0; i < kCount; ++i) input_data[i] = FloatToBFloat16(expected[static_cast<size_t>(i)]);
 
     CastParam param;

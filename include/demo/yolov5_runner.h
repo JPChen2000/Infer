@@ -17,6 +17,7 @@
 #define FEATHER_DEMO_YOLOV5_RUNNER_H
 
 #include <memory>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -24,7 +25,7 @@
 #include "core/graph.h"
 #include "core/execution_plan.h"
 #include "core/static_graph.h"
-#include "demo/yolov5_postprocess.h"
+#include "demo/yolo_postprocess.h"
 #include "model/model_io.h"
 
 namespace feather {
@@ -58,6 +59,12 @@ class Yolov5Runner {
                              std::vector<Detection>* detections);
     const std::string& DescribeLastBuild() const { return last_build_summary_; }
     const std::string& DescribeLastRun() const { return last_run_summary_; }
+    const std::string& LastError() const { return last_error_; }
+    const YoloMetadata& DetectionMetadata() const { return detection_metadata_; }
+    const Tensor* LastRawOutput() const;
+    const Tensor* LastInput() const { return Runtime().GetTensor(input_name_).get(); }
+    const LetterboxInfo& LastLetterbox() const { return last_letterbox_; }
+    void SetMaxDetections(size_t maximum) { max_detections_ = maximum; }
     void SetRuntimeProfilingEnabled(bool enabled) { Runtime().SetProfilingEnabled(enabled); }
     const std::vector<RuntimeProfileSummary>& RuntimeProfileSummaries() const { return Runtime().ProfileSummaries(); }
 
@@ -83,6 +90,11 @@ class Yolov5Runner {
     DataLayout input_layout_{DataLayout::NCHW};
     DeviceType backend_device_{GetHostRuntimeDevice()};
     std::string model_name_;
+    YoloMetadata detection_metadata_;
+    LetterboxInfo last_letterbox_;
+    size_t max_detections_{std::numeric_limits<size_t>::max()};
+    bool loaded_{false};
+    std::string last_error_;
     std::string last_build_summary_;
     std::string last_run_summary_;
 };

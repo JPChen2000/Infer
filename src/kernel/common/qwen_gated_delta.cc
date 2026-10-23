@@ -85,7 +85,7 @@ int32_t QwenGatedDeltaStateKernel<DeviceType::COMMON, DataType::FP32>::compute()
     const float* v = p->v->data<float>();
     const float* beta = p->beta->data<float>();
     const float* decay = p->decay->data<float>();
-    float* out = static_cast<float*>(p->out->raw_data());
+    float* out = static_cast<float*>(p->out->mutable_data(p->out->memory_size()));
     p->out->set_data_type(DataType::FP32);
     std::vector<float> kv(static_cast<size_t>(value));
     for (int64_t h = 0; h < heads; ++h) {
@@ -114,7 +114,7 @@ int32_t QwenGatedDeltaOutputKernel<DeviceType::COMMON, DataType::FP32>::compute(
         p->out->data_type() != DataType::FP32 || p->state->dims().size() != 4 || p->q->numel() != p->state->dims()[1] * p->state->dims()[2]) return -1;
     const int64_t heads = p->state->dims()[1], key = p->state->dims()[2], value = p->state->dims()[3];
     if (p->out->numel() != heads * value) return -1;
-    const float* state = p->state->data<float>(); const float* q = p->q->data<float>(); float* out = static_cast<float*>(p->out->raw_data());
+    const float* state = p->state->data<float>(); const float* q = p->q->data<float>(); float* out = static_cast<float*>(p->out->mutable_data(p->out->memory_size()));
     p->out->set_data_type(DataType::FP32);
     for (int64_t h = 0; h < heads; ++h) for (int64_t j = 0; j < value; ++j) {
         float sum = 0.0f;
@@ -137,8 +137,8 @@ int32_t QwenGatedDeltaKernel<DeviceType::COMMON, DataType::FP32>::compute() {
     const float* beta = p->beta->data<float>();
     const float* decay = p->decay->data<float>();
     const float* q = p->q->data<float>();
-    float* next_state = static_cast<float*>(p->next_state->raw_data());
-    float* out = static_cast<float*>(p->out->raw_data());
+    float* next_state = static_cast<float*>(p->next_state->mutable_data(p->next_state->memory_size()));
+    float* out = static_cast<float*>(p->out->mutable_data(p->out->memory_size()));
     p->next_state->set_data_type(DataType::FP32);
     p->out->set_data_type(DataType::FP32);
 

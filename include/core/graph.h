@@ -26,6 +26,7 @@
 
 #include "core/status.h"
 #include "core/backend.h"
+#include "core/operator_semantics.h"
 #include "core/kernel.h"
 #include "util/thread_pool_nv.h"
 
@@ -65,6 +66,7 @@ struct RuntimeNode {
     std::vector<size_t> predecessors;
     std::vector<size_t> successors;
     size_t pending_dependencies{};
+    std::optional<OperatorSemantics> semantics;
 
     std::string ProfileLabel() const;
     int32_t Run();
@@ -112,6 +114,11 @@ class RuntimeGraph {
 
    private:
     friend class CompiledGraph;
+    friend class ExecutionSession;
+    friend class StateBindingAccess;
+    Status CheckTensorBindings() const;
+    void CaptureTensorBindings();
+    void RecordStateStorageSwap(const Tensor& first, const Tensor& second);
     int32_t BuildDependencies();
     void ResetPendingDependencies();
     int32_t RunSerial();
@@ -140,6 +147,8 @@ class RuntimeGraph {
     RuntimeThreadMode thread_mode_{RuntimeThreadMode::kParallelGraph};
     size_t configured_thread_count_{1};
     bool finalized_{false};
+    // Parameter binding lifetime is independent of scheduling finalization.
+    bool bindings_installed_{false};
     bool uses_memory_plan_{false};
     bool structure_locked_{false};
     struct TensorContract {
@@ -148,8 +157,22 @@ class RuntimeGraph {
         std::shared_ptr<const Tensor> descriptor;
         size_t bytes;
         bool fixed_quantization;
+        // A terminal data-dependent selection may shrink its leading extent
+        // while retaining the compiled allocation as its capacity.
+        bool bounded_leading_dimension{false};
+        // Present only for values consumed by fixed-plan shape inference.
+        std::shared_ptr<const std::vector<uint8_t>> fixed_values;
     };
     std::vector<TensorContract> contracts_;
+    struct TensorBindingContract {
+        std::shared_ptr<Tensor> tensor;
+        uint64_t storage_id{0};
+        size_t offset{0};
+    };
+    std::unordered_map<std::string, TensorBindingContract> binding_contracts_;
+    // Frozen topology for effect validation without copying nodes per run.
+    std::vector<OperatorEffectNode> effect_nodes_;
+    std::vector<std::string> effect_inputs_, effect_outputs_;
     std::unique_ptr<BackendContext> backend_;
     Status execution_status_;
     mutable std::mutex error_mutex_;

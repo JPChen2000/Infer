@@ -16,11 +16,13 @@
 #ifndef FEATHER_CORE_EXECUTION_PLAN_H
 #define FEATHER_CORE_EXECUTION_PLAN_H
 
+#include "core/operator_semantics.h"
 #include "core/graph.h"
 #include "core/static_graph.h"
 
 namespace feather {
 
+class ExecutionSession;
 struct SessionOptions {
     RuntimeThreadMode thread_mode{RuntimeThreadMode::kSerialGraph};
     size_t thread_count{1};
@@ -28,7 +30,14 @@ struct SessionOptions {
     // Mutable host storage only; shared immutable weights are excluded.
     size_t host_memory_limit{static_cast<size_t>(-1)};
     size_t device_workspace_limit{static_cast<size_t>(-1)};
+    size_t fp8_weight_cache_limit{0};
     std::function<std::unique_ptr<BackendContext>()> backend_factory;
+    // Bind the exact caller-owned mutable input objects across shape plans.
+    // View aliases that need separate Tensor objects are currently rejected.
+    std::unordered_map<std::string, std::shared_ptr<Tensor>> mutable_state;
+    // Optional source for equal immutable constants only. No source session
+    // lifetime is required after creation; storage owns the shared resources.
+    const ExecutionSession* immutable_weight_source{nullptr};
 };
 
 struct PlannedAllocation {
@@ -48,6 +57,7 @@ struct MemoryPlan {
 struct SessionMemoryUsage {
     size_t mutable_host_bytes{0};
     size_t shared_weight_bytes{0};
+    size_t reused_weight_bytes{0};
     size_t arena_bytes{0};
 };
 
@@ -57,7 +67,8 @@ class ExecutionSession;
 // recipes. It owns no mutable execution kernels, stream or activation arena.
 class CompiledGraph {
  public:
-    static Status Compile(const StaticGraph& graph, std::shared_ptr<const CompiledGraph>* result);
+    static Status Compile(const StaticGraph& graph, std::shared_ptr<const CompiledGraph>* result,
+                          const std::unordered_set<std::string>& external_state_inputs = {});
     Status CreateSession(std::unique_ptr<ExecutionSession>* session, const SessionOptions& options = {}) const;
     const MemoryPlan& memory_plan() const { return memory_plan_; }
     size_t NodeSize() const { return nodes_.size(); }
@@ -78,12 +89,18 @@ class CompiledGraph {
         DataLayout layout{DataLayout::ND};
         KernelBase::ParameterBinder bind;
         KernelBase::Factory factory;
+        OperatorSemantics semantics;
     };
+    friend class GraphLowering;
+    Status LowerInto(RuntimeGraph* runtime, const StaticGraph& graph) const;
+    Status InstallRuntime(RuntimeGraph& runtime, const KernelBase::TensorBindings& bindings) const;
     Status BuildMemoryPlan();
     std::vector<Value> values_;
     std::vector<Node> nodes_;
-    std::vector<std::string> outputs_;
+    std::vector<std::string> inputs_, outputs_;
     MemoryPlan memory_plan_;
+    std::unordered_set<std::string> required_state_inputs_;
+    std::unordered_map<std::string, std::vector<uint8_t>> control_values_;
 };
 
 class ExecutionSession {

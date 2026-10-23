@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "src/kernel/x86/prepared_weight_cache.h"
 #include "src/kernel/x86/linear.h"
 
 #include <immintrin.h>
@@ -804,7 +805,7 @@ inline void ComputeTransposedRhsRowColumns(const float* lhs_row, const uint16_t*
 
 bool PackedBf16Rhs::Matches(const uint16_t* rhs, int64_t k, int64_t n, uint64_t source_version) const {
     return rhs != nullptr && source_ == rhs && k_ == k && n_ == n && source_version_ == source_version &&
-           !data_.empty();
+           data_ && !data_->empty();
 }
 
 bool PackedBf16Rhs::Pack(const uint16_t* rhs, int64_t k, int64_t n, uint64_t source_version) {
@@ -815,7 +816,8 @@ bool PackedBf16Rhs::Pack(const uint16_t* rhs, int64_t k, int64_t n, uint64_t sou
     k_ = 0;
     n_ = 0;
     source_version_ = 0;
-    data_.clear();
+    data_.reset();
+    std::vector<uint16_t> values;
     // The packed kernel performs eight full-width vector loads per output block.
     // Keep the contract strict so a tail cannot read past the source bias/RHS.
     if (rhs == nullptr || k <= 0 || n <= 0 ||
@@ -832,20 +834,25 @@ bool PackedBf16Rhs::Pack(const uint16_t* rhs, int64_t k, int64_t n, uint64_t sou
         return false;
     }
     try {
-        data_.assign(static_cast<size_t>(element_count), 0);
+        values.assign(static_cast<size_t>(element_count), 0);
     } catch (const std::bad_alloc&) {
-        data_.clear();
+        data_.reset();
         return false;
     }
     for (int64_t block = 0; block < block_count; ++block) {
         const int64_t col = block * kBf16PackedOutputBlock;
         const int64_t width = std::min(kBf16PackedOutputBlock, n - col);
         for (int64_t row = 0; row < k; ++row) {
-            uint16_t* destination = data_.data() + (block * k + row) * kBf16PackedOutputBlock;
+            uint16_t* destination = values.data() + (block * k + row) * kBf16PackedOutputBlock;
             for (int64_t lane = 0; lane < width; ++lane) {
                 destination[lane] = rhs[row * n + col + lane];
             }
         }
+    }
+    try {
+        data_ = std::make_shared<const std::vector<uint16_t>>(std::move(values));
+    } catch (const std::bad_alloc&) {
+        return false;
     }
     source_ = rhs;
     k_ = k;
@@ -854,10 +861,27 @@ bool PackedBf16Rhs::Pack(const uint16_t* rhs, int64_t k, int64_t n, uint64_t sou
     return true;
 }
 
+bool PackedBf16Rhs::Pack(const Tensor& source, int64_t k, int64_t n) {
+    if (!detail::ValidPackedSource(source, k, n, false)) return false;
+    const auto* pointer = source.data<uint16_t>();
+    if (!source.is_immutable() || !source.storage()->read_only()) return Pack(pointer, k, n, source.mutation_version());
+    auto packed = detail::AcquirePackedWeight(source, k, n, false, [&] {
+        if (!Pack(pointer, k, n, source.mutation_version())) return std::shared_ptr<const std::vector<uint16_t>>{};
+        return data_;
+    });
+    if (!packed) return false;
+    data_ = std::move(packed);
+    source_ = pointer;
+    k_ = k;
+    n_ = n;
+    source_version_ = source.mutation_version();
+    return true;
+}
+
 bool PackedBf16TransposedRhs::Matches(const uint16_t* rhs_transposed, int64_t k, int64_t n,
                                       uint64_t source_version) const {
     return rhs_transposed != nullptr && source_ == rhs_transposed && k_ == k && n_ == n &&
-           source_version_ == source_version && !data_.empty();
+           source_version_ == source_version && data_ && !data_->empty();
 }
 
 bool PackedBf16TransposedRhs::Pack(const uint16_t* rhs_transposed, int64_t k, int64_t n, uint64_t source_version) {
@@ -868,7 +892,8 @@ bool PackedBf16TransposedRhs::Pack(const uint16_t* rhs_transposed, int64_t k, in
     k_ = 0;
     n_ = 0;
     source_version_ = 0;
-    data_.clear();
+    data_.reset();
+    std::vector<uint16_t> values;
     if (rhs_transposed == nullptr || k <= 0 || n <= 0) {
         return false;
     }
@@ -882,14 +907,14 @@ bool PackedBf16TransposedRhs::Pack(const uint16_t* rhs_transposed, int64_t k, in
         return false;
     }
     try {
-        data_.resize(static_cast<size_t>(element_count));
+        values.resize(static_cast<size_t>(element_count));
     } catch (const std::bad_alloc&) {
-        data_.clear();
+        data_.reset();
         return false;
     }
     for (int64_t block = 0; block < block_count; ++block) {
         const uint16_t* source_block = rhs_transposed + block * kBf16PackedOutputBlock * k;
-        uint16_t* destination_block = data_.data() + block * k * kBf16PackedOutputBlock;
+        uint16_t* destination_block = values.data() + block * k * kBf16PackedOutputBlock;
         for (int64_t row = 0; row < k; ++row) {
             uint16_t* destination = destination_block + row * kBf16PackedOutputBlock;
             for (int64_t lane = 0; lane < kBf16PackedOutputBlock; ++lane) {
@@ -901,10 +926,32 @@ bool PackedBf16TransposedRhs::Pack(const uint16_t* rhs_transposed, int64_t k, in
             }
         }
     }
+    try {
+        data_ = std::make_shared<const std::vector<uint16_t>>(std::move(values));
+    } catch (const std::bad_alloc&) {
+        return false;
+    }
     source_ = rhs_transposed;
     k_ = k;
     n_ = n;
     source_version_ = source_version;
+    return true;
+}
+
+bool PackedBf16TransposedRhs::Pack(const Tensor& source, int64_t k, int64_t n) {
+    if (!detail::ValidPackedSource(source, k, n, false)) return false;
+    const auto* pointer = source.data<uint16_t>();
+    if (!source.is_immutable() || !source.storage()->read_only()) return Pack(pointer, k, n, source.mutation_version());
+    auto packed = detail::AcquirePackedWeight(source, k, n, true, [&] {
+        if (!Pack(pointer, k, n, source.mutation_version())) return std::shared_ptr<const std::vector<uint16_t>>{};
+        return data_;
+    });
+    if (!packed) return false;
+    data_ = std::move(packed);
+    source_ = pointer;
+    k_ = k;
+    n_ = n;
+    source_version_ = source.mutation_version();
     return true;
 }
 

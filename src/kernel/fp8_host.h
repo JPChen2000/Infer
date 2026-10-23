@@ -757,7 +757,7 @@ int32_t Equal(operators::EqualParam* param) {
         param->out->dims().data() != output_dims || !SafeTensorNumel(param->out.get(), &output_numel) ||
         !SafeRequiredBytes(output_numel, sizeof(uint8_t), &output_bytes) || param->out->memory_size() < output_bytes) return -1;
     param->out->set_data_type(DataType::BOOL);
-    auto* output = static_cast<uint8_t*>(param->out->raw_data());
+    auto* output = static_cast<uint8_t*>(param->out->mutable_data(param->out->memory_size()));
     const auto output_strides = Strides(output_dims);
     const auto lhs_strides = Strides(param->lhs->dims().data());
     const auto rhs_strides = Strides(param->rhs->dims().data());

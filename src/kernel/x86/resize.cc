@@ -46,34 +46,10 @@ int32_t ComputeResizeFallback(feather::operators::ResizeParam* param) {
         return -1;
     }
 
-    const auto& in_dims = param->input->dims().data();
-    const auto& out_dims = param->out->dims().data();
-    if (in_dims.size() != out_dims.size() || in_dims.size() != param->scales.size()) {
-        return -1;
-    }
-
-    const auto in_strides = ComputeStrides(in_dims);
-    const auto out_strides = ComputeStrides(out_dims);
-    std::vector<int64_t> out_coords(out_dims.size(), 0);
-
     param->out->set_data_type(dtype);
-    for (int64_t linear = 0; linear < param->out->numel(); ++linear) {
-        int64_t remaining = linear;
-        for (size_t axis = 0; axis < out_dims.size(); ++axis) {
-            out_coords[axis] = remaining / out_strides[axis];
-            remaining %= out_strides[axis];
-        }
-
-        int64_t input_offset = 0;
-        for (size_t axis = 0; axis < in_dims.size(); ++axis) {
-            const float scale = param->scales[axis];
-            int64_t coord = static_cast<int64_t>(static_cast<double>(out_coords[axis]) / scale);
-            coord = std::max<int64_t>(0, std::min<int64_t>(coord, in_dims[axis] - 1));
-            input_offset += coord * in_strides[axis];
-        }
-        TensorIO<dtype>::Write(param->out.get(), linear, TensorIO<dtype>::Read(param->input.get(), input_offset));
-    }
-    return 0;
+    return ComputeResizeHost(param,
+        [&](int64_t index) { return TensorIO<dtype>::Read(param->input.get(), index); },
+        [&](int64_t index, float value) { TensorIO<dtype>::Write(param->out.get(), index, value); });
 }
 
 template <typename T>
@@ -92,7 +68,11 @@ int32_t ComputeResizeRaw(feather::operators::ResizeParam* param, DataType dtype)
     T* output = param->out->mutable_data<T>();
     param->out->set_data_type(dtype);
 
-    if (in_dims.size() == 4) {
+    if (in_dims.size() == 4 && IsLegacyResize(*param) &&
+        in_dims[0] == out_dims[0] && param->scales[0] == 1.0f &&
+        in_dims[IsChannelLastLayout(param->input->layout()) ? 3 : 1] ==
+            out_dims[IsChannelLastLayout(param->input->layout()) ? 3 : 1] &&
+        param->scales[IsChannelLastLayout(param->input->layout()) ? 3 : 1] == 1.0f) {
         ImageShape4D input_shape;
         ImageShape4D output_shape;
         if (!DecodeImageShape4D(in_dims, param->input->layout(), &input_shape) ||
@@ -106,8 +86,8 @@ int32_t ComputeResizeRaw(feather::operators::ResizeParam* param, DataType dtype)
         const int64_t in_w = input_shape.w;
         const int64_t out_h = output_shape.h;
         const int64_t out_w = output_shape.w;
-        const float scale_h = param->scales[static_cast<size_t>(HeightAxisForLayout(layout))];
-        const float scale_w = param->scales[static_cast<size_t>(WidthAxisForLayout(layout))];
+        const double scale_h = ResizeScale(*param, static_cast<size_t>(HeightAxisForLayout(layout)));
+        const double scale_w = ResizeScale(*param, static_cast<size_t>(WidthAxisForLayout(layout)));
         for (int64_t n = 0; n < batch; ++n) {
             for (int64_t c = 0; c < channels; ++c) {
                 for (int64_t oh = 0; oh < out_h; ++oh) {
@@ -137,8 +117,9 @@ int32_t ComputeResizeRaw(feather::operators::ResizeParam* param, DataType dtype)
         }
         int64_t input_offset = 0;
         for (size_t axis = 0; axis < in_dims.size(); ++axis) {
-            const float scale = param->scales[axis];
-            int64_t coord = static_cast<int64_t>(static_cast<double>(out_coords[axis]) / scale);
+            int64_t coord = ResizeNearestIndex(
+                ResizeCoordinate(out_coords[axis], in_dims[axis], out_dims[axis], ResizeScale(*param, axis),
+                                 param->coordinate_mode), in_dims[axis], param->nearest_mode);
             coord = std::max<int64_t>(0, std::min<int64_t>(coord, in_dims[axis] - 1));
             input_offset += coord * in_strides[axis];
         }
@@ -154,6 +135,7 @@ int32_t ComputeResizeRaw(feather::operators::ResizeParam* param, DataType dtype)
 // Return 1 when the shape is not covered so the caller can use its fallback.
 int32_t ComputeResizeInt8NchwNearest(feather::operators::ResizeParam* param) {
     if (param == nullptr || param->input == nullptr || param->out == nullptr ||
+        !IsLegacyResize(*param) ||
         param->input->data_type() != DataType::INT8 || param->out->data_type() != DataType::INT8 ||
         param->input->dims().size() != 4 || param->out->dims().size() != 4 || param->scales.size() != 4 ||
         NormalizeDataLayout(param->input->layout()) != DataLayout::NCHW ||
@@ -258,7 +240,8 @@ template <>
 int32_t ResizeKernel<DeviceType::X86, DataType::FP32>::compute() {
     AutoTimer timer("X86::Resize::FP32");
     auto* param = ParamAs<feather::operators::ResizeParam>();
-    if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::FP32) {
+    if (param == nullptr || param->input == nullptr || param->mode == operators::ResizeParam::Mode::kLinear ||
+        param->input->data_type() != DataType::FP32) {
         return ComputeResizeFallback<DataType::FP32>(param);
     }
     return ComputeResizeRaw<float>(param, DataType::FP32);
@@ -268,7 +251,8 @@ template <>
 int32_t ResizeKernel<DeviceType::X86, DataType::FP16>::compute() {
     AutoTimer timer("X86::Resize::FP16");
     auto* param = ParamAs<feather::operators::ResizeParam>();
-    if (param == nullptr || param->input == nullptr || param->input->data_type() != DataType::FP16) {
+    if (param == nullptr || param->input == nullptr || param->mode == operators::ResizeParam::Mode::kLinear ||
+        param->input->data_type() != DataType::FP16) {
         return ComputeResizeFallback<DataType::FP16>(param);
     }
     return ComputeResizeRaw<uint16_t>(param, DataType::FP16);
@@ -284,43 +268,28 @@ int32_t ResizeKernel<DeviceType::X86, DataType::INT8>::compute() {
         param->input->dims().size() != param->scales.size()) return -1;
     const int32_t fast_status = ComputeResizeInt8NchwNearest(param);
     if (fast_status != 1) return fast_status;
-    const auto& in_dims = param->input->dims().data();
-    const auto& out_dims = param->out->dims().data();
-    const auto in_strides = ComputeStrides(in_dims);
-    const auto out_strides = ComputeStrides(out_dims);
+
     const auto& input_q = param->input->quantization();
     const auto& output_q = param->out->quantization();
     const float input_scale = input_q.scale_at(0);
     const float output_scale = output_q.scale_at(0);
     const int32_t input_zero = input_q.zero_point_at(0);
     const int32_t output_zero = output_q.zero_point_at(0);
-    if (!input_q.enabled || !output_q.enabled || !std::isfinite(input_scale) || input_scale <= 0.0f ||
+    if (!input_q.enabled || !output_q.enabled ||
+        input_q.granularity != QuantizationGranularity::kPerTensor ||
+        output_q.granularity != QuantizationGranularity::kPerTensor || !std::isfinite(input_scale) || input_scale <= 0.0f ||
         !std::isfinite(output_scale) || output_scale <= 0.0f) return -1;
     const int8_t* input = param->input->data<int8_t>();
     int8_t* output = param->out->mutable_data<int8_t>();
-    for (int64_t linear = 0; linear < param->out->numel(); ++linear) {
-        int64_t remaining = linear;
-        int64_t input_offset = 0;
-        for (size_t axis = 0; axis < out_dims.size(); ++axis) {
-            const int64_t out_coord = remaining / out_strides[axis];
-            remaining %= out_strides[axis];
-            const float scale = param->scales[axis];
-            if (!(scale > 0.0f) || !std::isfinite(scale)) return -1;
-            int64_t in_coord = static_cast<int64_t>(static_cast<double>(out_coord) / scale);
-            in_coord = std::max<int64_t>(0, std::min<int64_t>(in_coord, in_dims[axis] - 1));
-            input_offset += in_coord * in_strides[axis];
-        }
-        const int32_t real_q = static_cast<int32_t>(input[input_offset]) - input_zero;
-        const double real_value = static_cast<double>(real_q) * static_cast<double>(input_scale);
-        const double transformed = real_value / static_cast<double>(output_scale) + output_zero;
-        if (!std::isfinite(transformed)) return -1;
-        const double rounded = std::round(transformed);
-        output[linear] = static_cast<int8_t>(std::max(-128.0, std::min(127.0, rounded)));
-    }
-    return 0;
+    return ComputeResizeHost(param,
+        [&](int64_t index) {
+            return (static_cast<int32_t>(input[index]) - input_zero) * input_scale;
+        },
+        [&](int64_t index, float value) {
+            const double transformed = static_cast<double>(value) / output_scale + output_zero;
+            output[index] = static_cast<int8_t>(std::max(-128.0, std::min(127.0, std::round(transformed))));
+        });
 }
-
-
 
 }  // namespace kernel
 }  // namespace feather

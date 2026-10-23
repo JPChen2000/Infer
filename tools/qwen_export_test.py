@@ -39,12 +39,39 @@ SPEC.loader.exec_module(EXPORTER)
 
 
 class AtomicGraphTest(unittest.TestCase):
-    def test_fp8_export_contract_uses_fth_v2_and_standard_onnx_types(self):
-        self.assertEqual(EXPORTER.FTH_FORMAT_VERSION, 2)
+    def test_context_bindings_do_not_rebind_equal_static_dimensions(self):
+        dimension = getattr(EXPORTER, "ContextDimension", None)
+        self.assertIsNotNone(dimension, "context expressions must be annotated explicitly")
+        context = dimension(4)
+        graph = EXPORTER.AtomicGraph()
+        value = graph.input("value", [1, 4, context], EXPORTER.BF16)
+        graph.input("cache", [1, context - 1, 4], EXPORTER.BF16)
+        graph.reshape(value, [1, context, 4], "reshape")
+        graph.node("Reshape", [value], "attr_shape", [[1, context, 4]], EXPORTER.BF16,
+                   name="attribute_reshape", shape=[1, context, 4])
+        self.assertEqual(graph.metadata["qwen.context.value.value"], [2, 0])
+        self.assertEqual(graph.metadata["qwen.context.value.cache"], [1, -1])
+        shape_names = [name for name in graph.constant_names if name.startswith("reshape_shape_")]
+        self.assertEqual(len(shape_names), 1)
+        self.assertEqual(graph.metadata["qwen.context.constant." + shape_names[0]], [1, 0])
+        self.assertEqual(graph.metadata["qwen.context.attribute.attribute_reshape.shape"], [1, 0])
+        self.assertEqual(graph.value_info["value"][0], [1, 4, 4])
+        self.assertEqual(graph.constant_values[shape_names[0]].tolist(), [1, 4, 4])
+
+    def test_fp8_export_contract_uses_fth_v4_and_standard_onnx_types(self):
+        self.assertEqual(EXPORTER.FTH_FORMAT_VERSION, 4)
         self.assertEqual(EXPORTER.FTH_DTYPE_BYTES.get(12), 1)
         self.assertEqual(EXPORTER.FTH_DTYPE_BYTES.get(13), 1)
         self.assertEqual(EXPORTER.FTH_TO_ONNX_DTYPE.get(12), 17)
         self.assertEqual(EXPORTER.FTH_TO_ONNX_DTYPE.get(13), 19)
+
+    def test_fth_tensor_quantization_tail_matches_cpp_field_widths(self):
+        descriptor = EXPORTER.FeatherTensorDesc(name="x", dims=[2], data_type=EXPORTER.FP8E5M2,
+                                                quantization_enabled=True, quantization_scale=0.25)
+        encoded = EXPORTER.fth_encode_tensor(descriptor)
+        expected = (struct.pack("<Q", 1) + b"x" + struct.pack("<QqiiBfiqqiQQ", 1, 2,
+                    EXPORTER.FP8E5M2, EXPORTER.FTH_LAYOUT_ND, 1, 0.25, 0, -1, 0, 0, 0, 0))
+        self.assertEqual(encoded, expected)
 
     def test_fp8_weight_encoder_uses_standard_bytes_and_power_of_two_scales(self):
         encode = getattr(EXPORTER, "fp8_encode", lambda *_: np.asarray([], dtype=np.uint8))
@@ -61,7 +88,7 @@ class AtomicGraphTest(unittest.TestCase):
             [0x3C, 0xBC, 0x7B],
         )
 
-    def test_fp8_cast_records_per_tensor_scale_for_fth_v2(self):
+    def test_fp8_cast_records_per_tensor_scale_for_fth_v4(self):
         graph = EXPORTER.AtomicGraph()
         value = graph.input("value", [2], EXPORTER.BF16)
         try:
@@ -78,7 +105,7 @@ class AtomicGraphTest(unittest.TestCase):
             output = Path(directory) / "fp8_cast.fth"
             graph.write_fth(output, "fp8_cast")
             _, version, _, _ = struct.unpack("<8sIIQ", output.read_bytes()[:24])
-            self.assertEqual(version, 2)
+            self.assertEqual(version, 4)
 
     def test_direct_fth_export_does_not_import_onnx(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -137,6 +164,7 @@ graph.write_fth(r'{output}', 'atomic')
         import torch
 
         text = {
+            "max_position_embeddings": 64,
             "hidden_size": 4,
             "intermediate_size": 6,
             "num_hidden_layers": 2,
@@ -193,11 +221,50 @@ graph.write_fth(r'{output}', 'atomic')
             with EXPORTER.safe_open(shard, framework="pt", device="cpu") as source:
                 builder.source = source
                 builder.build()
+                for node in builder.g.nodes:
+                    if (node.op_type == "MatMul" and
+                            node.inputs[1] in builder.g.external_constant_loaders and
+                            builder.g.value_info[node.outputs[0]][1] == EXPORTER.BF16):
+                        self.assertTrue(all(builder.g.value_info[name][1] == EXPORTER.BF16
+                                            for name in node.inputs), msg=node.name)
                 model = builder.make_onnx_model()
                 fth_path = model_dir / "tiny_qwen.fth"
                 builder.write_fth(fth_path)
                 self.assertGreater(fth_path.stat().st_size, 0)
                 self.assertEqual(fth_path.read_bytes()[:8], b"FTHMODL\x00")
+
+                # Specializing every explicit binding must produce the same graph
+                # as exporting directly at the new context, even when hidden/head
+                # dimensions happen to equal the original context size.
+                larger = EXPORTER.QwenBuilder(model_dir, max_context=8)
+                larger.source = source
+                larger.build()
+                graph = builder.g
+                self.assertEqual(graph.metadata["qwen.context.maximum"], 64)
+                self.assertEqual(set(graph.value_info), set(larger.g.value_info))
+                def rebound(values, key):
+                    result = list(values)
+                    bindings = graph.metadata.get(key, [])
+                    for index, offset in zip(bindings[::2], bindings[1::2]):
+                        self.assertEqual(result[index], 4 + offset, msg=key)
+                        result[index] = 8 + offset
+                    return result
+                for name, (shape, dtype) in graph.value_info.items():
+                    expected_shape, expected_dtype = larger.g.value_info[name]
+                    self.assertEqual(rebound(shape, "qwen.context.value." + name),
+                                     expected_shape, msg=name)
+                    self.assertEqual(dtype, expected_dtype)
+                for name, array in graph.constant_values.items():
+                    key = "qwen.context.constant." + name
+                    actual = np.asarray(rebound(array.reshape(-1), key)).reshape(array.shape)
+                    np.testing.assert_array_equal(actual, larger.g.constant_values[name], err_msg=name)
+                for original, direct in zip(graph.nodes, larger.g.nodes):
+                    self.assertEqual(original.name, direct.name)
+                    for name, value in EXPORTER.feather_attributes(original.op_type, original.attributes).items():
+                        expected = EXPORTER.feather_attributes(direct.op_type, direct.attributes)[name]
+                        if isinstance(value, (list, tuple)):
+                            value = rebound(value, f"qwen.context.attribute.{original.name}.{name}")
+                        self.assertEqual(value, expected)
 
             for fp8_dtype in (EXPORTER.FP8E4M3, EXPORTER.FP8E5M2):
                 try:
@@ -216,11 +283,11 @@ graph.write_fth(r'{output}', 'atomic')
                 self.assertEqual(fp8_graph.value_info["logits"][1], EXPORTER.BF16)
                 self.assertGreater(fp8_builder.fp8_activation_scale, 0.0)
                 self.assertGreater(
-                    sum(node.op_type == "Gather" and fp8_graph.value_info[node.outputs[0]][1] == fp8_dtype
+                    sum(node.op_type == "Gather" and fp8_graph.value_info[node.outputs[0]][1] == EXPORTER.BF16
                         for node in fp8_graph.nodes),
                     0,
                 )
-                for op_type in ("MatMul", "Conv", "Gemm"):
+                for op_type in ("MatMul",):
                     fp8_nodes = [node for node in fp8_graph.nodes
                                  if node.op_type == op_type and fp8_graph.value_info[node.outputs[0]][1] == fp8_dtype]
                     self.assertGreater(len(fp8_nodes), 0, msg=f"missing FP8 {op_type}")
@@ -251,26 +318,32 @@ graph.write_fth(r'{output}', 'atomic')
                     products = [node for node in fp8_graph.nodes
                                 if node.op_type == "Mul" and any(
                                     output.startswith(f"{stem}_") for output in node.outputs)]
-                    self.assertEqual(len(products), 1, msg=f"missing FP8 {stem}")
+                    self.assertEqual(len(products), 1, msg=f"missing BF16 {stem}")
                     product = products[0]
-                    self.assertEqual(fp8_graph.value_info[product.outputs[0]][1], fp8_dtype)
-                    self.assertTrue(all(fp8_graph.value_info[input_name][1] == fp8_dtype
+                    self.assertEqual(fp8_graph.value_info[product.outputs[0]][1], EXPORTER.BF16)
+                    self.assertTrue(all(fp8_graph.value_info[input_name][1] == EXPORTER.BF16
                                         for input_name in product.inputs))
-                self.assertFalse(any(node.op_type == "Cast" and any(
-                    output.startswith("embedding_to_bf16_") for output in node.outputs)
-                    for node in fp8_graph.nodes))
-                conv_squeezes = [node for node in fp8_graph.nodes
-                                 if node.op_type == "Reshape" and any(
-                                     output.startswith("layer_0_linear_conv_squeeze_")
-                                     for output in node.outputs)]
-                self.assertEqual(len(conv_squeezes), 1)
-                self.assertEqual(fp8_graph.value_info[conv_squeezes[0].outputs[0]][1], fp8_dtype)
-                logits_casts = [node for node in fp8_graph.nodes
-                                if node.op_type == "Cast" and node.outputs == ["logits"]]
-                self.assertEqual(len(logits_casts), 1)
-                self.assertEqual(fp8_graph.value_info[logits_casts[0].inputs[0]][1], fp8_dtype)
+                # Repeated FP8 residual rounding erases small updates across layers.
+                residuals = [node for node in fp8_graph.nodes if node.op_type == "Add" and any(
+                    "residual_" in output for output in node.outputs)]
+                self.assertEqual(len(residuals), 4)
+                for residual in residuals:
+                    self.assertEqual(fp8_graph.value_info[residual.outputs[0]][1], EXPORTER.BF16)
+                    self.assertTrue(all(fp8_graph.value_info[name][1] == EXPORTER.BF16
+                                        for name in residual.inputs))
+                convolutions = [node for node in fp8_graph.nodes if node.op_type == "Conv"]
+                self.assertEqual(len(convolutions), 1)
+                self.assertEqual(fp8_graph.value_info[convolutions[0].outputs[0]][1], EXPORTER.BF16)
+                self.assertTrue(all(fp8_graph.value_info[name][1] == EXPORTER.BF16
+                                    for name in convolutions[0].inputs))
+                # FP8 token scores can tie distinct candidates before greedy argmax.
+                logits = [node for node in fp8_graph.nodes if node.outputs == ["logits"]]
+                self.assertEqual(len(logits), 1)
+                self.assertEqual(logits[0].op_type, "Gemm")
+                self.assertTrue(all(fp8_graph.value_info[name][1] == EXPORTER.BF16
+                                    for name in logits[0].inputs))
                 _, version, _, _ = struct.unpack("<8sIIQ", fp8_fth_path.read_bytes()[:24])
-                self.assertEqual(version, 2)
+                self.assertEqual(version, 4)
 
         onnx.checker.check_model(model)
         self.assertEqual(

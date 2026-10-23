@@ -527,10 +527,9 @@ int32_t ClassificationRunner::RunOnImage(const std::string& image_path, const Im
 #ifdef FEATHER_WITH_CUDA
     if (backend_device_ == DeviceType::CUDA) {
         if (kernel::cuda_detail::SyncTensorToHost(output.get(),
-                                                  static_cast<size_t>(output->numel()) *
-                                                      DataTypeBytes(output->data_type()),
-                                                      output->mutable_data(output->numel() *
-                                                                       DataTypeBytes(output->data_type()))) != 0) {
+                                                static_cast<size_t>(output->numel()) *
+                                                    DataTypeBytes(output->data_type()),
+                                                output->raw_data()) != 0) {
             last_error_ = "failed to copy classification output from CUDA: " +
                           kernel::cuda_detail::CudaLastErrorMessage();
             return -1;

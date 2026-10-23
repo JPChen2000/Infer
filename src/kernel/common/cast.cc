@@ -80,41 +80,42 @@ int32_t ComputeCast(feather::operators::CastParam* param) {
         return -1;
     }
 
+    void* output = param->out->mutable_data(param->out->memory_size());
     for (int64_t i = 0; i < input_numel; ++i) {
         const float value = common_tensor_detail::ReadFloat(param->input.get(), i);
         switch (param->to) {
             case DataType::BOOL:
-                static_cast<uint8_t*>(param->out->raw_data())[i] =
+                static_cast<uint8_t*>(output)[i] =
                     common_tensor_detail::ReadBool(param->input.get(), i) ? 1 : 0;
                 break;
             case DataType::UINT8:
-                static_cast<uint8_t*>(param->out->raw_data())[i] = static_cast<uint8_t>(value);
+                static_cast<uint8_t*>(output)[i] = static_cast<uint8_t>(value);
                 break;
             case DataType::INT8:
-                static_cast<int8_t*>(param->out->raw_data())[i] = static_cast<int8_t>(value);
+                static_cast<int8_t*>(output)[i] = static_cast<int8_t>(value);
                 break;
             case DataType::FP16:
-                static_cast<uint16_t*>(param->out->raw_data())[i] = FloatToHalf(value);
+                static_cast<uint16_t*>(output)[i] = FloatToHalf(value);
                 break;
             case DataType::BF16:
-                static_cast<BFloat16*>(param->out->raw_data())[i].bits = FloatToBFloat16(value);
+                static_cast<BFloat16*>(output)[i].bits = FloatToBFloat16(value);
                 break;
             case DataType::FP8E4M3:
-                static_cast<Fp8E4M3*>(param->out->raw_data())[i].bits =
+                static_cast<Fp8E4M3*>(output)[i].bits =
                     FloatToFp8E4M3(value / param->out->quantization_scale());
                 break;
             case DataType::FP8E5M2:
-                static_cast<Fp8E5M2*>(param->out->raw_data())[i].bits =
+                static_cast<Fp8E5M2*>(output)[i].bits =
                     FloatToFp8E5M2(value / param->out->quantization_scale());
                 break;
             case DataType::INT32:
-                static_cast<int32_t*>(param->out->raw_data())[i] = static_cast<int32_t>(value);
+                static_cast<int32_t*>(output)[i] = static_cast<int32_t>(value);
                 break;
             case DataType::INT64:
-                static_cast<int64_t*>(param->out->raw_data())[i] = static_cast<int64_t>(value);
+                static_cast<int64_t*>(output)[i] = static_cast<int64_t>(value);
                 break;
             case DataType::FP32:
-                static_cast<float*>(param->out->raw_data())[i] = value;
+                static_cast<float*>(output)[i] = value;
                 break;
             default:
                 return -1;

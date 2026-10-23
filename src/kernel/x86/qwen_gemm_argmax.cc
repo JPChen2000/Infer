@@ -80,8 +80,7 @@ int32_t PrepareFp8(operators::QwenGemmArgmaxParam* param, x86::PackedFp8Transpos
     if (!Validate<dtype>(param, &k, &n) || !param->b->is_immutable()) {
         return 0;
     }
-    (void)packed_rhs->Pack(dtype, static_cast<const uint8_t*>(param->b->raw_data()), k, n,
-                           param->b->mutation_version());
+    (void)packed_rhs->Pack(*param->b, k, n);
     return 0;
 }
 
@@ -94,8 +93,7 @@ int32_t QwenGemmArgmaxKernel<DeviceType::X86, DataType::BF16>::Prepare() {
     if (!Validate<DataType::BF16>(param, &k, &n) || !param->b->is_immutable()) {
         return 0;
     }
-    (void)packed_rhs_.Pack(static_cast<const uint16_t*>(param->b->raw_data()), k, n,
-                           param->b->mutation_version());
+    (void)packed_rhs_.Pack(*param->b, k, n);
     return 0;
 }
 

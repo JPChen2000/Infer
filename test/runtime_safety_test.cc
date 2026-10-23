@@ -229,6 +229,158 @@ TEST(runtime_safety_test, DeviceReadsDoNotMarkStaleHostCopiesValidAndCachesAreIs
       EXPECT_FLOAT_EQ(t->data<float>()[0], 42);
       EXPECT_GT(cd::GetTensorCacheStats().active_bytes, 0u); }
 }
+TEST(runtime_safety_test, DeviceDownloadCopiesReadonlyWeightsBeforeTrackedWrite) {
+    int count = 0;
+    if (cudaGetDeviceCount(&count) != cudaSuccess || count == 0) GTEST_SKIP() << "CUDA device unavailable";
+    auto owner = FloatTensor(2);
+    auto readonly = std::make_shared<Buffer>(owner->mutable_data(sizeof(float)), sizeof(float), owner, true);
+    Tensor target, other;
+    target.Resize({1}); target.set_data_type(DataType::FP32);
+    other.Resize({1}); other.set_data_type(DataType::FP32);
+    target.ResetBuffer(readonly, sizeof(float)); other.ResetBuffer(readonly, sizeof(float));
+    Tensor alias; alias.ShareDataWith(target);
+    const auto old_version = target.mutation_version();
+    const auto other_version = other.mutation_version();
+    const auto context = cd::CreateExecutionContext();
+    cd::ExecutionContextScope scope(context);
+    cd::DeferredHostSyncScope deferred;
+    void* device = nullptr;
+    ASSERT_EQ(cd::AcquireOutputTensorDevice(&target, sizeof(float), &device), 0);
+    EXPECT_EQ(target.mutation_version(), old_version);
+    const float produced = 42;
+    ASSERT_EQ(cudaMemcpyAsync(device, &produced, sizeof(float), cudaMemcpyHostToDevice, cd::InferenceStream()),
+              cudaSuccess);
+    ASSERT_EQ(cd::SyncTensorToHostIfNeeded(&target, 0, nullptr), 0);
+    EXPECT_EQ(target.mutation_version(), old_version);
+    ASSERT_EQ(cd::SyncTensorToHostIfNeeded(&target, sizeof(float), target.raw_data()), 0);
+    EXPECT_FLOAT_EQ(target.data<float>()[0], 42);
+    EXPECT_FLOAT_EQ(alias.data<float>()[0], 42);
+    EXPECT_NE(target.mutation_version(), old_version);
+    EXPECT_EQ(alias.mutation_version(), target.mutation_version());
+    EXPECT_FLOAT_EQ(other.data<float>()[0], 2);
+    EXPECT_EQ(other.mutation_version(), other_version);
+    const auto synced_version = target.mutation_version();
+    ASSERT_EQ(cd::SyncTensorToHostIfNeeded(&target, sizeof(float), target.raw_data()), 0);
+    EXPECT_EQ(target.mutation_version(), synced_version);
+}
+TEST(runtime_safety_test, DownloadPreservesPendingReadonlyAliasViewsAndDetectsHostWrites) {
+    int count = 0;
+    if (cudaGetDeviceCount(&count) != cudaSuccess || count == 0) GTEST_SKIP() << "CUDA device unavailable";
+    auto owner = std::make_shared<Tensor>(); owner->Assign<float>({1, 2}, {2});
+    auto readonly = std::make_shared<Buffer>(owner->mutable_data(2 * sizeof(float)), 2 * sizeof(float), owner, true);
+    Tensor first, second;
+    first.Resize({1}); first.set_data_type(DataType::FP32); first.set_immutable(true);
+    first.ResetBuffer(readonly, sizeof(float));
+    second.Resize({1}); second.set_data_type(DataType::FP32); second.set_immutable(true);
+    second.ResetStorage(first.storage(), sizeof(float), sizeof(float));
+    const auto context = cd::CreateExecutionContext();
+    cd::ExecutionContextScope scope(context);
+    cd::DeferredHostSyncScope deferred;
+    void* first_device = nullptr;
+    void* second_device = nullptr;
+    ASSERT_EQ(cd::AcquireOutputTensorDevice(&first, sizeof(float), &first_device), 0);
+    ASSERT_EQ(cd::AcquireOutputTensorDevice(&second, sizeof(float), &second_device), 0);
+    const float first_result = 42, second_result = 99;
+    ASSERT_EQ(cudaMemcpyAsync(first_device, &first_result, sizeof(float), cudaMemcpyHostToDevice, cd::InferenceStream()),
+              cudaSuccess);
+    ASSERT_EQ(cudaMemcpyAsync(second_device, &second_result, sizeof(float), cudaMemcpyHostToDevice, cd::InferenceStream()),
+              cudaSuccess);
+    const void* old_second_host = second.raw_data();
+    ASSERT_EQ(cd::SyncTensorToHostIfNeeded(&first, sizeof(float), first.raw_data()), 0);
+    EXPECT_FLOAT_EQ(first.data<float>()[0], 42);
+    EXPECT_FLOAT_EQ(second.data<float>()[0], 2);
+    EXPECT_NE(second.raw_data(), old_second_host);
+    void* read_device = nullptr;
+    ASSERT_EQ(cd::AcquireTensorDevice(&second, sizeof(float), second.raw_data(), &read_device), 0);
+    float observed = 0;
+    ASSERT_EQ(cudaMemcpyAsync(&observed, read_device, sizeof(float), cudaMemcpyDeviceToHost, cd::InferenceStream()),
+              cudaSuccess);
+    ASSERT_EQ(cd::SynchronizeInferenceStream(), 0);
+    EXPECT_FLOAT_EQ(observed, 99);
+    ASSERT_EQ(cd::SyncTensorToHostIfNeeded(&second, sizeof(float), second.raw_data()), 0);
+    EXPECT_FLOAT_EQ(second.data<float>()[0], 99);
+    EXPECT_FLOAT_EQ(owner->data<float>()[1], 2);
+
+    // An actual host write still supersedes a pending device value.
+    ASSERT_EQ(cd::AcquireOutputTensorDevice(&second, sizeof(float), &second_device), 0);
+    second.mutable_data<float>()[0] = 7;
+    ASSERT_EQ(cd::SyncTensorToHostIfNeeded(&second, sizeof(float), second.raw_data()), 0);
+    EXPECT_FLOAT_EQ(second.data<float>()[0], 7);
+    ASSERT_EQ(cd::AcquireTensorDevice(&second, sizeof(float), second.raw_data(), &read_device), 0);
+    ASSERT_EQ(cudaMemcpyAsync(&observed, read_device, sizeof(float), cudaMemcpyDeviceToHost, cd::InferenceStream()),
+              cudaSuccess);
+    ASSERT_EQ(cd::SynchronizeInferenceStream(), 0);
+    EXPECT_FLOAT_EQ(observed, 7);
+}
+TEST(runtime_safety_test, DownloadInvalidatesIndependentDeviceCachesForOverlappingViews) {
+    int count = 0;
+    if (cudaGetDeviceCount(&count) != cudaSuccess || count == 0) GTEST_SKIP() << "CUDA device unavailable";
+    auto producer = FloatTensor(1);
+    Tensor alias; alias.ShareDataWith(*producer);
+    const auto context = cd::CreateExecutionContext();
+    cd::ExecutionContextScope scope(context);
+    cd::DeferredHostSyncScope deferred;
+    void* alias_device = nullptr;
+    ASSERT_EQ(cd::AcquireTensorDevice(&alias, sizeof(float), alias.raw_data(), &alias_device), 0);
+    for (const bool pending_alias : {false, true}) {
+        if (pending_alias) {
+            ASSERT_EQ(cd::AcquireOutputTensorDevice(&alias, sizeof(float), &alias_device), 0);
+            const float superseded = 77;
+            ASSERT_EQ(cudaMemcpyAsync(alias_device, &superseded, sizeof(float), cudaMemcpyHostToDevice,
+                                      cd::InferenceStream()), cudaSuccess);
+            ASSERT_EQ(cd::SynchronizeInferenceStream(), 0);
+        }
+        void* produced_device = nullptr;
+        ASSERT_EQ(cd::AcquireOutputTensorDevice(producer.get(), sizeof(float), &produced_device), 0);
+        const float result = pending_alias ? 43 : 42;
+        ASSERT_EQ(cudaMemcpyAsync(produced_device, &result, sizeof(float), cudaMemcpyHostToDevice,
+                                  cd::InferenceStream()), cudaSuccess);
+        ASSERT_EQ(cd::SyncTensorToHostIfNeeded(producer.get(), sizeof(float), producer->raw_data()), 0);
+        ASSERT_EQ(cd::AcquireTensorDevice(&alias, sizeof(float), alias.raw_data(), &alias_device), 0);
+        float observed = 0;
+        ASSERT_EQ(cudaMemcpyAsync(&observed, alias_device, sizeof(float), cudaMemcpyDeviceToHost,
+                                  cd::InferenceStream()), cudaSuccess);
+        ASSERT_EQ(cd::SynchronizeInferenceStream(), 0);
+        EXPECT_FLOAT_EQ(observed, result);
+    }
+}
+TEST(runtime_safety_test, PartialDownloadRejectsOverwritingBroaderPendingDeviceView) {
+    int count = 0;
+    if (cudaGetDeviceCount(&count) != cudaSuccess || count == 0) GTEST_SKIP() << "CUDA device unavailable";
+    auto owner = std::make_shared<Tensor>(); owner->Assign<float>({1, 2}, {2});
+    auto readonly = std::make_shared<Buffer>(owner->mutable_data(2 * sizeof(float)), 2 * sizeof(float), owner, true);
+    auto broad = std::make_shared<Tensor>(); broad->Resize({2}); broad->set_data_type(DataType::FP32);
+    broad->ResetBuffer(readonly, 2 * sizeof(float));
+    Tensor narrow; narrow.Resize({1}); narrow.set_data_type(DataType::FP32);
+    narrow.ResetStorage(broad->storage(), sizeof(float));
+    const auto context = cd::CreateExecutionContext();
+    cd::ExecutionContextScope scope(context);
+    cd::DeferredHostSyncScope deferred;
+    void* broad_device = nullptr;
+    void* narrow_device = nullptr;
+    ASSERT_EQ(cd::AcquireOutputTensorDevice(broad.get(), 2 * sizeof(float), &broad_device), 0);
+    ASSERT_EQ(cd::AcquireOutputTensorDevice(&narrow, sizeof(float), &narrow_device), 0);
+    const float broad_result[] = {77, 88};
+    const float narrow_result = 42;
+    ASSERT_EQ(cudaMemcpyAsync(broad_device, broad_result, sizeof(broad_result), cudaMemcpyHostToDevice,
+                              cd::InferenceStream()), cudaSuccess);
+    ASSERT_EQ(cudaMemcpyAsync(narrow_device, &narrow_result, sizeof(float), cudaMemcpyHostToDevice,
+                              cd::InferenceStream()), cudaSuccess);
+    const auto version = broad->mutation_version();
+    const void* host_pointer = broad->raw_data();
+    EXPECT_NE(cd::SyncTensorToHostIfNeeded(&narrow, sizeof(float), narrow.raw_data()), 0);
+    EXPECT_NE(cd::SyncTensorToHost(&narrow, sizeof(float), narrow.raw_data()), 0);
+    EXPECT_NE(cd::SyncTensorToHostIfNeeded(broad.get(), sizeof(float), broad->raw_data()), 0);
+    EXPECT_NE(cd::SyncTensorToHost(broad.get(), sizeof(float), broad->raw_data()), 0);
+    EXPECT_EQ(broad->mutation_version(), version);
+    EXPECT_EQ(broad->raw_data(), host_pointer);
+    EXPECT_TRUE(broad->storage()->read_only());
+    EXPECT_FLOAT_EQ(broad->data<float>()[0], 1);
+    EXPECT_FLOAT_EQ(broad->data<float>()[1], 2);
+    ASSERT_EQ(cd::SyncTensorToHostIfNeeded(broad.get(), sizeof(broad_result), broad->raw_data()), 0);
+    EXPECT_FLOAT_EQ(broad->data<float>()[0], 77);
+    EXPECT_FLOAT_EQ(broad->data<float>()[1], 88);
+}
 #endif
 }  // namespace
 }  // namespace feather

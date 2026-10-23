@@ -37,6 +37,9 @@ bool g_cuda_expand_kernels_registered = []() {
     dispatcher.registerKernel(DeviceType::CUDA, DataType::BF16, "Expand", []() {
         return std::make_unique<ExpandKernel<DeviceType::CUDA, DataType::BF16>>();
     });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::INT64, "Expand", []() {
+        return std::make_unique<ExpandKernel<DeviceType::CUDA, DataType::INT64>>();
+    });
     return true;
 }();
 
@@ -64,7 +67,7 @@ __global__ void ExpandKernelCuda(const T* input, T* output, int64_t output_numel
         return;
     }
     const int64_t input_offset = BroadcastOffsetForOutputIndex(output_index, output_shape, input_shape);
-    cuda_detail::WriteDevice(output, output_index, cuda_detail::ReadDevice(input, input_offset));
+    output[output_index] = input[input_offset];
 }
 
 template <DataType dtype>
@@ -119,6 +122,11 @@ int32_t ExpandKernel<DeviceType::CUDA, DataType::FP16>::compute() {
 template <>
 int32_t ExpandKernel<DeviceType::CUDA, DataType::BF16>::compute() {
     return RunExpand<DataType::BF16>(ParamAs<feather::operators::ExpandParam>(), "CUDA::Expand::BF16");
+}
+
+template <>
+int32_t ExpandKernel<DeviceType::CUDA, DataType::INT64>::compute() {
+    return RunExpand<DataType::INT64>(ParamAs<feather::operators::ExpandParam>(), "CUDA::Expand::INT64");
 }
 
 void EnsureCudaExpandKernelsRegistered() { (void)g_cuda_expand_kernels_registered; }

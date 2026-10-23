@@ -146,7 +146,7 @@ inline __m256 LoadFp8x8Typed(const uint8_t* input) {
 template <DataType dtype>
 int32_t ComputeFp8ToFp32(const feather::operators::CastParam* param) {
     const auto* input = static_cast<const uint8_t*>(param->input->raw_data());
-    auto* output = static_cast<float*>(param->out->raw_data());
+    auto* output = static_cast<float*>(param->out->mutable_data(param->out->memory_size()));
     const float* table = Fp8DecodeTable<dtype>();
     const __m256 scale = _mm256_set1_ps(param->input->quantization_scale());
     const int64_t count = param->input->numel();
@@ -164,7 +164,7 @@ int32_t ComputeFp8ToFp32(const feather::operators::CastParam* param) {
 template <DataType dtype>
 int32_t ComputeFp8ToBf16(const feather::operators::CastParam* param) {
     const auto* input = static_cast<const uint8_t*>(param->input->raw_data());
-    auto* output = static_cast<uint16_t*>(param->out->raw_data());
+    auto* output = static_cast<uint16_t*>(param->out->mutable_data(param->out->memory_size()));
     const float* table = Fp8DecodeTable<dtype>();
     const __m256 scale = _mm256_set1_ps(param->input->quantization_scale());
     const int64_t count = param->input->numel();
@@ -183,7 +183,7 @@ template <typename LoadFn>
 int32_t EncodeFp8Vector(const feather::operators::CastParam* param, LoadFn&& load) {
     const int64_t count = param->input->numel();
     const float scale = param->out->quantization_scale();
-    auto* output = static_cast<uint8_t*>(param->out->raw_data());
+    auto* output = static_cast<uint8_t*>(param->out->mutable_data(param->out->memory_size()));
     const __m256 scale_vector = _mm256_set1_ps(scale);
     const auto encode_range = [&](int64_t begin, int64_t end) {
         alignas(32) float values[8];
@@ -239,41 +239,42 @@ int32_t ComputeCastScalar(feather::operators::CastParam* param) {
         return -1;
     }
 
+    void* output = param->out->mutable_data(param->out->memory_size());
     for (int64_t i = 0; i < param->input->numel(); ++i) {
         const float value = common_tensor_detail::ReadFloat(param->input.get(), i);
         switch (param->to) {
             case DataType::BOOL:
-                static_cast<uint8_t*>(param->out->raw_data())[i] =
+                static_cast<uint8_t*>(output)[i] =
                     common_tensor_detail::ReadBool(param->input.get(), i) ? 1 : 0;
                 break;
             case DataType::UINT8:
-                static_cast<uint8_t*>(param->out->raw_data())[i] = static_cast<uint8_t>(value);
+                static_cast<uint8_t*>(output)[i] = static_cast<uint8_t>(value);
                 break;
             case DataType::INT8:
-                static_cast<int8_t*>(param->out->raw_data())[i] = static_cast<int8_t>(value);
+                static_cast<int8_t*>(output)[i] = static_cast<int8_t>(value);
                 break;
             case DataType::FP16:
-                static_cast<uint16_t*>(param->out->raw_data())[i] = FloatToHalf(value);
+                static_cast<uint16_t*>(output)[i] = FloatToHalf(value);
                 break;
             case DataType::BF16:
-                static_cast<uint16_t*>(param->out->raw_data())[i] = FloatToBFloat16(value);
+                static_cast<uint16_t*>(output)[i] = FloatToBFloat16(value);
                 break;
             case DataType::FP8E4M3:
-                static_cast<Fp8E4M3*>(param->out->raw_data())[i].bits =
+                static_cast<Fp8E4M3*>(output)[i].bits =
                     x86::EncodeFp8ForX86(DataType::FP8E4M3, value / param->out->quantization_scale());
                 break;
             case DataType::FP8E5M2:
-                static_cast<Fp8E5M2*>(param->out->raw_data())[i].bits =
+                static_cast<Fp8E5M2*>(output)[i].bits =
                     x86::EncodeFp8ForX86(DataType::FP8E5M2, value / param->out->quantization_scale());
                 break;
             case DataType::INT32:
-                static_cast<int32_t*>(param->out->raw_data())[i] = static_cast<int32_t>(value);
+                static_cast<int32_t*>(output)[i] = static_cast<int32_t>(value);
                 break;
             case DataType::INT64:
-                static_cast<int64_t*>(param->out->raw_data())[i] = static_cast<int64_t>(value);
+                static_cast<int64_t*>(output)[i] = static_cast<int64_t>(value);
                 break;
             case DataType::FP32:
-                static_cast<float*>(param->out->raw_data())[i] = value;
+                static_cast<float*>(output)[i] = value;
                 break;
             default:
                 return -1;
@@ -317,7 +318,7 @@ int32_t ComputeBf16ToFp32(feather::operators::CastParam* param) {
         return -1;
     }
     const uint16_t* input = static_cast<const uint16_t*>(param->input->raw_data());
-    float* output = static_cast<float*>(param->out->raw_data());
+    float* output = static_cast<float*>(param->out->mutable_data(param->out->memory_size()));
     int64_t index = 0;
     const int64_t count = param->input->numel();
     for (; index + 8 <= count; index += 8) {
@@ -335,7 +336,7 @@ int32_t ComputeFp32ToBf16(feather::operators::CastParam* param) {
         return -1;
     }
     const float* input = static_cast<const float*>(param->input->raw_data());
-    uint16_t* output = static_cast<uint16_t*>(param->out->raw_data());
+    uint16_t* output = static_cast<uint16_t*>(param->out->mutable_data(param->out->memory_size()));
     int64_t index = 0;
     const int64_t count = param->input->numel();
     for (; index + 8 <= count; index += 8) {

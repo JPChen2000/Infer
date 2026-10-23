@@ -82,7 +82,7 @@ void *Tensor::mutable_data(size_t memory_size) {
   EnsureWritable();
   m_memory_size = memory_size;
   MarkStorageMutated();
-  return static_cast<char *>(m_storage->data()) + m_offset;
+  return static_cast<char *>(m_storage->MutableData()) + m_offset;
 }
 
 void Tensor::ResetBuffer(std::shared_ptr<Buffer> buffer, size_t memory_size) {
@@ -96,7 +96,7 @@ void Tensor::ResetBuffer(std::shared_ptr<Buffer> buffer, size_t memory_size, siz
   ResetStorage(std::make_shared<Storage>(std::move(buffer)), memory_size, offset);
 }
 
-void Tensor::ResetStorage(std::shared_ptr<Storage> storage, size_t memory_size, size_t offset) {
+void Tensor::ResetStorage(std::shared_ptr<const Storage> storage, size_t memory_size, size_t offset) {
   CHECK(storage != nullptr);
   CHECK(offset <= storage->size() && memory_size <= storage->size() - offset);
   m_storage = std::move(storage);

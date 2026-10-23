@@ -29,7 +29,12 @@ namespace {
 
 struct CudaResizeScales {
     int rank{0};
-    float values[cuda_detail::kMaxCudaRank]{};
+    double values[cuda_detail::kMaxCudaRank]{};
+    operators::ResizeParam::CoordinateMode coordinate_mode;
+    operators::ResizeParam::NearestMode nearest_mode;
+    bool linear{false};
+    int h_axis{2};
+    int w_axis{3};
 };
 
 bool g_cuda_resize_kernels_registered = []() {
@@ -38,6 +43,8 @@ bool g_cuda_resize_kernels_registered = []() {
                               []() { return std::make_unique<ResizeKernel<DeviceType::CUDA, DataType::FP32>>(); });
     dispatcher.registerKernel(DeviceType::CUDA, DataType::FP16, "Resize",
                               []() { return std::make_unique<ResizeKernel<DeviceType::CUDA, DataType::FP16>>(); });
+    dispatcher.registerKernel(DeviceType::CUDA, DataType::BF16, "Resize",
+                              []() { return std::make_unique<ResizeKernel<DeviceType::CUDA, DataType::BF16>>(); });
     return true;
 }();
 
@@ -50,20 +57,35 @@ __global__ void ResizeKernelCuda(const T* input, T* out, int64_t numel, cuda_det
     }
     int64_t remaining = linear;
     int64_t in_offset = 0;
+    int64_t h0 = 0, h1 = 0, w0 = 0, w1 = 0;
+    float wh = 0.0f, ww = 0.0f;
     for (int axis = 0; axis < out_shape.rank; ++axis) {
         const int64_t out_coord = remaining / out_shape.strides[axis];
         remaining %= out_shape.strides[axis];
-        int64_t in_coord = static_cast<int64_t>(static_cast<double>(out_coord) / scales.values[axis]);
-        in_coord = in_coord < 0 ? 0 : in_coord;
-        in_coord = in_coord >= in_shape.dims[axis] ? in_shape.dims[axis] - 1 : in_coord;
-        in_offset += in_coord * in_shape.strides[axis];
+        const double source = ResizeCoordinate(out_coord, in_shape.dims[axis], out_shape.dims[axis],
+                                                scales.values[axis], scales.coordinate_mode);
+        if (scales.linear && (axis == scales.h_axis || axis == scales.w_axis)) {
+            const double bounded = fmax(0.0, fmin(source, static_cast<double>(in_shape.dims[axis] - 1)));
+            const int64_t low = static_cast<int64_t>(floor(bounded));
+            const int64_t high = low + 1 < in_shape.dims[axis] ? low + 1 : low;
+            if (axis == scales.h_axis) { h0 = low; h1 = high; wh = static_cast<float>(bounded - low); }
+            else { w0 = low; w1 = high; ww = static_cast<float>(bounded - low); }
+        } else {
+            in_offset += ResizeNearestIndex(source, in_shape.dims[axis], scales.nearest_mode) * in_shape.strides[axis];
+        }
     }
-    out[linear] = input[in_offset];
+    if (!scales.linear) { out[linear] = input[in_offset]; return; }
+    const int64_t hs = in_shape.strides[scales.h_axis], ws = in_shape.strides[scales.w_axis];
+    const float top = cuda_detail::ReadDevice(input, in_offset + h0 * hs + w0 * ws) * (1.0f - ww) +
+                      cuda_detail::ReadDevice(input, in_offset + h0 * hs + w1 * ws) * ww;
+    const float bottom = cuda_detail::ReadDevice(input, in_offset + h1 * hs + w0 * ws) * (1.0f - ww) +
+                         cuda_detail::ReadDevice(input, in_offset + h1 * hs + w1 * ws) * ww;
+    cuda_detail::WriteDevice(out, linear, top * (1.0f - wh) + bottom * wh);
 }
 
 template <typename T>
 __global__ void Resize4DNchwKernelCuda(const T* input, T* out, int64_t total, int64_t channels, int64_t in_h,
-                                       int64_t in_w, int64_t out_h, int64_t out_w, float scale_h, float scale_w) {
+                                       int64_t in_w, int64_t out_h, int64_t out_w, double scale_h, double scale_w) {
     const int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (idx >= total) {
         return;
@@ -82,7 +104,7 @@ __global__ void Resize4DNchwKernelCuda(const T* input, T* out, int64_t total, in
 
 template <typename T>
 __global__ void Resize4DNhwcKernelCuda(const T* input, T* out, int64_t total, int64_t channels, int64_t in_h,
-                                       int64_t in_w, int64_t out_h, int64_t out_w, float scale_h, float scale_w) {
+                                       int64_t in_w, int64_t out_h, int64_t out_w, double scale_h, double scale_w) {
     const int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (idx >= total) {
         return;
@@ -119,8 +141,14 @@ int RunResize(feather::operators::ResizeParam* param, const char* timer_name) {
         return -1;
     }
     scales.rank = static_cast<int>(param->scales.size());
+    scales.coordinate_mode = param->coordinate_mode;
+    scales.nearest_mode = param->nearest_mode;
+    scales.linear = param->mode == operators::ResizeParam::Mode::kLinear;
+    scales.h_axis = HeightAxisForLayout(param->input->layout());
+    scales.w_axis = WidthAxisForLayout(param->input->layout());
+    if (scales.linear && in_dims.size() != 4) return -1;
     for (size_t i = 0; i < param->scales.size(); ++i) {
-        scales.values[i] = param->scales[i];
+        scales.values[i] = ResizeScale(*param, i);
     }
     cuda_detail::DeviceBuffer<T> input;
     cuda_detail::DeviceBuffer<T> out;
@@ -130,13 +158,17 @@ int RunResize(feather::operators::ResizeParam* param, const char* timer_name) {
     }
     const auto total = param->out->numel();
     bool used_direct_4d = false;
-    if (in_dims.size() == 4) {
+    if (in_dims.size() == 4 && IsLegacyResize(*param) &&
+        in_dims[0] == out_dims[0] && param->scales[0] == 1.0f &&
+        in_dims[IsChannelLastLayout(param->input->layout()) ? 3 : 1] ==
+            out_dims[IsChannelLastLayout(param->input->layout()) ? 3 : 1] &&
+        param->scales[IsChannelLastLayout(param->input->layout()) ? 3 : 1] == 1.0f) {
         ImageShape4D input_shape;
         ImageShape4D output_shape;
         if (DecodeImageShape4D(param->input->dims().data(), param->input->layout(), &input_shape) &&
             DecodeImageShape4D(param->out->dims().data(), param->out->layout(), &output_shape)) {
-            const float scale_h = param->scales[IsChannelLastLayout(param->input->layout()) ? 1 : 2];
-            const float scale_w = param->scales[IsChannelLastLayout(param->input->layout()) ? 2 : 3];
+            const double scale_h = ResizeScale(*param, IsChannelLastLayout(param->input->layout()) ? 1 : 2);
+            const double scale_w = ResizeScale(*param, IsChannelLastLayout(param->input->layout()) ? 2 : 3);
             if (IsChannelLastLayout(param->input->layout())) {
                 Resize4DNhwcKernelCuda<T><<<static_cast<int>(cuda_detail::DivUp(total, cuda_detail::kCudaThreads)),
                                            cuda_detail::kCudaThreads, 0, cuda_detail::InferenceStream()>>>(
@@ -174,6 +206,11 @@ int32_t ResizeKernel<DeviceType::CUDA, DataType::FP32>::compute() {
 template <>
 int32_t ResizeKernel<DeviceType::CUDA, DataType::FP16>::compute() {
     return RunResize<DataType::FP16>(ParamAs<feather::operators::ResizeParam>(), "CUDA::Resize::FP16");
+}
+
+template <>
+int32_t ResizeKernel<DeviceType::CUDA, DataType::BF16>::compute() {
+    return RunResize<DataType::BF16>(ParamAs<feather::operators::ResizeParam>(), "CUDA::Resize::BF16");
 }
 
 void EnsureCudaResizeKernelsRegistered() { (void)g_cuda_resize_kernels_registered; }

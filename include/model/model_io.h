@@ -36,6 +36,7 @@ class ModelWriter {
 class ModelLoader {
    public:
     bool Load(const std::string& path);
+    bool SelectVariant(const std::string& name, ModelLoader* destination) const;
 
     const ModelDesc& model() const { return model_; }
     std::shared_ptr<Tensor> CreateWeightTensor(const std::string& tensor_name);

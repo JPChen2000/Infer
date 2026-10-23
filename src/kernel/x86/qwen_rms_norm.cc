@@ -113,6 +113,7 @@ int32_t Compute(operators::QwenRmsNormParam* param) {
     const auto* weight_bf16_data = weight_bf16 ? static_cast<const uint16_t*>(param->weight->raw_data()) : nullptr;
     const __m256 offset = _mm256_set1_ps(param->weight_offset);
 
+    void* output = param->out->mutable_data(param->out->memory_size());
     for (int64_t row = 0; row < rows; ++row) {
         const int64_t row_offset = row * hidden;
         __m256 sum = _mm256_setzero_ps();
@@ -139,18 +140,18 @@ int32_t Compute(operators::QwenRmsNormParam* param) {
             const __m256 value = LoadInput<input_dtype>(param->input.get(), row_offset + column);
             const __m256 result = _mm256_mul_ps(_mm256_mul_ps(value, inverse_rms), scale);
             if (output_bf16) {
-                StoreBf16x8(result, static_cast<uint16_t*>(param->out->raw_data()) + row_offset + column);
+                StoreBf16x8(result, static_cast<uint16_t*>(output) + row_offset + column);
             } else {
-                _mm256_storeu_ps(static_cast<float*>(param->out->raw_data()) + row_offset + column, result);
+                _mm256_storeu_ps(static_cast<float*>(output) + row_offset + column, result);
             }
         }
         for (; column < hidden; ++column) {
             const float result = ReadInput<input_dtype>(param->input.get(), row_offset + column) * inverse_rms_scalar *
                                   (ReadWeight(param->weight.get(), column) + param->weight_offset);
             if (output_bf16) {
-                static_cast<uint16_t*>(param->out->raw_data())[row_offset + column] = FloatToBFloat16(result);
+                static_cast<uint16_t*>(output)[row_offset + column] = FloatToBFloat16(result);
             } else {
-                static_cast<float*>(param->out->raw_data())[row_offset + column] = result;
+                static_cast<float*>(output)[row_offset + column] = result;
             }
         }
     }

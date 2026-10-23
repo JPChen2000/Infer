@@ -65,10 +65,16 @@ void EnsureConstantOfShapeOperatorRegistered();
 void EnsureExpandOperatorRegistered();
 void EnsureWhereOperatorRegistered();
 void EnsureQwenGatedDeltaOperatorsRegistered();
+void EnsureQwenGatedDeltaSequenceOperatorsRegistered();
 void EnsureQwenGemmArgmaxOperatorRegistered();
 void EnsureQwenDepthwiseConvStateOperatorRegistered();
 void EnsureQwenRmsNormOperatorRegistered();
 void EnsureYoloDecodeOperatorRegistered();
+void EnsureYoloSelectionOperatorsRegistered();
+void EnsureConvTransposeOperatorRegistered();
+void EnsureNonMaxSuppressionOperatorRegistered();
+void EnsureNormalizationOperatorsRegistered();
+void EnsureCachedAttentionOperatorRegistered();
 
 void RegisterBuiltinOperators() {
     EnsureAddOperatorRegistered();
@@ -118,10 +124,16 @@ void RegisterBuiltinOperators() {
     EnsureExpandOperatorRegistered();
     EnsureWhereOperatorRegistered();
     EnsureQwenGatedDeltaOperatorsRegistered();
+    EnsureQwenGatedDeltaSequenceOperatorsRegistered();
     EnsureQwenGemmArgmaxOperatorRegistered();
     EnsureQwenDepthwiseConvStateOperatorRegistered();
     EnsureQwenRmsNormOperatorRegistered();
     EnsureYoloDecodeOperatorRegistered();
+    EnsureYoloSelectionOperatorsRegistered();
+    EnsureConvTransposeOperatorRegistered();
+    EnsureNonMaxSuppressionOperatorRegistered();
+    EnsureNormalizationOperatorsRegistered();
+    EnsureCachedAttentionOperatorRegistered();
 }
 
 void EnsureBuiltinOperatorsRegistered() { RegisterBuiltinOperators(); }
