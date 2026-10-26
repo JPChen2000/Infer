@@ -24,6 +24,7 @@
 #include "core/operator_registry.h"
 #include "core/stateful_session.h"
 #include "src/operator/params.h"
+#include "util/bf16.h"
 
 namespace feather {
 namespace {
@@ -727,6 +728,110 @@ TEST(execution_plan_test, GeneralAndModelSpecificPassPipelinesAreSeparate) {
     EXPECT_EQ(CreateYoloPassManager()->PassCount(), 9);
 }
 #ifdef FEATHER_WITH_CUDA
+TEST(execution_plan_test, CudaSessionDownloadsOnlyExplicitHostReads) {
+    int count = 0;
+    if (cudaGetDeviceCount(&count) != cudaSuccess || count == 0) {
+        (void)cudaGetLastError(); GTEST_SKIP() << "CUDA device unavailable";
+    }
+    StaticGraph graph; graph.SetKernelDevice(DeviceType::CUDA);
+    graph.SetFallbackPolicy(KernelFallbackPolicy::kRequireRequested);
+    ASSERT_EQ(graph.SetModel(Chain()), 0);
+    ASSERT_EQ(graph.SetTensor("x", Filled(1)), 0);
+    ASSERT_EQ(graph.SetTensor("b", Filled(2)), 0);
+    ASSERT_TRUE(graph.BuildStatus().ok());
+    std::shared_ptr<const CompiledGraph> compiled;
+    ASSERT_TRUE(CompiledGraph::Compile(graph, &compiled).ok());
+    std::unique_ptr<ExecutionSession> session;
+    ASSERT_TRUE(compiled->CreateSession(&session).ok());
+    auto intermediate = session->runtime().GetTensor("a0");
+    auto output = session->runtime().GetTensor("out");
+    std::fill_n(intermediate->mutable_data<float>(), 128, -99.f);
+    std::fill_n(output->mutable_data<float>(), 128, -99.f);
+    for (float input : {1.f, 7.f}) {
+        ASSERT_TRUE(session->BindInput("x", Filled(input)).ok());
+        const float previous_host_output = output->data<float>()[0];
+        ASSERT_TRUE(session->Run().ok());
+        ASSERT_TRUE(session->runtime().Backend().Synchronize().ok());
+        // Device intermediates must not accumulate host copies. Public output
+        // access is the explicit synchronization boundary, including reruns.
+        EXPECT_FLOAT_EQ(intermediate->data<float>()[0], -99.f);
+        EXPECT_FLOAT_EQ(output->data<float>()[0], previous_host_output);
+        ASSERT_TRUE(session->ReadOutput("out", &output).ok());
+        for (size_t i = 0; i < 128; ++i) EXPECT_FLOAT_EQ(output->data<float>()[i], input + 6);
+    }
+}
+
+TEST(execution_plan_test, CudaSessionSynchronizesHostFallbackAndReadsAliasedOutput) {
+    int count = 0;
+    if (cudaGetDeviceCount(&count) != cudaSuccess || count == 0) {
+        (void)cudaGetLastError(); GTEST_SKIP() << "CUDA device unavailable";
+    }
+    auto model = Chain();
+    for (auto& value : model.graph.values) value.tensor.data_type = DataType::BF16;
+    // BF16 Erf currently has a Common implementation only, between CUDA nodes.
+    model.graph.nodes[1].op_type = "Erf";
+    auto alias = model.graph.values.back(); alias.tensor.name = "view"; alias.tensor.dims = {16, 8};
+    model.graph.values.push_back(alias); model.graph.outputs = {"view"};
+    model::NodeDesc view; view.name = "view"; view.op_type = "Reshape";
+    view.inputs = {"out"}; view.outputs = {"view"}; view.attributes["shape"] = std::vector<int64_t>{16, 8};
+    model.graph.nodes.push_back(view);
+    auto bf16 = [](float value) {
+        auto tensor = std::make_shared<Tensor>();
+        tensor->Assign(std::vector<uint16_t>(128, FloatToBFloat16(value)), {128});
+        tensor->set_data_type(DataType::BF16); return tensor;
+    };
+    std::unique_ptr<ExecutionSession> host, cuda;
+    for (auto device : {DeviceType::COMMON, DeviceType::CUDA}) {
+        StaticGraph graph; graph.SetKernelDevice(device);
+        ASSERT_EQ(graph.SetModel(model), 0);
+        ASSERT_EQ(graph.SetTensor("x", bf16(-2.5f)), 0);
+        ASSERT_EQ(graph.SetTensor("b", bf16(2)), 0);
+        ASSERT_TRUE(graph.BuildStatus().ok());
+        std::shared_ptr<const CompiledGraph> compiled;
+        ASSERT_TRUE(CompiledGraph::Compile(graph, &compiled).ok());
+        ASSERT_TRUE(compiled->CreateSession(device == DeviceType::CUDA ? &cuda : &host).ok());
+    }
+    for (float value : {-2.5f, -1.5f}) {
+        ASSERT_TRUE(host->BindInput("x", bf16(value)).ok());
+        ASSERT_TRUE(cuda->BindInput("x", bf16(value)).ok());
+        ASSERT_TRUE(host->Run().ok()); ASSERT_TRUE(cuda->Run().ok());
+        std::shared_ptr<Tensor> expected, actual;
+        ASSERT_TRUE(host->ReadOutput("view", &expected).ok());
+        ASSERT_TRUE(cuda->ReadOutput("view", &actual).ok());
+        EXPECT_EQ(actual->dims().data(), (std::vector<int64_t>{16, 8}));
+        for (size_t i = 0; i < 128; ++i) EXPECT_EQ(actual->data<uint16_t>()[i], expected->data<uint16_t>()[i]);
+    }
+}
+
+TEST(execution_plan_test, CudaSessionRestoresDeferredPolicyAfterSuccessAndFailure) {
+    namespace cd = kernel::cuda_detail;
+    // An invalidated output contract fails before GPU work, so scope cleanup
+    // can also be checked on CUDA builds without an available device.
+    StaticGraph graph; Build(graph);
+    std::shared_ptr<const CompiledGraph> compiled;
+    ASSERT_TRUE(CompiledGraph::Compile(graph, &compiled).ok());
+    std::unique_ptr<ExecutionSession> session;
+    ASSERT_TRUE(compiled->CreateSession(&session).ok());
+    const auto other = cd::CreateExecutionContext();
+    cd::ExecutionContextScope outer(other);
+    cd::DeferredHostSyncScope outer_deferred;
+    ASSERT_TRUE(session->Run().ok());
+    EXPECT_TRUE(cd::DeferredHostSyncEnabled());
+    for (bool previous : {false, true}) {
+        cd::ExecutionContextScope active(session->runtime().CudaContext());
+        cd::SetDeferredHostSync(previous);
+        ASSERT_TRUE(session->Run().ok());
+        EXPECT_EQ(cd::DeferredHostSyncEnabled(), previous);
+        auto output = session->runtime().GetTensor("out");
+        const auto layout = output->layout();
+        output->set_layout(DataLayout::NHWC);
+        EXPECT_FALSE(session->Run().ok());
+        EXPECT_EQ(cd::DeferredHostSyncEnabled(), previous);
+        output->set_layout(layout);
+    }
+    EXPECT_TRUE(cd::DeferredHostSyncEnabled());
+}
+
 TEST(execution_plan_test, WorkspaceBudgetRejectsBeforeDeviceAllocationAndTracksRoundedCapacity) {
     RuntimeGraph graph; kernel::cuda_detail::ExecutionContextScope scope(graph.CudaContext());
     graph.Backend().SetWorkspaceLimit(0);

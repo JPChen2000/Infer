@@ -28,7 +28,7 @@ class InferConan(ConanFile):
                        "fPIC": True,
                        "BUILD_UNITTEST": False}
     generators = "cmake"
-    exports_sources = ("CMakeLists.txt", "include*", "src*",
+    exports_sources = ("CMakeLists.txt", "include*", "src*", "demo*",
                        "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md")
     install_folder = "./"
 

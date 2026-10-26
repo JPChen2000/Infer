@@ -106,7 +106,8 @@ class CompiledGraph {
 class ExecutionSession {
  public:
     explicit ExecutionSession(std::unique_ptr<BackendContext> backend = nullptr) : runtime_(std::move(backend)) {}
-    Status Run() { return runtime_.RunStatus(); }
+    // CUDA results remain on device until ReadOutput or another host consumer.
+    Status Run();
     Status BindInput(const std::string& name, std::shared_ptr<Tensor> tensor);
     Status ReadOutput(const std::string& name, std::shared_ptr<Tensor>* output);
     RuntimeGraph& runtime() { return runtime_; }

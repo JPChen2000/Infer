@@ -22,6 +22,8 @@ After RuntimeGraph::Finalize, SetTensor may rebind compatible external inputs on
 
 Every RuntimeGraph owns a CudaExecutionContext. Device tensor caches, temporary block pools, stream, library handles and deferred host synchronization state belong to that context. Runners enter their graph's context for loading, inference, graph capture, state operations and teardown. Clearing one graph cannot free another graph's allocations.
 
+Compiled `ExecutionSession::Run()` enters its backend's execution scope, enabling deferred CUDA host synchronization automatically. Intermediate results stay on device; `ReadOutput()` and host fallback consumers synchronize only the tensors they need. The scope restores the previous context and synchronization policy on success or failure. Raw host pointers obtained through `session.runtime()` require an explicit backend `ReadHost()` before inspection.
+
 Standalone kernel calls use a default context per host thread. Low-level callers inspecting or synchronizing a graph's device tensors must enter that graph's context:
 
 ```cpp

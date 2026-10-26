@@ -55,6 +55,11 @@ class CudaBackendContext final : public BackendContext {
         explicit ActiveScope(const std::shared_ptr<kernel::cuda_detail::CudaExecutionContext>& context) : scope(context) {}
         CudaScope scope;
     };
+    struct ExecutionScope final : Scope {
+        explicit ExecutionScope(const std::shared_ptr<kernel::cuda_detail::CudaExecutionContext>& context) : scope(context) {}
+        CudaScope scope;
+        kernel::cuda_detail::DeferredHostSyncScope deferred;
+    };
  public:
     CudaBackendContext() : context_(kernel::cuda_detail::CreateExecutionContext()) {}
     explicit CudaBackendContext(std::shared_ptr<kernel::cuda_detail::CudaExecutionContext> context)
@@ -70,6 +75,7 @@ class CudaBackendContext final : public BackendContext {
                                          : BackendContext::Capabilities(device);
     }
     std::unique_ptr<Scope> Enter() override { return std::make_unique<ActiveScope>(context_); }
+    std::unique_ptr<Scope> EnterExecution() override { return std::make_unique<ExecutionScope>(context_); }
     const std::shared_ptr<kernel::cuda_detail::CudaExecutionContext>& CudaContext() const override { return context_; }
     Status Capture(const std::function<Status()>& run, std::unique_ptr<ExecutionCapture>* result) override {
         if (!result || !run) return Status::Error(StatusCode::kInvalidArgument, "invalid capture destination or callback");

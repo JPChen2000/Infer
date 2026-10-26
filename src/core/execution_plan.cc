@@ -521,6 +521,15 @@ Status CompiledGraph::CreateSession(std::unique_ptr<ExecutionSession>* result, c
     } catch (const std::exception& error) { return BuildError(error.what()).WithContext("instantiate session"); }
 }
 
+Status ExecutionSession::Run() {
+    try {
+        auto scope = runtime_.Backend().EnterExecution();
+        return runtime_.RunStatus();
+    } catch (const std::exception& error) {
+        return Status::Error(StatusCode::kExecutionFailed, error.what()).WithContext("execute session");
+    }
+}
+
 Status ExecutionSession::BindInput(const std::string& name, std::shared_ptr<Tensor> tensor) {
     const auto bindings = runtime_.CheckTensorBindings();
     if (!bindings.ok()) return bindings;

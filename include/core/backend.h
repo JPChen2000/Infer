@@ -55,6 +55,8 @@ class BackendContext {
         }
     }
     virtual std::unique_ptr<Scope> Enter() { return nullptr; }
+    // Compiled sessions synchronize host consumers explicitly through ReadHost.
+    virtual std::unique_ptr<Scope> EnterExecution() { return Enter(); }
     virtual Status Capture(const std::function<Status()>&, std::unique_ptr<ExecutionCapture>*) {
         return Status::Error(StatusCode::kUnsupported, "execution capture unavailable");
     }

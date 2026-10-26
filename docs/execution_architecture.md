@@ -26,6 +26,8 @@ std::shared_ptr<feather::Tensor> output;
 return first->ReadOutput("output", &output);
 ```
 
+CUDA 会话的 `Run()` 自动启用延迟主机同步，中间结果保留在设备端；`ReadOutput()` 才将需要的输出同步到主机。混合后端图在进入主机算子前按需同步其输入。通过 `runtime().GetTensor()` 获取的底层主机指针不会隐式同步，诊断读取应先调用 `runtime().Backend().ReadHost()`；旧 `RuntimeGraph::RunStatus()` 的同步策略仍由调用者设置。
+
 CompiledGraph 保存固定 shape 的描述、优化后的节点顺序、选定实现的工厂、可重绑定的参数快照和内存计划；不持有可变 Kernel 实例或设备上下文。编译后可以销毁源 StaticGraph。初始化输入被复制成快照，映射权重保持共享映射；普通可写权重在编译时复制成只读快照。
 
 ExecutionSession 默认独立创建 Kernel、输入输出、激活存储、线程池和后端上下文。`SessionOptions::mutable_state` 可显式绑定调用者持有的同名可变输入 Tensor，使同一请求的形状计划使用同一状态对象；共享这些对象的计划需串行执行。`SessionOptions::immutable_weight_source` 可显式指定另一会话，从中共享同名且描述、量化参数和内容一致的只读常量；GPU 先完成源上传，再共享带所有权的分配。源会话销毁不影响目标会话；共享分配不进入激活复用池，修改时分离。不同会话可以并发，同一会话的绑定、执行和修改由调用者串行化。权重 Buffer 只读共享，各会话使用自己的 Storage 别名组；mutable_data 写入时复制整个别名组，保留本会话的视图关系。BindInput 将数据复制到会话自己的输入存储，保持已有 view 的关系；输入 shape、dtype、layout 必须与编译计划一致。构图和 Pass 阶段实际读取的形状控制 Tensor（如 Reshape shape、Slice 的 bounds/axes/steps）及其传递的数值依赖也保存值快照；编译、绑定和执行分别校验，改变其内容必须重新构图编译。Shape 只依赖输入描述，不冻结输入数据。由非静态子图计算出的形状控制值会明确拒绝，普通 token 与 position 输入不受此限制。

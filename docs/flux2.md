@@ -48,11 +48,11 @@ build-cuda/bin/flux2_demo \
   --output flux2.png
 ```
 
-CPU 可使用 `--backend common` 或 `host`，相应构建可关闭 CUDA。显式选择 CUDA 时，缺少 CUDA 实现会报错。Runner 依次加载并释放文本编码器、去噪网络和 VAE，降低同时驻留权重的需求；实际峰值内存和显存仍取决于分辨率、文本长度和后端临时空间。下面的真实权重验收记录说明当前机器的运行限制。
+CPU 可使用 `--backend common` 或 `host`，相应构建可关闭 CUDA。显式选择 CUDA 时，缺少 CUDA 实现会报错。Runner 依次加载并释放文本编码器、去噪网络和 VAE，降低同时驻留权重的需求；CUDA 会话仅按需将输出同步到主机，避免累积全部中间激活的主机副本。实际峰值内存和显存仍取决于分辨率、文本长度和后端临时空间。
 
 默认采样为官方分辨率相关时间步调度的四步 Euler；`--steps` 可调整步数。潜变量采用 FP32 累加，各组件边界按导出 dtype 转换。初始噪声使用原生 `mt19937` 和 Box–Muller；相同 seed 与 PyTorch 的噪声不同，FP32 累加也与官方 BF16 原地采样存在舍入差异，因此不承诺与官方输出逐像素相同。
 
-提示词使用 Qwen3 关闭思考的聊天模板，超长输入从尾部截断，按 tokenizer 配置填充。C++ 接入见 `include/demo/flux2_runner.h`：`Load()` 后调用 `Generate()`；已有完整固定长度隐藏状态可调用 `GenerateFromEmbeddings()`。同一 runner 的调用需串行执行。
+提示词使用 Qwen3 关闭思考的聊天模板，超长输入从尾部截断，按 tokenizer 配置填充。C++ 接入见 `demo/flux2_runner.h`：`Load()` 后调用 `Generate()`；已有完整固定长度隐藏状态可调用 `GenerateFromEmbeddings()`。同一 runner 的调用需串行执行。
 
 ## 验证范围
 
@@ -60,7 +60,9 @@ CPU 可使用 `--backend common` 或 `host`，相应构建可关闭 CUDA。显�
 
 2026-10-23 已下载原生 Klein 4B、FLUX.2 VAE 和 HF Qwen3-4B 权重，逐文件校验源仓库 SHA256，并成功导出 BF16、512×512、文本长度 512 的三个 FTH。当前工作区的输出位于 `models/flux2-klein-4b/`，原始权重位于 `models/flux2-source/`；`export_info.json` 记录导出文件尺寸和 SHA256，`../flux2-source/sources.json` 记录源文件版本及校验值。这些本地模型文件由 Git 忽略。
 
-真实 CUDA 四步出图在 RTX 4070 12 GiB 显存、约 16 GiB 主机内存的机器上尝试执行，进程最大 RSS 约 14.3 GiB，随后被系统 OOM killer 终止，没有生成图片。**权重转换已完成；这台机器上的完整出图、画质和生成性能尚未通过验收**。上述回归测试通过不能视为真实模型已满足这台机器的资源要求。
+首次真实 CUDA 执行因会话未启用延迟主机同步，将中间激活逐个回传并保留，进程最大 RSS 约 14.3 GiB，随后被主机 OOM killer 终止。此失败属于执行实现缺陷，不能据此判断显存不足或模型无法在这台机器运行。
+
+修复后，在同一台 RTX 4070 12 GiB 显存、约 16 GiB 主机内存的机器上，BF16、512×512、文本长度 512、四步采样已完成两次真实出图。提示词为 `A small red panda reading a book under a tree, watercolor`，seed 为 42。复跑耗时约 15.1 秒（包含组件加载），系统记录主机 RSS 峰值约 8.22 GiB、进程 swap 为 0；每秒采样的整卡显存峰值约 8.83 GiB（包含约 1.06 GiB 桌面基线，并非精确进程峰值）。输出为 `models/flux2-klein-4b/sample.png`，记录见同目录 `sample_fixed_metrics.json` 和 `sample_attempt_fixed.log`。已检查图片包含树下读书的小熊猫及水彩风格；这只验证该配置和提示词，尚未评估其他分辨率或系统性的画质指标。
 
 复现组件和流水线检查（构建目录不同时设置环境变量）：
 
